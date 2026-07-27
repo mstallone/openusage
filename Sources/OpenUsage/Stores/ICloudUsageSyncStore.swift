@@ -23,7 +23,7 @@ struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
 
     init(
         keychain: any KeychainAccessing = SecurityKeychainAccessor(),
-        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.robinebers.openusage"
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.mattstallone.openusage"
     ) {
         self.keychain = keychain
         self.service = "\(bundleIdentifier).icloud-sync-device-id.v1"

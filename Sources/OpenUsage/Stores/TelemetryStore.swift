@@ -25,7 +25,7 @@ final class TelemetryStore {
     private static let activeDayKey = "activeDay"
     private static let providerDaysKey = "providerDays"
 
-    static var suiteName: String { (Bundle.main.bundleIdentifier ?? "com.openusage.app") + ".telemetry" }
+    static var suiteName: String { (Bundle.main.bundleIdentifier ?? "com.mattstallone.openusage") + ".telemetry" }
 
     /// `defaults` is injectable for tests; production uses the dedicated suite (falling back to standard
     /// only if the suite can't be opened, which would be unusual).

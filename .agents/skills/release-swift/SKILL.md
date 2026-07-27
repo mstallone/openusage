@@ -38,7 +38,7 @@ Collect commits since the **previous release in the same channel** and categoriz
 Author attribution (required on every entry):
 
 - With a PR number `(#123)`: `gh pr view 123 --json author -q '.author.login'`.
-- Without a PR number: `gh api /repos/robinebers/openusage/commits/{full_hash} -q '.author.login'`.
+- Without a PR number: `gh api /repos/mstallone/openusage/commits/{full_hash} -q '.author.login'`.
 - If the API returns null, fall back to the git author name.
 
 Output the changelog in a code block (template below) for review.
@@ -82,19 +82,19 @@ Never leave a release blank.
 gh release view v{version} --json isDraft,isPrerelease,assets,body \
   --jq '{isDraft, isPrerelease, assets:[.assets[].name], bodyLen:(.body|length)}'
 git fetch origin gh-pages && git show origin/gh-pages:appcast.xml | grep -F "OpenUsage-{version}.dmg"
-curl -s "https://robinebers.github.io/openusage/appcast.xml" | grep -F "OpenUsage-{version}.dmg"
+curl -s "https://mstallone.github.io/openusage/appcast.xml" | grep -F "OpenUsage-{version}.dmg"
 ```
 
 The second check matters: publishing is two hops — Release (or pricing-supplement) pushes `appcast.xml` to the **`gh-pages` branch**, then **`.github/workflows/deploy-pages.yml` on `main`** deploys that branch to the live site (Pages source is "GitHub Actions", not legacy branch deploy). Auto deploy runs on `workflow_run` after Release completes; GitHub sometimes returns **"Deployment failed, try again later"** even though `gh-pages` is already correct. If the branch has the version but the live URL does not after ~10 minutes, check `gh run list --workflow=deploy-pages.yml` and re-run **`gh workflow run deploy-pages.yml --ref main`** (must use `main` — the workflow file is not on `gh-pages`). Sparkle clients only see the live URL.
 
-Require `isDraft=false`, `isPrerelease=true` for beta or `false` for stable, an `OpenUsage-<version>.dmg` asset, `bodyLen>0`, and the version present in the appcast. If a draft was left behind, migrate its notes/assets onto the published release, then delete it — but only once a separate PUBLISHED release for the tag already exists:
+Require `isDraft=false`, `isPrerelease=true` for beta or `false` for stable, `OpenUsage-<version>.dmg` and `OpenUsage-<version>.dmg.sha256` assets, `bodyLen>0`, and the version present in the appcast. If a draft was left behind, migrate its notes/assets onto the published release, then delete it — but only once a separate PUBLISHED release for the tag already exists:
 
 ```sh
 tag="v{version}"
 if [ "$(gh release view "$tag" --json isDraft --jq '.isDraft')" = "false" ]; then
-  gh api repos/robinebers/openusage/releases --paginate \
+  gh api repos/mstallone/openusage/releases --paginate \
     --jq '.[] | select(.draft and .tag_name=="'"$tag"'") | .id' \
-    | xargs -I{} gh api -X DELETE repos/robinebers/openusage/releases/{}
+    | xargs -I{} gh api -X DELETE repos/mstallone/openusage/releases/{}
 else
   echo "No published release for $tag yet - publish it first; do NOT delete the draft."
 fi
@@ -108,10 +108,10 @@ Only include category sections that have entries.
 ## v{version}
 
 ### New Features
-- {message} ([#{pr}](https://github.com/robinebers/openusage/pull/{pr})) by @{author}
+- {message} ([#{pr}](https://github.com/mstallone/openusage/pull/{pr})) by @{author}
 
 ### Bug Fixes
-- {message} ([#{pr}](https://github.com/robinebers/openusage/pull/{pr})) by @{author}
+- {message} ([#{pr}](https://github.com/mstallone/openusage/pull/{pr})) by @{author}
 
 ### Refactor
 - {message} by @{author}
@@ -122,9 +122,9 @@ Only include category sections that have entries.
 ---
 
 ### Changelog
-**Full Changelog**: [{prev_tag}...v{version}](https://github.com/robinebers/openusage/compare/{prev_tag}...v{version})
+**Full Changelog**: [{prev_tag}...v{version}](https://github.com/mstallone/openusage/compare/{prev_tag}...v{version})
 
-- [{short_hash}](https://github.com/robinebers/openusage/commit/{full_hash}) {commit message} by @{author}
+- [{short_hash}](https://github.com/mstallone/openusage/commit/{full_hash}) {commit message} by @{author}
 ~~~
 
 `{prev_tag}` is the previous release **in the same channel**: last stable for a stable cut, last beta (or last stable for the first beta in a lane) for a beta cut.

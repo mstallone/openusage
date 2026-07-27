@@ -77,7 +77,7 @@ Once merged, the `Publish pricing supplement` workflow runs. Confirm it landed:
 
 ```sh
 gh run list --workflow=pricing-supplement.yml --limit 1
-curl -s https://robinebers.github.io/openusage/pricing_supplement.json | python3 -c "import json,sys; print(json.load(sys.stdin)['updated_at'])"
+curl -s https://mstallone.github.io/openusage/pricing_supplement.json | python3 -c "import json,sys; print(json.load(sys.stdin)['updated_at'])"
 ```
 
 The `updated_at` served must match the merged file. Publishing is two hops: the supplement workflow pushes the file to the `gh-pages` branch, then `.github/workflows/deploy-pages.yml` on `main` deploys that branch to the live site (Pages source is "GitHub Actions"). If the URL is stale after ~10 minutes, check `gh run list --workflow=deploy-pages.yml` and re-run **`gh workflow run deploy-pages.yml --ref main`** (not `--ref gh-pages`).

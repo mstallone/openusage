@@ -5,14 +5,14 @@ set -euo pipefail
 # to /Applications. The dev build:
 #   - is signed with a stable Apple Development identity, so keychain/permission grants stick across
 #     rebuilds (macOS keys those to the signing identity + bundle id, not the install location);
-#   - uses its own bundle id (com.robinebers.openusage.dev), so it never touches the real installed
+#   - uses its own bundle id (com.mattstallone.openusage.dev), so it never touches the real installed
 #     app's settings or keychain. To run against the real app's data instead, set BUNDLE_ID to
-#     com.robinebers.openusage below;
+#     com.mattstallone.openusage below;
 #   - ships no Sparkle feed, so it never checks for or installs updates (test updates with a real
 #     signed + notarized release build — that's the only honest way).
 #
 # Usage: script/build_and_run.sh [run|build|logs|verify]
-# Env:   CODESIGN_IDENTITY  override signing identity (exact name or hash)
+# Env:   CODESIGN_IDENTITY  override signing identity (exact display name)
 #        CONFIG             "release" (default) or "debug"
 #        ICLOUD_PROVISIONING_PROFILE  optional override for the development provisioning profile;
 #                         otherwise the newest matching installed profile is selected automatically
@@ -22,8 +22,10 @@ CONFIG="${CONFIG:-release}"
 
 TARGET_NAME="OpenUsage"                 # SwiftPM target / binary name
 APP_DISPLAY="OpenUsage"                 # user-facing app name
-BUNDLE_ID="${BUNDLE_ID:-com.robinebers.openusage.dev}"
-ICLOUD_CONTAINER_ID="iCloud.com.robinebers.openusage.dev"
+BUNDLE_ID="${BUNDLE_ID:-com.mattstallone.openusage.dev}"
+ICLOUD_CONTAINER_ID="iCloud.com.mattstallone.openusage.dev"
+APPLE_TEAM_ID="${APPLE_TEAM_ID:-8KZBNZJBAX}"
+export APPLE_TEAM_ID
 MIN_SYSTEM_VERSION="15.0"
 APP_VERSION="0.7.0"
 APP_BUILD="0.7.0"
@@ -148,7 +150,7 @@ cat >"$INFO_PLIST" <<PLIST
   <true/>
   <key>NSUbiquitousContainers</key>
   <dict>
-    <key>iCloud.com.robinebers.openusage.dev</key>
+    <key>iCloud.com.mattstallone.openusage.dev</key>
     <dict>
       <key>NSUbiquitousContainerIsDocumentScopePublic</key>
       <false/>
@@ -183,12 +185,36 @@ else
   echo "WARNING: no matching installed iCloud provisioning profile was found; iCloud Sync will be unavailable in this build." >&2
 fi
 
-# Pick a stable Apple Development identity so ad-hoc cdhash churn doesn't re-trigger
-# permission prompts on every rebuild. Fall back to ad-hoc only if none is found.
+# Pick a stable Apple Development identity from the NextByte team so ad-hoc cdhash churn doesn't
+# re-trigger permission prompts on every rebuild. Certificate display names contain the developer's
+# certificate ID, not necessarily the team ID, so inspect the certificate subject's OU rather than
+# trusting the text in parentheses. Fall back to ad-hoc only if no NextByte identity is installed.
+certificate_belongs_to_team() {
+  local identity="$1"
+  local subject
+  subject=$(/usr/bin/security find-certificate -c "$identity" -p 2>/dev/null \
+    | /usr/bin/openssl x509 -noout -subject -nameopt RFC2253 2>/dev/null || true)
+  [[ "$subject" == *"OU=$APPLE_TEAM_ID"* ]]
+}
+
+find_apple_development_identity() {
+  local identity
+  while IFS= read -r identity; do
+    if certificate_belongs_to_team "$identity"; then
+      printf '%s\n' "$identity"
+      return 0
+    fi
+  done < <(/usr/bin/security find-identity -p codesigning -v 2>/dev/null \
+    | /usr/bin/awk -F\" '/Apple Development:/ { print $2 }')
+  return 1
+}
+
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [ -z "$CODESIGN_IDENTITY" ]; then
-  CODESIGN_IDENTITY=$(/usr/bin/security find-identity -p codesigning -v 2>/dev/null \
-    | /usr/bin/awk -F\" '/Apple Development:/ { print $2; exit }')
+  CODESIGN_IDENTITY="$(find_apple_development_identity || true)"
+elif ! certificate_belongs_to_team "$CODESIGN_IDENTITY"; then
+  echo "CODESIGN_IDENTITY must belong to NextByte team $APPLE_TEAM_ID" >&2
+  exit 1
 fi
 
 # Embed + sign Sparkle.framework before sealing the app. The executable links Sparkle, so without the

@@ -29,7 +29,7 @@ Everyone always receives stable releases — the beta option only *adds* pre-rel
 ## Where updates come from
 
 Update builds are published on OpenUsage's GitHub releases, and the list of available versions (the
-"appcast") is served from `https://robinebers.github.io/openusage/appcast.xml`. Each download is
+"appcast") is served from `https://mstallone.github.io/openusage/appcast.xml`. Each download is
 signed two ways — Apple notarization plus OpenUsage's own signature — and the app refuses anything that
 doesn't match. This is only available in the official signed release build, not in local developer
 builds.
