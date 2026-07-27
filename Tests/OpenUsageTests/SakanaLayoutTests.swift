@@ -29,10 +29,10 @@ final class SakanaLayoutTests: XCTestCase {
         let group = store.customizeGroups.first { $0.provider.id == "sakana" }
         XCTAssertEqual(group?.alwaysShownMetrics.map(\.id), [
             "sakana.session",
-            "sakana.trend"
+            "sakana.weekly"
         ])
         XCTAssertEqual(group?.expandedMetrics.map(\.id), [
-            "sakana.weekly",
+            "sakana.trend",
             "sakana.today",
             "sakana.yesterday",
             "sakana.last30"

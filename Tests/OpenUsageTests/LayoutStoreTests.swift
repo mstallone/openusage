@@ -666,55 +666,65 @@ final class LayoutStoreTests: XCTestCase {
             CodexProvider(),
             DevinProvider(),
             GrokProvider(),
-            CursorProvider()
+            CursorProvider(),
+            SakanaProvider()
         ])
         let store = LayoutStore(registry: registry, defaults: makeDefaults("RecommendedDefaults"), storageKey: "layout")
 
         XCTAssertEqual(Set(store.placed.map(\.descriptorID)), Set([
-            "claude.session", "claude.weekly", "claude.trend",
-            "claude.extra", "claude.today", "claude.yesterday", "claude.last30",
-            "codex.session", "codex.weekly", "codex.spark", "codex.sparkWeekly", "codex.trend",
-            "codex.credits", "codex.rateLimitResets", "codex.today", "codex.yesterday", "codex.last30",
+            "claude.session", "claude.weekly", "claude.fable", "claude.trend",
+            "claude.today", "claude.yesterday", "claude.last30",
+            "codex.weekly", "codex.rateLimitResets", "codex.trend",
+            "codex.today", "codex.yesterday", "codex.last30",
             "devin.daily", "devin.weekly", "devin.extra",
-            "grok.weekly", "grok.trend",
-            "grok.payAsYouGo", "grok.today", "grok.yesterday", "grok.last30",
+            "grok.weekly", "grok.trend", "grok.today", "grok.yesterday", "grok.last30",
             // Cursor spend tiles + usage trend are enabled, joining its live meters in the default layout.
             "cursor.usage", "cursor.auto", "cursor.api", "cursor.trend",
-            "cursor.onDemand", "cursor.today", "cursor.yesterday", "cursor.last30"
+            "cursor.onDemand", "cursor.today", "cursor.yesterday", "cursor.last30",
+            "sakana.session", "sakana.weekly", "sakana.trend",
+            "sakana.today", "sakana.yesterday", "sakana.last30"
         ]))
         XCTAssertFalse(store.isMetricEnabled("claude.sonnet"))
+        XCTAssertFalse(store.isMetricEnabled("claude.extra"))
+        XCTAssertFalse(store.isMetricEnabled("codex.session"))
+        XCTAssertFalse(store.isMetricEnabled("codex.spark"))
+        XCTAssertFalse(store.isMetricEnabled("codex.sparkWeekly"))
+        XCTAssertFalse(store.isMetricEnabled("codex.credits"))
+        XCTAssertFalse(store.isMetricEnabled("grok.payAsYouGo"))
         XCTAssertFalse(store.isMetricEnabled("cursor.requests"))
         XCTAssertFalse(store.isMetricEnabled("cursor.credits"))
 
         let primaryByProvider = Dictionary(uniqueKeysWithValues: store.customizeGroups.map {
-            ($0.provider.id, $0.alwaysShownMetrics.map(\.id))
+            ($0.provider.id, $0.alwaysShownMetrics.filter { store.isMetricEnabled($0.id) }.map(\.id))
         })
         let expandedByProvider = Dictionary(uniqueKeysWithValues: store.customizeGroups.map {
-            ($0.provider.id, $0.expandedMetrics.map(\.id))
+            ($0.provider.id, $0.expandedMetrics.filter { store.isMetricEnabled($0.id) }.map(\.id))
         })
 
-        // Claude's core meters (Session, Weekly, Extra, Usage Trend) stay primary; spend-history rows
-        // go below the caret — the same "core above, history below" shape as the other providers.
-        XCTAssertEqual(primaryByProvider["claude"], ["claude.session", "claude.weekly", "claude.extra", "claude.trend"])
-        XCTAssertEqual(expandedByProvider["claude"], ["claude.sonnet", "claude.fable", "claude.today", "claude.yesterday", "claude.last30"])
-        XCTAssertEqual(primaryByProvider["codex"], ["codex.session", "codex.weekly", "codex.trend"])
-        // Spark (the optional model-specific limits) leads the On Demand section, before credits.
+        XCTAssertEqual(primaryByProvider["claude"], ["claude.session", "claude.weekly", "claude.fable"])
+        XCTAssertEqual(expandedByProvider["claude"], [
+            "claude.trend", "claude.today", "claude.yesterday", "claude.last30"
+        ])
+        XCTAssertEqual(primaryByProvider["codex"], ["codex.weekly"])
         XCTAssertEqual(expandedByProvider["codex"], [
-            "codex.spark", "codex.sparkWeekly",
-            "codex.credits", "codex.rateLimitResets", "codex.today", "codex.yesterday", "codex.last30"
+            "codex.rateLimitResets", "codex.trend",
+            "codex.today", "codex.yesterday", "codex.last30"
         ])
         XCTAssertEqual(primaryByProvider["devin"], ["devin.daily", "devin.weekly"])
         XCTAssertEqual(expandedByProvider["devin"], ["devin.extra"])
-        XCTAssertEqual(primaryByProvider["grok"], ["grok.weekly", "grok.trend"])
+        XCTAssertEqual(primaryByProvider["grok"], ["grok.weekly"])
         XCTAssertEqual(expandedByProvider["grok"], [
-            "grok.payAsYouGo", "grok.today", "grok.yesterday", "grok.last30"
+            "grok.trend", "grok.today", "grok.yesterday", "grok.last30"
         ])
         // Cursor spend tiles + usage trend are enabled: the trend joins the primary rows, and the
         // today/yesterday/last30 rows sit below the caret alongside the other secondary metrics.
         XCTAssertEqual(primaryByProvider["cursor"], ["cursor.usage", "cursor.auto", "cursor.api", "cursor.trend"])
         XCTAssertEqual(expandedByProvider["cursor"], [
-            "cursor.onDemand", "cursor.requests", "cursor.credits",
-            "cursor.today", "cursor.yesterday", "cursor.last30"
+            "cursor.onDemand", "cursor.today", "cursor.yesterday", "cursor.last30"
+        ])
+        XCTAssertEqual(primaryByProvider["sakana"], ["sakana.session", "sakana.weekly"])
+        XCTAssertEqual(expandedByProvider["sakana"], [
+            "sakana.trend", "sakana.today", "sakana.yesterday", "sakana.last30"
         ])
     }
 
@@ -778,6 +788,35 @@ final class LayoutStoreTests: XCTestCase {
 
         let expected = Set(DefaultLayout.pinnedMetricIDs.filter { MockData.descriptor($0) != nil })
         XCTAssertEqual(store.pinnedMetricIDs, expected)
+    }
+
+    func testCodexWeeklyOnlyDefaultsNeverPinDisabledSession() {
+        let store = LayoutStore(
+            registry: .from([CodexProvider()]),
+            defaults: makeDefaults("CodexWeeklyOnlyPins"),
+            storageKey: "layout"
+        )
+
+        func assertWeeklyOnlyPins(file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertFalse(store.isMetricEnabled("codex.session"), file: file, line: line)
+            XCTAssertEqual(store.pinnedMetricIDs, ["codex.weekly"], file: file, line: line)
+            XCTAssertEqual(
+                store.pinnedGroups.flatMap { $0.metrics.map(\.id) },
+                ["codex.weekly"],
+                file: file,
+                line: line
+            )
+        }
+
+        assertWeeklyOnlyPins()
+
+        store.setPinned(true, for: "codex.session")
+        store.resetProvider("codex")
+        assertWeeklyOnlyPins()
+
+        store.setPinned(true, for: "codex.session")
+        store.resetToDefault()
+        assertWeeklyOnlyPins()
     }
 
     func testProviderReorderPreservesAnAbsentAccountCardSlot() {
