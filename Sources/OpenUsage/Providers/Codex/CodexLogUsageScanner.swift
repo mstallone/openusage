@@ -42,6 +42,11 @@ actor CodexLogUsageScanner {
     private let environment: EnvironmentReading
     private let homeDirectory: @Sendable () -> URL
     private let scanner: IncrementalJSONLScanner<Event>
+    /// Scoped account cards use a stable per-card parse-cache namespace.
+    private let cacheIdentityOverride: String?
+    /// Scoped account cards scan only the homes verified to carry their identity. `nil` preserves
+    /// the historical environment/default resolution for the unresolved fallback card.
+    private let rootsOverride: [URL]?
 
     /// One turn's token usage, normalized from a `token_count` line (deltas already applied).
     /// `isFast` records whether the session was on the fast/priority service tier when the turn
@@ -71,21 +76,39 @@ actor CodexLogUsageScanner {
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
-        incrementalScanner: IncrementalJSONLScanner<Event>? = nil
+        incrementalScanner: IncrementalJSONLScanner<Event>? = nil,
+        cacheIdentityOverride: String? = nil,
+        rootsOverride: [URL]? = nil
     ) {
+        precondition(cacheIdentityOverride?.isEmpty != true)
+        precondition(rootsOverride == nil || cacheIdentityOverride != nil)
         self.environment = environment
         self.homeDirectory = homeDirectory
         self.scanner = incrementalScanner ?? Self.sharedScanner
+        self.cacheIdentityOverride = cacheIdentityOverride
+        self.rootsOverride = rootsOverride
     }
 
     /// Scan the last `daysBack` days of Codex rollouts. Returns `nil` when no Codex home or no
     /// session files exist (the spend tiles then render "No data").
     func scan(daysBack: Int = 30, now: Date = Date(), pricing: ModelPricing) async -> LogUsageScan? {
-        let homes = codexHomes()
+        guard let events = await scanEvents(daysBack: daysBack, now: now) else { return nil }
         let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
-        let identityPaths = Set(homes.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
-            .sorted()
-        let identity = identityPaths.isEmpty ? "no-codex-home" : identityPaths.joined(separator: "\n")
+        return Self.aggregate(events: events, since: since, pricing: pricing)
+    }
+
+    /// Parse the selected Codex homes without assigning provider pricing. Sakana reuses the exact
+    /// rollout semantics for its own explicitly configured Codex homes, then filters and prices only
+    /// fixed-rate Fugu models. Keeping one parser prevents the two providers from disagreeing about
+    /// cumulative deltas, replayed subagent history, stale snapshots, or copied-session dedup.
+    func scanEvents(daysBack: Int = 30, now: Date = Date()) async -> [Event]? {
+        let homes = rootsOverride ?? codexHomes()
+        let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
+        let identity = cacheIdentityOverride ?? {
+            let paths = Set(homes.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+                .sorted()
+            return paths.isEmpty ? "no-codex-home" : paths.joined(separator: "\n")
+        }()
         let files = Self.sessionFiles(homes: homes)
         guard !files.isEmpty else {
             _ = await scanner.items(
@@ -100,7 +123,7 @@ actor CodexLogUsageScanner {
             cacheIdentity: identity,
             parse: Self.parseFile
         ), !Task.isCancelled else { return nil }
-        return Self.aggregate(events: events, since: since, pricing: pricing)
+        return events
     }
 
     // MARK: - Discovery

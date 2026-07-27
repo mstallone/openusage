@@ -1,6 +1,9 @@
 # Model Pricing
 
-How OpenUsage turns token counts into the estimated dollars on the spend tiles (Claude, Codex, Cursor, Grok). OpenRouter and OpenCode are the exceptions: OpenRouter's API reports billed dollars directly, and OpenCode records its own per-message cost in its local logs, so nothing here applies to them.
+How OpenUsage turns token counts into the estimated dollars on the spend tiles (Claude, Codex,
+Cursor, Grok, and fixed-rate Sakana Fugu models). OpenRouter and OpenCode are the exceptions:
+OpenRouter's API reports billed dollars directly, and OpenCode records its own per-message cost in its
+local logs, so nothing here applies to them.
 
 ## Where prices come from
 
@@ -14,6 +17,11 @@ The app ships with bundled snapshots of all three, so pricing works offline and 
 
 Because the supplement is published to GitHub Pages on merge, a pricing correction reaches installed apps within about an hour — no app update needed.
 
+Sakana Fugu is a narrow provider-specific exception to the layered catalogs. OpenUsage carries
+Sakana's published fixed Ultra and Cyber rates beside its log scanner because those prices include a
+provider-specific 272K-token tier and are not general model-catalog entries. Plain `fugu` remains
+unpriced because its rate depends on the underlying routed model.
+
 ## How a model name resolves
 
 Log and CSV model names rarely match a catalog key exactly, so resolution tries, in order: supplement alias rules, exact key match, fast-variant handling (a `-fast` suffix resolves the base model and applies its fast multiplier), then fuzzy matching — provider prefixes (`anthropic/`, `xai/`, …), dated suffixes (`claude-sonnet-4` ↔ `claude-sonnet-4-20250514`), and separator differences (`grok-4-3` ↔ `grok-4.3`). Fast variants without an explicit price or model-specific multiplier stay unpriced instead of silently using the standard-speed rate.
@@ -22,7 +30,19 @@ A model no source can price is left out of the spend figures entirely — its to
 
 ## What the estimate includes
 
-Costs are computed per usage event from four token buckets — plain input, cache writes, cache reads, and output — at the model's per-million-token rates, including 1-hour cache-write pricing, long-context tiers, and fast-variant multipliers. Most catalog tiers start above 200k prompt tokens; supported GPT-5.4, GPT-5.5, and GPT-5.6 Codex models switch above 272k input tokens. In either case, the higher rate applies to the whole request. A published cache discount is used when available; Codex cached input falls back to the full input rate when the source publishes no discount. Cursor's export combines many requests into each row, so OpenUsage uses the normal rate there rather than guessing that one request crossed the limit. When a Claude log line carries an explicit `costUSD`, that value is used as-is. Nested Claude advisor usage has no carried cost, so it is priced separately from its tokens using the advisor model. The result is an estimate of API-rate value, not a bill: subscription plans don't charge per token.
+Costs are computed per usage event from token buckets at the model's per-million-token rates,
+including cache pricing, long-context tiers, and fast-variant multipliers. Most catalog tiers start
+above 200k prompt tokens; supported GPT-5.4, GPT-5.5, and GPT-5.6 Codex models switch above 272k input
+tokens. Fugu Ultra and Cyber also switch the whole request above 272k, using Sakana's published input,
+cached-input, and output rates. Codex rollouts do not preserve Sakana's separate orchestration-detail
+fields, so Fugu estimates and graph tokens can undercount orchestration; reasoning output is already
+part of output and is not added again. A published cache discount is used when available; Codex cached
+input falls back to the full input rate when the source publishes no discount. Cursor's export combines
+many requests into each row, so OpenUsage uses the normal rate there rather than guessing that one
+request crossed the limit. When a Claude log line carries an explicit `costUSD`, that value is used
+as-is. Nested Claude advisor usage has no carried cost, so it is priced separately from its tokens
+using the advisor model. The result is an estimate of API-rate value, not a bill: subscription plans
+don't charge per token.
 
 ## Privacy
 

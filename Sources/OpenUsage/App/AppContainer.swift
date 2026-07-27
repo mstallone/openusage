@@ -35,11 +35,9 @@ final class AppContainer {
     /// One-time onboarding state (the first-run Customize hint card). Only ever marked pending by
     /// `FirstRunSeeder` on a fresh install, so existing installs never see the card.
     let onboarding: OnboardingStore
-    /// Claims Codex rate-limit reset credits from the resets popover (the app's only provider-API
-    /// write). Shares the Codex provider's auth store and usage client; `nil` only if the Codex
-    /// provider were ever removed from the registry. Injected into the view tree via
-    /// `\.codexResetClaim`.
-    let codexResetClaim: CodexResetClaimService?
+    /// Exact-card router for Codex rate-limit reset claims (the app's only provider-API write).
+    /// Every service shares its own card runtime's scoped auth store and usage client.
+    let codexResetClaims: CodexResetClaimRouter
     /// The account registry the launch pass reconciled. The UI observes it live: a rename
     /// (`customLabel`) re-titles the card everywhere without a relaunch.
     let accounts: ProviderAccountsStore
@@ -58,6 +56,9 @@ final class AppContainer {
     /// Persists a fresh `ShellEnvironmentSnapshot` once the login-shell capture completes, so the next
     /// launch can read shell-exported facts (provider home overrides) even when its own capture is slow.
     private let shellEnvironmentSnapshotTask: Task<Void, Never>
+    /// One exact-item read per unverified Codex keyring home. Cards remain hidden this launch; the
+    /// fingerprint-bound result lets the next launch place them without reading secrets at startup.
+    private let codexIdentityWarmTask: Task<Void, Never>?
 
     /// `isFreshInstall` must be captured by the caller BEFORE `SettingsMigrator.migrate()` runs (the
     /// migrator's schema stamp makes the defaults domain non-empty). See `AppDelegate`.
@@ -75,10 +76,14 @@ final class AppContainer {
         let accounts = ProviderAccountsStore()
         let accountAssembly = ProviderAccountAssembly.make(accountsStore: accounts, waitsForLoginShell: true)
         self.accounts = accounts
+        self.codexIdentityWarmTask = accountAssembly.startCodexIdentityWarmTask()
 
         let providers = ProviderCatalog.make(
             claudeCards: accountAssembly.claudeCards,
-            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots
+            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
+            codexCards: accountAssembly.codexCards,
+            hasResolvedCodexDefault: accountAssembly.hasResolvedCodexDefault,
+            codexIdentityCache: accountAssembly.codexIdentityCache
         )
         let registry = WidgetRegistry.from(providers)
         let apiKeyProviders = providers.compactMap { $0 as? any APIKeyManaging }
@@ -131,14 +136,14 @@ final class AppContainer {
         self.dataStore = dataStore
         self.iCloudSync = iCloudSync
 
-        // The resets popover's claim service, sharing the Codex provider's credential loading and HTTP
-        // client so the claim's auth can't drift from the provider's. A successful claim forces a Codex
-        // refresh so the meters and credit count reconcile before the popover shows its result. The
-        // forced refresh returns `.skipped` when another refresh already owns the provider — and that
-        // in-flight probe may carry *pre-claim* usage — so retry until this refresh actually runs
-        // (bounded; the racing probe finishes in seconds).
-        self.codexResetClaim = providers.compactMap { $0 as? CodexProvider }.first.map { codex in
-            CodexResetClaimService(
+        // One claim service per Codex card. Each shares that card's credential loading and HTTP client,
+        // and refreshes that exact card after a successful claim. The forced refresh returns `.skipped`
+        // when another refresh already owns the provider — and that in-flight probe may carry
+        // pre-claim usage — so retry until this refresh actually runs (bounded).
+        var codexResetServices: [String: CodexResetClaimService] = [:]
+        for codex in providers.compactMap({ $0 as? CodexProvider }) {
+            let providerID = codex.provider.id
+            codexResetServices[providerID] = CodexResetClaimService(
                 authStore: codex.authStore,
                 usageClient: codex.usageClient,
                 refreshAfterClaim: { [weak dataStore] in
@@ -153,25 +158,26 @@ final class AppContainer {
                     var failures = 0
                     for attempt in 0..<45 {
                         guard let dataStore else { return }
-                        switch await dataStore.refresh(providerID: codex.provider.id, force: true) {
+                        switch await dataStore.refresh(providerID: providerID, force: true) {
                         case .refreshed, .cacheHit, .backedOff:
                             return
                         case .failed:
                             failures += 1
                             guard failures < 3 else {
-                                AppLog.error(LogTag.plugin("codex"), "post-claim refresh failed \(failures) times; meters may lag until the next cycle")
+                                AppLog.error(LogTag.plugin("codex"), "\(providerID) post-claim refresh failed \(failures) times; meters may lag until the next cycle")
                                 return
                             }
                             try? await Task.sleep(for: .seconds(2))
                         case .skipped:
-                            AppLog.info(LogTag.plugin("codex"), "post-claim refresh waiting out an in-flight refresh (attempt \(attempt + 1))")
+                            AppLog.info(LogTag.plugin("codex"), "\(providerID) post-claim refresh waiting out an in-flight refresh (attempt \(attempt + 1))")
                             try? await Task.sleep(for: .seconds(1))
                         }
                     }
-                    AppLog.error(LogTag.plugin("codex"), "post-claim refresh kept being skipped; meters may lag until the next cycle")
+                    AppLog.error(LogTag.plugin("codex"), "\(providerID) post-claim refresh kept being skipped; meters may lag until the next cycle")
                 }
             )
         }
+        self.codexResetClaims = CodexResetClaimRouter(servicesByProviderID: codexResetServices)
 
         // Anonymous, opt-out usage telemetry (two daily-rollup events). Its state lives in a dedicated
         // UserDefaults suite, kept separate from app settings so the user's opt-out choice and the
@@ -229,6 +235,7 @@ final class AppContainer {
         seedTask?.cancel()
         newProviderTask?.cancel()
         shellEnvironmentSnapshotTask.cancel()
+        codexIdentityWarmTask?.cancel()
     }
 
     /// The name a card renders under right now — the app-side face of the one resolver

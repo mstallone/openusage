@@ -37,6 +37,7 @@ final class ShellEnvironmentSnapshotTests: XCTestCase {
         let stdout = [
             "__OPENUSAGE_ENV_BEGIN__",
             "CLAUDE_CONFIG_DIR=~/.claude-work",
+            "KIMI_CODE_HOME=~/.kimi-work",
             "OPENROUTER_API_KEY=sk-or-secret",
             "PATH=/usr/bin",
             "__OPENUSAGE_ENV_END__",
@@ -47,7 +48,10 @@ final class ShellEnvironmentSnapshotTests: XCTestCase {
         let snapshot = ShellEnvironmentSnapshot.current(shellEnvironment: shellEnvironment)
 
         // Only the declared non-secret keys land in the snapshot — never API keys or tokens.
-        XCTAssertEqual(snapshot?.values, ["CLAUDE_CONFIG_DIR": "~/.claude-work"])
+        XCTAssertEqual(snapshot?.values, [
+            "CLAUDE_CONFIG_DIR": "~/.claude-work",
+            "KIMI_CODE_HOME": "~/.kimi-work"
+        ])
     }
 
     func testRefreshTaskPersistsSnapshotAfterCapture() async {

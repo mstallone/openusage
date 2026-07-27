@@ -29,8 +29,10 @@ Either way, the app updates itself in place via signed, notarized [Sparkle](docs
 - **[Cursor](docs/providers/cursor.md)** — credits, total/auto/API usage, requests, on-demand, per-day spend
 - **[Devin](docs/providers/devin.md)** — weekly and daily quota, extra usage balance
 - **[Grok](docs/providers/grok.md)** — weekly shared pool, pay-as-you-go, local daily spend
+- **[Kimi](docs/providers/kimi.md)** — five-hour and weekly Kimi Code quota, Extra Usage balance and monthly spend
 - **[OpenCode](docs/providers/opencode.md)** — Go session/weekly/monthly caps, Zen spend, local daily spend
 - **[OpenRouter](docs/providers/openrouter.md)** — credit balance, daily/weekly/monthly spend (API key)
+- **[Sakana Fugu](docs/providers/sakana.md)** — subscription quota plus local Fugu Ultra usage trend and estimated API-rate value
 - **[Z.ai](docs/providers/zai.md)** — session, weekly, web-search quotas (GLM Coding Plan, API key)
 
 Most providers read the credentials already on your machine (keychain, auth files, app state) — no extra login. OpenRouter and Z.ai are the exceptions: they have no local credential to reuse, so you supply an API key (see [OpenRouter setup](docs/providers/openrouter.md) or [Z.ai setup](docs/providers/zai.md)). Credentials are used only for the corresponding provider requests. OpenUsage's separate anonymous summaries and public pricing downloads are documented under [Privacy & usage data](docs/privacy.md).
@@ -62,8 +64,8 @@ For working on the code, see the developer docs: [architecture](docs/architectur
 - Universal binary — runs natively on both Apple Silicon and Intel Macs
 
 The Today / Yesterday / Last 30 Days spend tiles are computed natively from local CLI logs (Claude,
-Codex, and Grok) or Cursor's usage export — no Node.js or other runtime needed. Dollars are estimated
-with [dynamically refreshed model pricing](docs/pricing.md).
+Codex, Grok, and Sakana Fugu) or Cursor's usage export — no Node.js or other runtime needed. Dollars
+are estimated with [model pricing](docs/pricing.md).
 
 
 

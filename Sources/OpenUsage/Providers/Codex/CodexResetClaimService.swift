@@ -246,6 +246,22 @@ final class CodexResetClaimService {
     }
 }
 
+/// Exact-card routing for the app's only provider write. Every Codex card owns a service built from
+/// that runtime's scoped auth store and HTTP client; a row can therefore never claim a reset against
+/// whichever Codex login happened to be registered first.
+@MainActor
+final class CodexResetClaimRouter {
+    private let servicesByProviderID: [String: CodexResetClaimService]
+
+    init(servicesByProviderID: [String: CodexResetClaimService]) {
+        self.servicesByProviderID = servicesByProviderID
+    }
+
+    func service(for providerID: String) -> CodexResetClaimService? {
+        servicesByProviderID[providerID]
+    }
+}
+
 /// Hands the claim service to the resets popover through the environment: `nil` (the default — previews,
 /// share-card renders, reorder previews) renders the timeline read-only with no "Use" affordance.
 private struct CodexResetClaimServiceKey: EnvironmentKey {

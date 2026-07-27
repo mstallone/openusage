@@ -78,6 +78,27 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
     }
 
+    private func makeCodexDiscovery(
+        files: [String: String],
+        subdirectories: [String],
+        environment: [String: String] = [:],
+        keychain: KeychainAccessing = AccountKeychain(),
+        identityCache: (any CodexHomeIdentityCaching)? = nil
+    ) -> CodexHomeDiscovery {
+        CodexHomeDiscovery(
+            environment: FakeEnvironment(environment),
+            files: FakeFiles(files),
+            keychain: keychain,
+            identityCache: identityCache,
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") },
+            listSubdirectories: { url in
+                subdirectories
+                    .map { URL(fileURLWithPath: $0) }
+                    .filter { $0.deletingLastPathComponent().path == url.path }
+            }
+        )
+    }
+
     func testADistinctConfigDirAccountMintsAHashedRecordAndAnExtraCard() throws {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)
@@ -242,6 +263,169 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(reloadedStore.resolvedDisplayName(cardID: cardID), "Work Max")
     }
 
+    func testDistinctCodexHomesBuildScopedCardsAndIdentityStamps() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let defaultAuth = codexAuth(accountID: "PERSONAL", email: "personal@example.com")
+        let workAuth = codexAuth(accountID: "WORK", email: "work@example.com")
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles(["/Users/dev/.codex/auth.json": defaultAuth]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let discovery = makeCodexDiscovery(
+            files: [
+                "/Users/dev/.codex/auth.json": defaultAuth,
+                "/Users/dev/.codex-work/auth.json": workAuth,
+            ],
+            subdirectories: ["/Users/dev/.codex", "/Users/dev/.codex-work"]
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer,
+            accountsStore: store,
+            families: ["codex"],
+            codexDiscovery: discovery
+        )
+
+        XCTAssertTrue(assembly.hasResolvedCodexDefault)
+        XCTAssertEqual(assembly.codexCards.count, 2)
+        let defaultCard = try XCTUnwrap(assembly.codexCards.first { $0.id == "codex" })
+        let workCard = try XCTUnwrap(assembly.codexCards.first { $0.id != "codex" })
+        XCTAssertEqual(defaultCard.credentialHomePath, "/Users/dev/.codex")
+        XCTAssertEqual(defaultCard.logRoots.map(\.path), ["/Users/dev/.codex"])
+        XCTAssertTrue(defaultCard.receivesPiUsage)
+        XCTAssertEqual(workCard.displayName, "Codex — work@example.com")
+        XCTAssertEqual(workCard.credentialHomePath, "/Users/dev/.codex-work")
+        XCTAssertFalse(workCard.receivesPiUsage)
+        XCTAssertEqual(assembly.identityKeysByCard["codex"], "personal")
+        XCTAssertEqual(assembly.identityKeysByCard[workCard.id], "work")
+        XCTAssertEqual(
+            store.records.first { $0.id == workCard.id }?.sources.map(\.kind),
+            [.codexHome]
+        )
+    }
+
+    func testSameCodexAccountAcrossHomesFoldsLogsOntoOneCard() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let auth = codexAuth(accountID: "SAME")
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles(["/Users/dev/.codex/auth.json": auth]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let discovery = makeCodexDiscovery(
+            files: [
+                "/Users/dev/.codex/auth.json": auth,
+                "/Users/dev/.codex-side/auth.json": auth,
+            ],
+            subdirectories: ["/Users/dev/.codex", "/Users/dev/.codex-side"]
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer,
+            accountsStore: store,
+            families: ["codex"],
+            codexDiscovery: discovery
+        )
+
+        let card = try XCTUnwrap(assembly.codexCards.first)
+        XCTAssertEqual(assembly.codexCards.count, 1)
+        XCTAssertEqual(card.id, "codex")
+        XCTAssertEqual(card.credentialHomePath, "/Users/dev/.codex")
+        XCTAssertEqual(
+            card.logRoots.map(\.path),
+            ["/Users/dev/.codex", "/Users/dev/.codex-side"]
+        )
+        XCTAssertEqual(
+            Set(try XCTUnwrap(store.defaultBadgeHolder(family: "codex")).sources.map(\.kind)),
+            [.defaultHome, .codexHome]
+        )
+    }
+
+    func testUnresolvedCodexDefaultSuppressesExtraHomes() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles([
+                "/Users/dev/.codex/auth.json": #"{"tokens":{"access_token":"nameless"}}"#,
+            ]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let discovery = makeCodexDiscovery(
+            files: [
+                "/Users/dev/.codex-work/auth.json": codexAuth(accountID: "WORK"),
+            ],
+            subdirectories: ["/Users/dev/.codex-work"]
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer,
+            accountsStore: store,
+            families: ["codex"],
+            codexDiscovery: discovery
+        )
+
+        XCTAssertFalse(assembly.hasResolvedCodexDefault)
+        XCTAssertTrue(assembly.codexCards.isEmpty)
+        XCTAssertTrue(store.records.isEmpty)
+    }
+
+    func testCodexDefaultSwapKeepsBothStableRecordIDsAndRepointsSources() throws {
+        let defaults = makeScratchDefaults()
+        let store = ProviderAccountsStore(defaults: defaults)
+        let firstAuth = codexAuth(accountID: "FIRST")
+        let firstObserver = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles(["/Users/dev/.codex/auth.json": firstAuth]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let emptyDiscovery = makeCodexDiscovery(files: [:], subdirectories: [])
+
+        let first = ProviderAccountAssembly.make(
+            observer: firstObserver,
+            accountsStore: store,
+            families: ["codex"],
+            codexDiscovery: emptyDiscovery
+        )
+        XCTAssertEqual(first.codexCards.map(\.id), ["codex"])
+
+        let secondAuth = codexAuth(accountID: "SECOND")
+        let secondObserver = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles(["/Users/dev/.codex/auth.json": secondAuth]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let secondDiscovery = makeCodexDiscovery(
+            files: [
+                "/Users/dev/.codex/auth.json": secondAuth,
+                "/Users/dev/.codex-first/auth.json": firstAuth,
+            ],
+            subdirectories: ["/Users/dev/.codex", "/Users/dev/.codex-first"]
+        )
+
+        let second = ProviderAccountAssembly.make(
+            observer: secondObserver,
+            accountsStore: store,
+            families: ["codex"],
+            codexDiscovery: secondDiscovery
+        )
+
+        let original = try XCTUnwrap(second.codexCards.first { $0.id == "codex" })
+        let replacement = try XCTUnwrap(second.codexCards.first { $0.id != "codex" })
+        XCTAssertEqual(original.credentialHomePath, "/Users/dev/.codex-first")
+        XCTAssertEqual(replacement.credentialHomePath, "/Users/dev/.codex")
+        XCTAssertFalse(original.receivesPiUsage)
+        XCTAssertTrue(replacement.receivesPiUsage)
+        XCTAssertEqual(store.defaultBadgeHolder(family: "codex")?.id, replacement.id)
+        XCTAssertEqual(second.identityKeysByCard["codex"], "first")
+        XCTAssertEqual(second.identityKeysByCard[replacement.id], "second")
+    }
+
     func testNothingObservedLeavesRegistryAndKeysEmpty() {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)
@@ -257,5 +441,22 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertTrue(assembly.identityKeysByCard.isEmpty)
         XCTAssertTrue(store.records.isEmpty)
         XCTAssertNil(defaults.data(forKey: ProviderAccountsStore.storageKey), "no observations, no write")
+    }
+
+    private func codexAuth(accountID: String, email: String? = nil) -> String {
+        var tokens: [String: Any] = [
+            "access_token": "access-\(accountID)",
+            "account_id": accountID,
+        ]
+        if let email {
+            let payload = try! JSONSerialization.data(withJSONObject: ["email": email])
+            let encoded = payload.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+            tokens["id_token"] = "header.\(encoded).signature"
+        }
+        let data = try! JSONSerialization.data(withJSONObject: ["tokens": tokens], options: [.sortedKeys])
+        return String(decoding: data, as: UTF8.self)
     }
 }

@@ -1,6 +1,7 @@
 import XCTest
 @testable import OpenUsage
 
+@MainActor
 final class DefaultAccountObserverTests: XCTestCase {
     private let home = URL(fileURLWithPath: "/Users/dev")
 
@@ -147,6 +148,21 @@ final class DefaultAccountObserverTests: XCTestCase {
         )
     }
 
+    func testCodexHomeListSelectsTheFirstHomeThatNamesAnAccount() {
+        let observer = makeObserver(
+            environment: ["CODEX_HOME": "/opt/codex-one, /opt/codex-two"],
+            files: [
+                "/opt/codex-one/auth.json": codexAuthJSON(accountID: "first"),
+                "/opt/codex-two/auth.json": codexAuthJSON(accountID: "second"),
+            ]
+        )
+
+        XCTAssertEqual(
+            observer.observeCodex(),
+            .resolved(identityKey: "first", label: nil, anchor: "/opt/codex-one")
+        )
+    }
+
     func testCodexFallsBackToChatGPTAccountClaim() {
         // The id_token's ChatGPT account claim is the value the CLI itself copies into `account_id`.
         let idToken = fakeJWT(payload: [
@@ -177,9 +193,8 @@ final class DefaultAccountObserverTests: XCTestCase {
     }
 
     func testCodexKeychainCredentialMakesTheFamilyUnresolved() {
-        // The provider can fall back to the keychain credential when file auth fails, so while a
-        // keychain item exists, the auth file's identity is not provably the producing account —
-        // and we never read the keychain secret on the launch path to find out.
+        // An exact-home keyring item with no fingerprint-bound identity keeps the family unresolved.
+        // The launch path never reads its secret to guess.
         let observer = makeObserver(
             files: ["/Users/dev/.codex/auth.json": codexAuthJSON()],
             keychainValue: #"{"tokens": {"access_token": "kc-at"}}"#
@@ -187,7 +202,7 @@ final class DefaultAccountObserverTests: XCTestCase {
 
         XCTAssertEqual(
             observer.observeCodex(),
-            .unresolved(reason: "keychain credential present or unverifiable — identity unresolved this launch")
+            .unresolved(reason: "account-scoped keyring identity unverified")
         )
     }
 
@@ -203,7 +218,100 @@ final class DefaultAccountObserverTests: XCTestCase {
 
         XCTAssertEqual(
             observer.observeCodex(),
-            .unresolved(reason: "keychain credential present or unverifiable — identity unresolved this launch")
+            .unresolved(reason: "account-scoped keyring item unverifiable")
+        )
+    }
+
+    func testUnrelatedServiceLevelItemDoesNotSuppressAFileBackedIdentity() {
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles([
+                "/Users/dev/.codex/auth.json": codexAuthJSON(accountID: "file-account"),
+            ]),
+            keychain: AccountKeychain(serviceValues: [
+                CodexAuthStore.keychainService:
+                    #"{"tokens":{"access_token":"unaddressed","account_id":"other"}}"#,
+            ]),
+            homeDirectory: { [home] in home }
+        )
+
+        XCTAssertEqual(
+            observer.observeCodex(),
+            .resolved(
+                identityKey: "file-account",
+                label: nil,
+                anchor: "/Users/dev/.codex"
+            )
+        )
+    }
+
+    func testFingerprintBoundKeyringIdentityResolvesWithoutReadingItsSecret() {
+        let codexHome = "/Users/dev/.codex"
+        let account = CodexAuthStore.keychainAccountName(forHome: codexHome)
+        let key = AccountKeychain.key(
+            service: CodexAuthStore.keychainService,
+            account: account
+        )
+        let keychain = AccountKeychain(
+            accountValues: [
+                key: #"{"tokens":{"access_token":"at","account_id":"keyring-account"}}"#,
+            ],
+            fingerprints: [key: "item-v1"]
+        )
+        let cache = CodexHomeIdentityCache(defaults: scratchDefaults())
+        cache.record(
+            identity: .init(key: "keyring-account", label: "keyring@example.com"),
+            forHome: codexHome,
+            keychainItemFingerprint: "item-v1"
+        )
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles(),
+            keychain: keychain,
+            codexIdentityCache: cache,
+            homeDirectory: { [home] in home }
+        )
+
+        XCTAssertEqual(
+            observer.observeCodex(),
+            .resolved(
+                identityKey: "keyring-account",
+                label: "keyring@example.com",
+                anchor: codexHome
+            )
+        )
+    }
+
+    func testChangedKeyringFingerprintInvalidatesTheCachedDefaultIdentity() {
+        let codexHome = "/Users/dev/.codex"
+        let account = CodexAuthStore.keychainAccountName(forHome: codexHome)
+        let key = AccountKeychain.key(
+            service: CodexAuthStore.keychainService,
+            account: account
+        )
+        let keychain = AccountKeychain(
+            accountValues: [
+                key: #"{"tokens":{"access_token":"at","account_id":"new-account"}}"#,
+            ],
+            fingerprints: [key: "item-v2"]
+        )
+        let cache = CodexHomeIdentityCache(defaults: scratchDefaults())
+        cache.record(
+            identity: .init(key: "old-account", label: nil),
+            forHome: codexHome,
+            keychainItemFingerprint: "item-v1"
+        )
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles(),
+            keychain: keychain,
+            codexIdentityCache: cache,
+            homeDirectory: { [home] in home }
+        )
+
+        XCTAssertEqual(
+            observer.observeCodex(),
+            .unresolved(reason: "account-scoped keyring identity unverified")
         )
     }
 
@@ -219,6 +327,14 @@ final class DefaultAccountObserverTests: XCTestCase {
             observer.observeCodex(),
             .resolved(identityKey: "config-home-acct", label: nil, anchor: "/Users/dev/.config/codex")
         )
+    }
+
+    private func scratchDefaults() -> UserDefaults {
+        let suite = "DefaultAccountObserverTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return defaults
     }
 }
 

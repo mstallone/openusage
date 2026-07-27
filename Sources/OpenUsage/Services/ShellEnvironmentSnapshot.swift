@@ -11,6 +11,8 @@ struct ShellEnvironmentSnapshot: Codable, Equatable, Sendable {
     /// be added here — the snapshot lives in UserDefaults as plain text.
     static let capturedKeys = [
         "CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HOME",
+        "KIMI_CODE_HOME", "KIMI_CODE_BASE_URL",
+        "KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST",
         "USER_TYPE", "USE_LOCAL_OAUTH", "USE_STAGING_OAUTH",
         "CLAUDE_LOCAL_OAUTH_API_BASE", "CLAUDE_CODE_CUSTOM_OAUTH_URL",
     ]

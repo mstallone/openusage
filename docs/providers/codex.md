@@ -17,7 +17,26 @@ When Codex reports your plan name, OpenUsage shows it beside the provider name.
 
 ## Where credentials come from
 
-Sign in once with the Codex CLI (`codex`); OpenUsage reads the same auth files (`$CODEX_HOME` respected) with a keychain fallback. Tokens refresh automatically and rotate back into the auth file.
+Sign in with the Codex CLI (`codex`); OpenUsage reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). Tokens refresh automatically and rotate back into that account's original credential store. The legacy single-card path also supports older service-level keychain credentials.
+
+## Multiple accounts
+
+OpenUsage discovers Codex homes at launch and gives every distinct ChatGPT account its own card. Each card has isolated limits, plan, spend logs, cached data, and reset-credit actions. If the same account is signed in under more than one home, OpenUsage keeps one card and combines those homes' session logs instead of duplicating it. Pi's Codex usage identifies only the provider family, so OpenUsage assigns that slice to the account currently occupying the default Codex home; when no account holds that badge, it leaves the ambiguous pi slice unattributed.
+
+Discovery checks the normal `~/.codex` and `~/.config/codex` homes, dot-directories in your home folder, directories directly under `~/.config`, and every explicit entry in `CODEX_HOME`. OpenUsage accepts a comma-separated `CODEX_HOME` list for discovery; an individual Codex CLI process should still use one home at a time. For example:
+
+```sh
+CODEX_HOME="$HOME/.codex-work" codex
+CODEX_HOME="$HOME/.codex-personal" codex
+```
+
+A discovered home must contain a usable OAuth login that names its account through Codex's own account id. For file storage, that identity comes directly from `auth.json`. For keyring storage, OpenUsage reads the exact home-scoped item once after launch and binds the account identity to that item's non-secret fingerprint; the card appears on the next launch. Replacing the keyring item invalidates the binding, so the home stays hidden until the new login is safely rebound.
+
+OpenUsage never treats a directory name as identity. Every card is pinned to one credential home, and refreshes rotate back into that home's original file or keyring item. That keeps a token, session log, cached snapshot, or reset claim from crossing between accounts when homes are added, removed, or swapped.
+
+Additional cards use stable ids such as `codex@ab12cd34`. You can rename any Codex card from its context menu or Customize. CLI and local API queries for `codex` return every active Codex account card; querying the full card id selects one.
+
+Older service-level keychain credentials have no trustworthy home address, so they continue through the legacy single Codex card instead of being assigned to an extra account.
 
 ## The spend tiles
 
@@ -30,6 +49,7 @@ For supported GPT-5.4, GPT-5.5, and GPT-5.6 models, requests above 272k input to
 - **"Not logged in"** — run `codex` and sign in, then refresh.
 - **API-key-only setups** can't read subscription usage — sign in with your ChatGPT account instead.
 - **Spend tiles show "No data"** — OpenUsage found no Codex session logs in the last 30 days. If your Codex home lives somewhere custom, set `CODEX_HOME` so both the Codex CLI and OpenUsage look in the same place.
+- **A custom home doesn't become a separate card** — confirm it has a ChatGPT OAuth login and either an `auth.json`, `config.toml`, or sessions directory that lets discovery recognize the home. API-key-only, tokenless, and nameless file credentials are skipped rather than guessed. A keyring-only home may need one additional OpenUsage launch after its exact credential is first bound.
 
 ## Under the hood
 
@@ -43,7 +63,7 @@ The "Rate Limit Resets" row shows the on-demand reset-credit count, e.g. `2 avai
 
 ### Using a reset from the popover
 
-You can also spend a reset credit right from that popover — the same claim the Codex CLI's "Usage limit resets" picker performs. Hover a credit in the timeline and a **Use** button appears; clicking it expands that credit into an inline confirmation ("Immediately reset your usage limits. This can't be undone.") with **Reset** / **Cancel**. Confirming claims that exact credit and immediately resets your 5-hour and weekly windows; the app then refreshes Codex so the meters and the remaining count reflect it before the success line ("Reset claimed. Enjoy!") appears.
+You can also spend a reset credit right from that popover — the same claim the Codex CLI's "Usage limit resets" picker performs. Hover a credit in the timeline and a **Use** button appears; clicking it expands that credit into an inline confirmation ("Immediately reset your usage limits. This can't be undone.") with **Reset** / **Cancel**. Confirming claims that exact credit from that card's account and immediately resets its 5-hour and weekly windows; the app then refreshes only that Codex card so the meters and the remaining count reflect it before the success line ("Reset claimed. Enjoy!") appears.
 
 Safeguards, because a claim is irreversible:
 

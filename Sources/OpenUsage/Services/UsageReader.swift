@@ -57,10 +57,14 @@ public struct UsageReader {
         let accountAssembly = providersOverride == nil
             ? ProviderAccountAssembly.make(defaults: defaults, waitsForLoginShell: false)
             : ProviderAccountAssembly(identityKeysByCard: [:])
+        let codexIdentityWarmTask = accountAssembly.startCodexIdentityWarmTask()
         let providers = providersOverride ?? ProviderCatalog.make(
             defaults: defaults,
             claudeCards: accountAssembly.claudeCards,
-            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots
+            defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
+            codexCards: accountAssembly.codexCards,
+            hasResolvedCodexDefault: accountAssembly.hasResolvedCodexDefault,
+            codexIdentityCache: accountAssembly.codexIdentityCache
         )
         let registry = WidgetRegistry.from(providers)
         let knownIDs = Set(registry.providers.map(\.id))
@@ -149,6 +153,11 @@ public struct UsageReader {
             // Unreachable in practice: the token was validated above and the limits routes always
             // produce a body for a known token. Fail loudly rather than print nothing.
             throw UsageReaderError.refreshFailed(warnings.first ?? "local read produced no data")
+        }
+        // A one-shot process must finish its exact-item warming reads before it exits; the app keeps
+        // the equivalent task retained for its lifetime.
+        if let codexIdentityWarmTask {
+            await codexIdentityWarmTask.value
         }
         return UsageReadResult(data: data, warnings: warnings)
     }

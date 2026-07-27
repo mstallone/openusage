@@ -19,17 +19,20 @@ struct DefaultAccountObserver: Sendable {
     var environment: EnvironmentReading
     var files: TextFileAccessing
     var keychain: KeychainAccessing
+    var codexIdentityCache: (any CodexHomeIdentityCaching)?
     var homeDirectory: @Sendable () -> URL
 
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         files: TextFileAccessing = LocalTextFileAccessor(),
         keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        codexIdentityCache: (any CodexHomeIdentityCaching)? = nil,
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser }
     ) {
         self.environment = environment
         self.files = files
         self.keychain = keychain
+        self.codexIdentityCache = codexIdentityCache
         self.homeDirectory = homeDirectory
     }
 
@@ -110,32 +113,27 @@ struct DefaultAccountObserver: Sendable {
 
     // MARK: - Codex
 
+    struct CodexIdentity: Equatable, Sendable {
+        var key: String
+        var label: String?
+    }
+
     /// The default Codex homes, mirroring `CodexAuthStore.authPaths()`: `CODEX_HOME` when exported,
     /// else `~/.config/codex` then `~/.codex`. The first home that names its account wins.
     ///
     /// Identity is strict — `tokens.account_id`, or the id_token's ChatGPT account claim (the value
     /// the CLI itself copies into `account_id`). No path-derived fallback: an auth file that can't
-    /// name its account (and keyring-mode logins, whose secret we never read here) stays unresolved.
+    /// name its account stays unresolved. A keyring-mode login resolves only through the
+    /// fingerprint-bound identity cache populated by a prior exact-item read.
     func observeCodex() -> Outcome {
         let homes: [String]
         if let raw = environment.value(for: "CODEX_HOME")?
             .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
-            homes = [raw]
+            homes = raw.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
         } else {
             homes = ["~/.config/codex", "~/.codex"]
-        }
-
-        // `CodexProvider.refresh` falls back to the keychain credential when file auth fails, so
-        // while a keychain item exists the file's identity is not provably the account that will
-        // produce the next snapshot. We never read the keychain secret here (launch path, prompt
-        // risk) — an attributes-only existence probe downgrades the whole family to unresolved,
-        // which just means "behave exactly as before account awareness". A later phase binds
-        // keyring-mode identities properly. Only a definite "no item" clears the family for file
-        // identity: a failed probe (`nil` — locked keychain, denied) is treated the same as
-        // "item present", because resolving from the file while the fallback is possible is the
-        // exact wrong-account stamp this rule exists to prevent.
-        if keychain.genericPasswordExists(service: CodexAuthStore.keychainService) != false {
-            return .unresolved(reason: "keychain credential present or unverifiable — identity unresolved this launch")
         }
 
         var sawFootprint = false
@@ -149,24 +147,85 @@ struct DefaultAccountObserver: Sendable {
                 sawFootprint = true
                 continue
             }
-            guard let text else { continue }
-            sawFootprint = true
-            guard let auth = CodexAuthStore.parseAuth(text),
-                  auth.tokens?.accessToken?.nilIfEmpty != nil
-            else { continue }
-            let payload = auth.tokens?.idToken.flatMap { ProviderParse.jwtPayload($0) }
-            let email = (payload?["email"] as? String)?.nilIfEmpty
-            if let accountID = auth.tokens?.accountID?
-                .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
-                return .resolved(identityKey: accountID.lowercased(), label: email, anchor: anchor)
+            let fileIdentity: CodexIdentity? = if let text {
+                Self.fileBackedCodexIdentity(text)
+            } else {
+                nil
             }
-            if let claimID = Self.chatGPTAccountID(inIDTokenPayload: payload) {
-                return .resolved(identityKey: claimID.lowercased(), label: email, anchor: anchor)
+            if text != nil { sawFootprint = true }
+
+            let account = CodexAuthStore.keychainAccountName(forHome: anchor)
+            switch keychain.genericPasswordExists(
+                service: CodexAuthStore.keychainService,
+                account: account
+            ) {
+            case false:
+                if let fileIdentity {
+                    return .resolved(
+                        identityKey: fileIdentity.key,
+                        label: fileIdentity.label,
+                        anchor: anchor
+                    )
+                }
+            case true:
+                sawFootprint = true
+                guard let fingerprint = keychain.genericPasswordAttributeFingerprint(
+                    service: CodexAuthStore.keychainService,
+                    account: account
+                ),
+                    let keychainIdentity = codexIdentityCache?.identity(
+                        forHome: anchor,
+                        keychainItemFingerprint: fingerprint
+                    )
+                else {
+                    return .unresolved(reason: "account-scoped keyring identity unverified")
+                }
+                if let fileIdentity, fileIdentity.key != keychainIdentity.key {
+                    return .unresolved(reason: "auth file and keyring identities disagree")
+                }
+                let identity = fileIdentity ?? keychainIdentity
+                return .resolved(
+                    identityKey: identity.key,
+                    label: identity.label,
+                    anchor: anchor
+                )
+            case nil:
+                // A failed exact-item probe cannot prove that a file fallback is account-safe.
+                if text != nil {
+                    return .unresolved(reason: "account-scoped keyring item unverifiable")
+                }
             }
         }
+
+        // A service-only legacy item has no trustworthy home address and therefore contributes no
+        // identity here. The catalog still keeps its historical fallback card; importantly, an
+        // unrelated account-scoped item elsewhere under the shared service cannot suppress verified
+        // file-backed homes just because a service-only query happens to find it first.
         return sawFootprint
             ? .unresolved(reason: "credentials present but no account identity")
             : .absent
+    }
+
+    private static func fileBackedCodexIdentity(_ text: String) -> CodexIdentity? {
+        guard let auth = CodexAuthStore.parseAuth(text),
+              auth.tokens?.accessToken?.nilIfEmpty != nil
+        else {
+            return nil
+        }
+        return codexIdentity(auth)
+    }
+
+    /// Strict provider-owned identity extraction shared by default-home observation and extra-home
+    /// discovery. A path is never an identity: without `account_id` or the equivalent id-token claim,
+    /// the credential cannot safely own a card.
+    static func codexIdentity(_ auth: CodexAuth) -> CodexIdentity? {
+        let payload = auth.tokens?.idToken.flatMap { ProviderParse.jwtPayload($0) }
+        let label = (payload?["email"] as? String)?.nilIfEmpty
+        let rawKey = auth.tokens?.accountID?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? chatGPTAccountID(inIDTokenPayload: payload)
+        guard let rawKey else { return nil }
+        return CodexIdentity(key: rawKey.lowercased(), label: label)
     }
 
     /// The account id inside a Codex id_token: `chatgpt_account_id` under the

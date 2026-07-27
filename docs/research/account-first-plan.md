@@ -118,18 +118,21 @@ tests land in-slice (repo policy). Estimated source LOC excludes tests.
 
 ### Phase 5 — Codex multi-account + per-card resets (~700 LOC)
 
-- **5a:** `CODEX_HOME` candidate scan with the strict identity rule — `tokens.account_id` or the
+- **5a (implemented):** `CODEX_HOME` candidate scan with the strict identity rule —
+  `tokens.account_id` or the
   id_token's ChatGPT account claim; a credential file that can't name its account never becomes a
   card (port `93e741e`). Scoped auth stores, per-identity log-root grouping, and the
   `CodexResetClaimRouter` (port `b6be1b1`) so every account's row claims its own reset credits from
   day one.
-- **5b (separate if needed):** keyring-mode homes — an unverified keyring source claims no account
-  until the one-time post-launch account-scoped read binds it (`CodexHomeIdentityCache`). The
-  nichest slice; keeping it out of 5a keeps 5a simple.
+- **5b (implemented):** keyring-mode homes — an unverified keyring source claims no account until
+  the one-time post-launch account-scoped read binds it (`CodexHomeIdentityCache`). The binding is
+  tied to an opaque fingerprint of that exact keyring item's non-secret attributes, so replacing a
+  login invalidates the old identity before discovery can assign the home to a card.
 
 ### Phase 6 — Attribution polish (small)
 
-- Pi spend attribution routed through the resolver to the badge holder.
+- Pi spend attribution routed through the resolver to the badge holder. *(Implemented with 5a so a
+  Codex home swap can never leave provider-family usage on the old bare-id account.)*
 - Family-keyed telemetry rollups (`accounts_per_family` gauge).
 - Total Spend family grouping/tinting if still wanted (see `c6a63eb` on the old branch for why
   plain size order won before).

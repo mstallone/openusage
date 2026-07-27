@@ -1,5 +1,7 @@
+import CryptoKit
 import Darwin
 import Foundation
+import LocalAuthentication
 import Security
 
 protocol EnvironmentReading: Sendable {
@@ -230,6 +232,16 @@ protocol KeychainAccessing: Sendable {
     /// item under a known account name (e.g. Antigravity's `agy` token under service `gemini`,
     /// account `antigravity`) rather than the current user.
     func readGenericPassword(service: String, account: String) throws -> String?
+    /// Write one explicitly addressed item. Codex keyring mode stores every home under the shared
+    /// `Codex Auth` service with a home-derived account, so token rotation must preserve that account.
+    func writeGenericPassword(service: String, account: String, value: String) throws
+    /// Account-scoped counterpart to `genericPasswordExists(service:)`. Both are attributes-only in
+    /// production: `nil` means the probe failed, not that the item is absent.
+    func genericPasswordExists(service: String, account: String) -> Bool?
+    /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
+    /// date). Discovery binds a cached account identity to this so replacing a keyring item invalidates
+    /// the old identity without reading its secret on the launch path.
+    func genericPasswordAttributeFingerprint(service: String, account: String) -> String?
 }
 
 extension KeychainAccessing {
@@ -247,6 +259,10 @@ extension KeychainAccessing {
         try readGenericPassword(service: service)
     }
 
+    func writeGenericPassword(service: String, account: String, value: String) throws {
+        try writeGenericPassword(service: service, value: value)
+    }
+
     /// Whether an item exists for `service`, without reading its secret. `nil` means the probe
     /// itself failed (locked keychain, denied) — the caller picks its own safe side, which is not
     /// the same for every caller. The default (for mocks) falls back to a read; the real
@@ -258,6 +274,18 @@ extension KeychainAccessing {
         } catch {
             return nil
         }
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        do {
+            return try readGenericPassword(service: service, account: account) != nil
+        } catch {
+            return nil
+        }
+    }
+
+    func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
+        nil
     }
 }
 
@@ -284,12 +312,20 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     /// keychain, denied) reports `nil` ("unknown"), never a definite answer, so callers can pick
     /// their safe side.
     func genericPasswordExists(service: String) -> Bool? {
+        genericPasswordExists(service: service, account: nil)
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        genericPasswordExists(service: service, account: account as String?)
+    }
+
+    private func genericPasswordExists(service: String, account: String?) -> Bool? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUIFail,
-        ]
+            kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
+        ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         switch SecItemCopyMatching(query as CFDictionary, nil) {
         case errSecSuccess: return true
         case errSecItemNotFound: return false
@@ -330,6 +366,59 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
         try writePassword(["add-generic-password", "-U", "-a", currentUserAccount(), "-s", service, "-w", value])
+    }
+
+    func writeGenericPassword(service: String, account: String, value: String) throws {
+        try writePassword(["add-generic-password", "-U", "-a", account, "-s", service, "-w", value])
+    }
+
+    func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true,
+            kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let attributes = item as? [String: Any]
+        else {
+            return nil
+        }
+
+        // The query never requests `kSecReturnData`, so this contains metadata only. Normalize every
+        // attribute before hashing; callers receive no raw account, path, dates, labels, or access
+        // group, and an in-place `-U` update changes the modification-date component.
+        let normalized = attributes.map { key, value in
+            "\(key)=\(Self.stableKeychainAttribute(value))"
+        }.sorted().joined(separator: "\n")
+        guard !normalized.isEmpty else { return nil }
+        return SHA256.hash(data: Data(normalized.precomposedStringWithCanonicalMapping.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func stableKeychainAttribute(_ value: Any) -> String {
+        switch value {
+        case let value as Data:
+            return value.base64EncodedString()
+        case let value as Date:
+            return String(value.timeIntervalSinceReferenceDate)
+        case let value as String:
+            return value
+        case let value as NSNumber:
+            return value.stringValue
+        default:
+            return String(describing: value)
+        }
+    }
+
+    private static func nonInteractiveAuthenticationContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
     }
 
     private func writePassword(_ arguments: [String]) throws {

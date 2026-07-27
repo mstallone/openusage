@@ -79,7 +79,8 @@ final class ProviderLinksTests: XCTestCase {
         let providers: [ProviderRuntime] = [
             ClaudeProvider(), CodexProvider(), CursorProvider(),
             AntigravityProvider(), CopilotProvider(), DevinProvider(),
-            GrokProvider(), OpenCodeProvider(), OpenRouterProvider(), ZAIProvider()
+            GrokProvider(), KimiProvider(), OpenCodeProvider(), OpenRouterProvider(),
+            SakanaProvider(), ZAIProvider()
         ]
         for runtime in providers {
             let links = runtime.provider.visibleLinks

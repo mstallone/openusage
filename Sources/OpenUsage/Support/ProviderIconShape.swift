@@ -91,8 +91,10 @@ enum ProviderMarks {
         case "codex": return "circle.hexagongrid"
         case "cursor": return "cube"
         case "grok": return "bolt.fill"
+        case "kimi": return "moon.stars"
         case "opencode": return "chevron.left.forwardslash.chevron.right"
         case "openrouter": return "point.3.connected.trianglepath.dotted"
+        case "sakana": return "fish.fill"
         case "zai": return "z.signal"
         default: return "app.dashed"
         }
@@ -111,8 +113,7 @@ enum ProviderMarks {
     }
 }
 
-/// Minimal SVG path parser supporting M/L/H/V/C/S/Q/T/Z (absolute + relative, implicit repeats).
-/// Sufficient for the single-path provider marks; arcs (A) are not used by them.
+/// Minimal SVG path parser supporting M/L/H/V/C/S/Q/T/A/Z (absolute + relative, implicit repeats).
 enum SVGPath {
     static func parse(_ d: String) -> Path {
         var path = Path()
@@ -164,6 +165,121 @@ enum SVGPath {
         func reflected() -> CGPoint {
             guard let lc = lastControl else { return current }
             return CGPoint(x: 2 * current.x - lc.x, y: 2 * current.y - lc.y)
+        }
+
+        /// SVG endpoint-parameterized elliptical arc converted to cubic Bézier segments. Splitting
+        /// at quarter turns keeps the approximation visually exact at provider-icon scale.
+        func addArc(
+            to end: CGPoint,
+            radiusX rawRadiusX: CGFloat,
+            radiusY rawRadiusY: CGFloat,
+            rotationDegrees: CGFloat,
+            largeArc: Bool,
+            sweep: Bool
+        ) {
+            var radiusX = abs(rawRadiusX)
+            var radiusY = abs(rawRadiusY)
+            guard current != end else { return }
+            guard radiusX > 0, radiusY > 0 else {
+                path.addLine(to: end)
+                return
+            }
+
+            let rotation = rotationDegrees * .pi / 180
+            let cosRotation = cos(rotation)
+            let sinRotation = sin(rotation)
+            let halfDX = (current.x - end.x) / 2
+            let halfDY = (current.y - end.y) / 2
+            let transformedX = cosRotation * halfDX + sinRotation * halfDY
+            let transformedY = -sinRotation * halfDX + cosRotation * halfDY
+
+            let radiiScale = transformedX * transformedX / (radiusX * radiusX)
+                + transformedY * transformedY / (radiusY * radiusY)
+            if radiiScale > 1 {
+                let factor = sqrt(radiiScale)
+                radiusX *= factor
+                radiusY *= factor
+            }
+
+            let radiusXSquared = radiusX * radiusX
+            let radiusYSquared = radiusY * radiusY
+            let transformedXSquared = transformedX * transformedX
+            let transformedYSquared = transformedY * transformedY
+            let numerator = max(
+                0,
+                radiusXSquared * radiusYSquared
+                    - radiusXSquared * transformedYSquared
+                    - radiusYSquared * transformedXSquared
+            )
+            let denominator = radiusXSquared * transformedYSquared
+                + radiusYSquared * transformedXSquared
+            let sign: CGFloat = largeArc == sweep ? -1 : 1
+            let factor = denominator > 0 ? sign * sqrt(numerator / denominator) : 0
+            let centerTransformedX = factor * radiusX * transformedY / radiusY
+            let centerTransformedY = factor * -radiusY * transformedX / radiusX
+            let center = CGPoint(
+                x: cosRotation * centerTransformedX - sinRotation * centerTransformedY
+                    + (current.x + end.x) / 2,
+                y: sinRotation * centerTransformedX + cosRotation * centerTransformedY
+                    + (current.y + end.y) / 2
+            )
+
+            let startVector = CGPoint(
+                x: (transformedX - centerTransformedX) / radiusX,
+                y: (transformedY - centerTransformedY) / radiusY
+            )
+            let endVector = CGPoint(
+                x: (-transformedX - centerTransformedX) / radiusX,
+                y: (-transformedY - centerTransformedY) / radiusY
+            )
+            var startAngle = atan2(startVector.y, startVector.x)
+            var deltaAngle = atan2(
+                startVector.x * endVector.y - startVector.y * endVector.x,
+                startVector.x * endVector.x + startVector.y * endVector.y
+            )
+            if !sweep, deltaAngle > 0 { deltaAngle -= 2 * .pi }
+            if sweep, deltaAngle < 0 { deltaAngle += 2 * .pi }
+
+            let segmentCount = max(1, Int(ceil(abs(deltaAngle) / (.pi / 2))))
+            let segmentAngle = deltaAngle / CGFloat(segmentCount)
+            for _ in 0..<segmentCount {
+                let endAngle = startAngle + segmentAngle
+                let alpha = 4 / 3 * tan(segmentAngle / 4)
+
+                func point(at angle: CGFloat) -> CGPoint {
+                    CGPoint(
+                        x: center.x + cosRotation * radiusX * cos(angle)
+                            - sinRotation * radiusY * sin(angle),
+                        y: center.y + sinRotation * radiusX * cos(angle)
+                            + cosRotation * radiusY * sin(angle)
+                    )
+                }
+                func derivative(at angle: CGFloat) -> CGPoint {
+                    CGPoint(
+                        x: -cosRotation * radiusX * sin(angle)
+                            - sinRotation * radiusY * cos(angle),
+                        y: -sinRotation * radiusX * sin(angle)
+                            + cosRotation * radiusY * cos(angle)
+                    )
+                }
+
+                let start = point(at: startAngle)
+                let segmentEnd = point(at: endAngle)
+                let startDerivative = derivative(at: startAngle)
+                let endDerivative = derivative(at: endAngle)
+                path.addCurve(
+                    to: segmentEnd,
+                    control1: CGPoint(
+                        x: start.x + alpha * startDerivative.x,
+                        y: start.y + alpha * startDerivative.y
+                    ),
+                    control2: CGPoint(
+                        x: segmentEnd.x - alpha * endDerivative.x,
+                        y: segmentEnd.y - alpha * endDerivative.y
+                    )
+                )
+                startAngle = endAngle
+            }
         }
 
         while i < n {
@@ -236,6 +352,26 @@ enum SVGPath {
                     let c = prevWasQuad ? reflected() : current
                     path.addQuadCurve(to: end, control: c)
                     current = end; lastControl = c; isQuad = true
+                } else { failed = true }
+
+            case "A", "a":
+                if let radiusX = readNumber(),
+                   let radiusY = readNumber(),
+                   let rotation = readNumber(),
+                   let largeArcFlag = readNumber(),
+                   let sweepFlag = readNumber(),
+                   let end = readPoint(relative: cmd == "a"),
+                   (largeArcFlag == 0 || largeArcFlag == 1),
+                   (sweepFlag == 0 || sweepFlag == 1) {
+                    addArc(
+                        to: end,
+                        radiusX: radiusX,
+                        radiusY: radiusY,
+                        rotationDegrees: rotation,
+                        largeArc: largeArcFlag == 1,
+                        sweep: sweepFlag == 1
+                    )
+                    current = end
                 } else { failed = true }
 
             case "Z", "z":

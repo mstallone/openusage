@@ -324,4 +324,27 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertEqual(outcome, .failed)
         XCTAssertEqual(http.requests.count, 2, "every candidate is tried once, then the claim fails loudly")
     }
+
+    func testRouterReturnsOnlyTheExactCardsClaimService() {
+        let client = CodexUsageClient(http: RoutingHTTPClient { _ in
+            HTTPResponse(statusCode: 500, headers: [:], body: Data())
+        })
+        let personal = CodexResetClaimService(
+            usageClient: client,
+            credentialCandidates: { [("personal", "personal")] }
+        )
+        let work = CodexResetClaimService(
+            usageClient: client,
+            credentialCandidates: { [("work", "work")] }
+        )
+        let router = CodexResetClaimRouter(servicesByProviderID: [
+            "codex": personal,
+            "codex@abcd1234": work,
+        ])
+
+        XCTAssertTrue(router.service(for: "codex") === personal)
+        XCTAssertTrue(router.service(for: "codex@abcd1234") === work)
+        XCTAssertNil(router.service(for: "claude"))
+        XCTAssertNil(router.service(for: "codex@missing"))
+    }
 }

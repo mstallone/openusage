@@ -90,6 +90,89 @@ final class CodexAuthStoreTests: XCTestCase {
         XCTAssertEqual(candidates.count, 1)
         XCTAssertEqual(candidates.first?.auth.tokens?.accessToken, "token")
     }
+
+    func testStandardScopeTreatsCommaSeparatedCodexHomeAsOrderedHomes() {
+        let files = FakeFiles([
+            "/tmp/codex-one/auth.json": #"{"tokens":{"access_token":"one"}}"#,
+            "/tmp/codex-two/auth.json": #"{"tokens":{"access_token":"two"}}"#,
+        ])
+        let store = CodexAuthStore(
+            environment: FakeEnvironment([
+                "CODEX_HOME": " /tmp/codex-one, /tmp/codex-two ",
+            ]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        XCTAssertEqual(
+            store.loadAuthCandidates().compactMap(\.auth.tokens?.accessToken),
+            ["one", "two"]
+        )
+    }
+
+    func testScopedHomeCannotReadAnotherHomeOrServiceKeychainFallback() {
+        let files = FakeFiles([
+            "/tmp/codex-personal/auth.json": #"{"tokens":{"access_token":"personal"}}"#,
+            "/tmp/codex-work/auth.json": #"{"tokens":{"access_token":"work"}}"#,
+        ])
+        let store = CodexAuthStore(
+            environment: FakeEnvironment(["CODEX_HOME": "/tmp/codex-personal"]),
+            files: files,
+            keychain: AccountKeychain(serviceValues: [
+                CodexAuthStore.keychainService: #"{"tokens":{"access_token":"keychain"}}"#,
+            ]),
+            scope: .home(path: "/tmp/codex-work")
+        )
+
+        XCTAssertEqual(
+            store.loadAuthCandidates().compactMap(\.auth.tokens?.accessToken),
+            ["work"]
+        )
+        XCTAssertNil(store.loadKeychainAuth(), "a scoped card never borrows an ambiguous service-level item")
+        XCTAssertEqual(store.authPaths(), ["/tmp/codex-work/auth.json"])
+    }
+
+    func testScopedHomeReadsAndRotatesOnlyItsComputedKeyringItem() throws {
+        let workHome = "/tmp/codex-work"
+        let personalHome = "/tmp/codex-personal"
+        let workAccount = CodexAuthStore.keychainAccountName(forHome: workHome)
+        let personalAccount = CodexAuthStore.keychainAccountName(forHome: personalHome)
+        let workKey = AccountKeychain.key(
+            service: CodexAuthStore.keychainService,
+            account: workAccount
+        )
+        let personalKey = AccountKeychain.key(
+            service: CodexAuthStore.keychainService,
+            account: personalAccount
+        )
+        let keychain = AccountKeychain(
+            serviceValues: [
+                CodexAuthStore.keychainService: #"{"tokens":{"access_token":"legacy"}}"#,
+            ],
+            accountValues: [
+                workKey: #"{"tokens":{"access_token":"work","account_id":"work"}}"#,
+                personalKey: #"{"tokens":{"access_token":"personal","account_id":"personal"}}"#,
+            ],
+            fingerprints: [workKey: "work-v1", personalKey: "personal-v1"]
+        )
+        let store = CodexAuthStore(
+            files: FakeFiles(),
+            keychain: keychain,
+            scope: .home(path: workHome)
+        )
+
+        var state = try XCTUnwrap(store.loadKeychainAuth())
+        XCTAssertEqual(state.auth.tokens?.accessToken, "work")
+        XCTAssertEqual(state.keychainAccount, workAccount)
+        XCTAssertEqual(state.credentialHome, workHome)
+
+        state.auth.tokens?.accessToken = "work-rotated"
+        try store.save(state)
+
+        XCTAssertTrue(keychain.accountValues[workKey]?.contains("work-rotated") == true)
+        XCTAssertTrue(keychain.accountValues[personalKey]?.contains("personal") == true)
+        XCTAssertTrue(keychain.serviceValues[CodexAuthStore.keychainService]?.contains("legacy") == true)
+    }
 }
 
 final class CodexUsageMapperTests: XCTestCase {

@@ -110,8 +110,10 @@ For bounded progress resources, `unit` follows the provider's live metric format
 | Copilot | `premiumCredits`, `extraUsage`, `orgCredits`, `orgSpend`, `chat`, `completions` |
 | Devin | `daily`, `weekly`, `extraUsageBalance` |
 | Grok | `weekly` |
+| Kimi | `session`, `weekly` |
 | OpenCode | `session`, `weekly`, `monthly` |
 | OpenRouter | `credits`, `balance`, `keyLimit` |
+| Sakana Fugu | `session`, `weekly` |
 | Z.ai | `session`, `weekly`, `webSearches` |
 
 Charts, colors, subtitles, formatted badges, layout state, and historical spend periods stay out of this

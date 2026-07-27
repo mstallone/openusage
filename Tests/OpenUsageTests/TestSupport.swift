@@ -322,6 +322,69 @@ final class ServiceKeychain: KeychainAccessing, @unchecked Sendable {
     }
 }
 
+/// Keychain double that distinguishes a service-level legacy item from explicit account-scoped
+/// items. Codex multi-home tests use this to prove one home can never borrow another item's secret.
+final class AccountKeychain: KeychainAccessing, @unchecked Sendable {
+    var serviceValues: [String: String]
+    var accountValues: [String: String]
+    var fingerprints: [String: String]
+    var unverifiableAccounts: Set<String>
+
+    init(
+        serviceValues: [String: String] = [:],
+        accountValues: [String: String] = [:],
+        fingerprints: [String: String] = [:],
+        unverifiableAccounts: Set<String> = []
+    ) {
+        self.serviceValues = serviceValues
+        self.accountValues = accountValues
+        self.fingerprints = fingerprints
+        self.unverifiableAccounts = unverifiableAccounts
+    }
+
+    static func key(service: String, account: String) -> String {
+        "\(service)\u{1F}\(account)"
+    }
+
+    func readGenericPassword(service: String) throws -> String? {
+        serviceValues[service] ?? accountValues.first {
+            $0.key.hasPrefix(service + "\u{1F}")
+        }?.value
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {
+        serviceValues[service] = value
+    }
+
+    func readGenericPassword(service: String, account: String) throws -> String? {
+        accountValues[Self.key(service: service, account: account)]
+    }
+
+    func writeGenericPassword(service: String, account: String, value: String) throws {
+        let key = Self.key(service: service, account: account)
+        accountValues[key] = value
+        fingerprints[key] = (fingerprints[key] ?? "fingerprint") + "-updated"
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        serviceValues[service] != nil || accountValues.keys.contains {
+            $0.hasPrefix(service + "\u{1F}")
+        }
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        let key = Self.key(service: service, account: account)
+        guard !unverifiableAccounts.contains(key) else { return nil }
+        return accountValues[key] != nil
+    }
+
+    func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
+        let key = Self.key(service: service, account: account)
+        guard accountValues[key] != nil, !unverifiableAccounts.contains(key) else { return nil }
+        return fingerprints[key]
+    }
+}
+
 final class FakeHTTPClient: HTTPClient, @unchecked Sendable {
     var response: HTTPResponse
     var requests: [HTTPRequest] = []

@@ -135,6 +135,49 @@ extension GrokUsageError: CategorizedError {
     }
 }
 
+extension KimiAuthError: CategorizedError {
+    var errorCategory: ErrorCategory {
+        switch self {
+        case .notLoggedIn: .notLoggedIn
+        case .sessionExpired: .authExpired
+        case .invalidCredentials, .invalidEndpoint: .authInvalid
+        case .credentialsUnreadable, .refreshLockFailed, .saveFailed: .credentialAccess
+        }
+    }
+}
+
+extension KimiUsageError: CategorizedError {
+    var errorCategory: ErrorCategory {
+        switch self {
+        case .connectionFailed: .network
+        case .invalidResponse: .decoding
+        case .requestFailed(let status): ErrorCategory.http(status)
+        case .usageUnavailable: .notAvailable
+        }
+    }
+}
+
+extension SakanaAuthError: CategorizedError {
+    var errorCategory: ErrorCategory {
+        switch self {
+        case .notLoggedIn: .notLoggedIn
+        case .sessionExpired: .authExpired
+        case .invalidCookie: .authInvalid
+        case .permissionRequired, .credentialsUnreadable: .credentialAccess
+        }
+    }
+}
+
+extension SakanaUsageError: CategorizedError {
+    var errorCategory: ErrorCategory {
+        switch self {
+        case .connectionFailed: .network
+        case .invalidResponse: .decoding
+        case .requestFailed(let status): ErrorCategory.http(status)
+        }
+    }
+}
+
 extension DevinAuthError: CategorizedError {
     var errorCategory: ErrorCategory {
         switch self {

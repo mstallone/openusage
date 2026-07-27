@@ -19,8 +19,23 @@ struct ClaudeAccountCard: Equatable, Sendable {
     var extraLogRoots: [URL] = []
 }
 
+/// One Codex account card to build this launch. Unlike the Phase 2 Claude plan, this includes the
+/// account occupying the default home: a later login swap can move the default source to an
+/// `@`-suffixed record while the original bare-id account remains stable in another home.
+struct CodexAccountCard: Equatable, Sendable {
+    var id: String
+    var displayName: String
+    /// The one home whose `auth.json` this card may read and update.
+    var credentialHomePath: String
+    /// Every home verified to carry this identity, used only for local spend logs.
+    var logRoots: [URL]
+    /// Pi logs identify the provider family but not its ChatGPT account. Route them only to the
+    /// record currently holding the default-home badge; without a badge they remain unattributed.
+    var receivesPiUsage = false
+}
+
 /// The launch-time account pass: read which account is signed in at each family's default home,
-/// scan for extra Claude logins in custom config dirs, reconcile the account registry, and expose
+/// scan for extra Claude/Codex logins in custom homes, reconcile the account registry, and expose
 /// what the rest of launch consumes — the per-card identity map (snapshot-cache account stamp) and
 /// the extra-card build plan (`ProviderCatalog`). Runs once per launch (app) or per invocation
 /// (one-shot CLI); a mid-run swap is caught on the next launch.
@@ -34,6 +49,17 @@ struct ProviderAccountAssembly {
     /// Same-account custom config dirs discovered for the DEFAULT card's login: extra spend-log
     /// roots for the default scanner, never extra credentials.
     var defaultClaudeExtraLogRoots: [URL] = []
+    /// Codex cards found this launch, including the resolved default-home account when there is one.
+    var codexCards: [CodexAccountCard] = []
+    /// True when `codexCards` includes the account at the selected default home, so the catalog must
+    /// replace its unresolved legacy `CodexProvider()` with the scoped cards instead of adding both.
+    var hasResolvedCodexDefault = false
+    /// Shared cache used by scoped keyring stores and the post-launch warming task.
+    var codexIdentityCache: CodexHomeIdentityCache?
+    /// Same accessor discovery probed; retained so warming reads the exact items from that source.
+    var codexIdentityWarmKeychain: (any KeychainAccessing)?
+    /// Homes kept hidden because their exact keyring item hasn't been safely identity-bound yet.
+    var unverifiedCodexKeyringHomes: Set<String> = []
 
     /// `waitsForLoginShell`: true for the menu-bar app (a Finder/Dock launch inherits no shell
     /// exports, so the pass leans on the login-shell layers), false for the one-shot CLI (a terminal
@@ -70,12 +96,16 @@ struct ProviderAccountAssembly {
         guard !families.isEmpty else {
             return ProviderAccountAssembly(identityKeysByCard: [:])
         }
-        return make(
-            observer: DefaultAccountObserver(),
+        let codexIdentityCache = CodexHomeIdentityCache(defaults: defaults)
+        var assembly = make(
+            observer: DefaultAccountObserver(codexIdentityCache: codexIdentityCache),
             accountsStore: accountsStore ?? ProviderAccountsStore(defaults: defaults),
             families: families,
-            claudeDiscovery: ClaudeConfigDirDiscovery()
+            claudeDiscovery: ClaudeConfigDirDiscovery(),
+            codexDiscovery: CodexHomeDiscovery(identityCache: codexIdentityCache)
         )
+        assembly.codexIdentityCache = codexIdentityCache
+        return assembly
     }
 
     /// The environment variable that relocates each family's default home — the fact whose
@@ -95,7 +125,8 @@ struct ProviderAccountAssembly {
         observer: DefaultAccountObserver,
         accountsStore: ProviderAccountsStore,
         families: Set<String> = ProviderAccountID.families,
-        claudeDiscovery: ClaudeConfigDirDiscovery? = nil
+        claudeDiscovery: ClaudeConfigDirDiscovery? = nil,
+        codexDiscovery: CodexHomeDiscovery? = nil
     ) -> ProviderAccountAssembly {
         var identityKeys: [String: String] = [:]
         var observations: [ProviderAccountsStore.AccountObservation] = []
@@ -180,6 +211,104 @@ struct ProviderAccountAssembly {
             }
         }
 
+        // Codex homes use the same identity routing, but every observed account — including the
+        // default-home holder — gets a scoped build plan. That lets a later login swap move the
+        // default source to a different stable record without moving either card's id or history.
+        var foundCodexAccounts: [
+            (identityKey: String, label: String?, credentialHomePath: String, logRoots: [URL])
+        ] = []
+        var hasResolvedCodexDefault = false
+        var unverifiedCodexKeyringHomes: Set<String> = []
+        let codexOutcome = outcomes.first { $0.family == "codex" }?.outcome
+        if let codexDiscovery, let codexOutcome {
+            let defaultAnchor: String? = if case .resolved(_, _, let anchor) = codexOutcome {
+                anchor
+            } else {
+                nil
+            }
+            // Run even when the default identity is unresolved: verified findings remain suppressed,
+            // but unverified exact-item homes still need the post-launch warming plan.
+            let scan = codexDiscovery.run(
+                excluding: Set(defaultAnchor.map { [$0] } ?? [])
+            )
+            unverifiedCodexKeyringHomes = scan.unverifiedKeyringHomes
+            for note in scan.notes {
+                AppLog.info(.config, "discovery: \(note)")
+            }
+            if case .unresolved = codexOutcome {
+                AppLog.info(
+                    .config,
+                    "discovery: codex default login present but its identity is unreadable → skipping extra-account candidates this launch"
+                )
+            } else {
+                let defaultKey = identityKeys["codex"]
+
+                var order: [String] = []
+                var grouped: [String: [CodexHomeDiscovery.Finding]] = [:]
+                for finding in scan.findings {
+                    if grouped[finding.identityKey] == nil { order.append(finding.identityKey) }
+                    grouped[finding.identityKey, default: []].append(finding)
+                }
+
+                if let defaultKey, let defaultAnchor {
+                    let sameAccountHomes = grouped.removeValue(forKey: defaultKey) ?? []
+                    order.removeAll { $0 == defaultKey }
+                    let sources = sameAccountHomes.map {
+                        ProviderAccountSource(
+                            kind: .codexHome,
+                            anchor: $0.anchorPath,
+                            holdsDefaultSource: false
+                        )
+                    }
+                    if let index = observations.firstIndex(where: {
+                        $0.family == "codex" && $0.identityKey == defaultKey
+                    }) {
+                        observations[index].sources += sources
+                    }
+                    foundCodexAccounts.append((
+                        identityKey: defaultKey,
+                        label: {
+                            guard case .resolved(_, let label, _) = codexOutcome else { return nil }
+                            return label
+                        }(),
+                        credentialHomePath: defaultAnchor,
+                        logRoots: [URL(fileURLWithPath: defaultAnchor)]
+                            + sameAccountHomes.map { URL(fileURLWithPath: $0.anchorPath) }
+                    ))
+                    hasResolvedCodexDefault = true
+                    if !sameAccountHomes.isEmpty {
+                        AppLog.info(
+                            .config,
+                            "discovery: \(sameAccountHomes.count) Codex home(s) fold onto the default account"
+                        )
+                    }
+                }
+
+                for identityKey in order {
+                    let findings = grouped[identityKey] ?? []
+                    guard let primary = findings.first else { continue }
+                    observations.append(ProviderAccountsStore.AccountObservation(
+                        family: "codex",
+                        identityKey: identityKey,
+                        label: primary.label,
+                        sources: findings.map {
+                            ProviderAccountSource(
+                                kind: .codexHome,
+                                anchor: $0.anchorPath,
+                                holdsDefaultSource: false
+                            )
+                        }
+                    ))
+                    foundCodexAccounts.append((
+                        identityKey: identityKey,
+                        label: primary.label,
+                        credentialHomePath: primary.anchorPath,
+                        logRoots: findings.map { URL(fileURLWithPath: $0.anchorPath) }
+                    ))
+                }
+            }
+        }
+
         let records = accountsStore.reconcile(with: observations)
 
         // The extra-card build plan: one card per distinct account found this launch, under its
@@ -210,10 +339,77 @@ struct ProviderAccountAssembly {
         }
         claudeCards.sort { $0.id < $1.id }
 
+        // The provisional default identity was keyed by family before reconciliation. Codex can
+        // legitimately put that login on an @-suffixed stable record after a swap, so publish only
+        // the actual runtime-card ids assembled below.
+        if hasResolvedCodexDefault {
+            identityKeys.removeValue(forKey: "codex")
+        }
+        var codexCards: [CodexAccountCard] = []
+        for account in foundCodexAccounts {
+            guard let record = records.first(where: {
+                $0.family == "codex" && $0.identityKey == account.identityKey
+            }) else {
+                continue
+            }
+            codexCards.append(CodexAccountCard(
+                id: record.id,
+                displayName: record.derivedDisplayName,
+                credentialHomePath: account.credentialHomePath,
+                logRoots: account.logRoots,
+                receivesPiUsage: record.sources.contains(where: \.holdsDefaultSource)
+            ))
+            identityKeys[record.id] = account.identityKey
+            AppLog.info(
+                .config,
+                "accounts: codex card \(record.id) from \(account.logRoots.count) home(s)"
+            )
+        }
+        codexCards.sort { $0.id < $1.id }
+
         return ProviderAccountAssembly(
             identityKeysByCard: identityKeys,
             claudeCards: claudeCards,
-            defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots
+            defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
+            codexCards: codexCards,
+            hasResolvedCodexDefault: hasResolvedCodexDefault,
+            codexIdentityWarmKeychain: codexDiscovery?.keychain,
+            unverifiedCodexKeyringHomes: unverifiedCodexKeyringHomes
         )
+    }
+
+    /// An unverified keyring home stays hidden this launch. Read its exact item once, off the launch
+    /// path, so a valid provider-owned identity can be fingerprint-bound for the next launch.
+    func startCodexIdentityWarmTask() -> Task<Void, Never>? {
+        guard let codexIdentityCache,
+              let codexIdentityWarmKeychain,
+              !unverifiedCodexKeyringHomes.isEmpty
+        else {
+            return nil
+        }
+        let homes = unverifiedCodexKeyringHomes.sorted()
+        return Task.detached(priority: .utility) {
+            for home in homes {
+                guard !Task.isCancelled else { return }
+                let store = CodexAuthStore(
+                    keychain: codexIdentityWarmKeychain,
+                    scope: .home(path: home),
+                    identityCache: codexIdentityCache
+                )
+                guard let state = store.loadKeychainAuth(),
+                      store.recordSelectedIdentity(state) != nil
+                else {
+                    AppLog.warn(
+                        .keychain,
+                        "could not bind one Codex keyring home; its account card remains hidden"
+                    )
+                    continue
+                }
+                AppLog.info(
+                    .config,
+                    "discovery: warmed Codex keyring identity for home \(ProviderAccountID.hash8(home))"
+                )
+            }
+        }
     }
 }

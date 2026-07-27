@@ -55,9 +55,23 @@ short trail in the log file:
 - `accounts: claude default identity resolved (claude@<hash>)` — the default login named its account.
   The hash is derived from the account id, so two launches by the same account always match.
 - `accounts: codex default identity unresolved — …` — a login exists but its account can't be named
-  with certainty this launch (an auth file without an account id, or a keychain credential whose
-  secret we don't read at launch). The card works as before; it just can't participate in
-  account-aware features yet.
+  with certainty this launch (for example, an auth file without an account id or an unbound
+  account-scoped keyring credential). The legacy card still works; that source can't participate in
+  account-aware features until its identity is verified.
+- `discovery: codex candidate ~/.codex-work: accepted (<hash>, auth.json)` — a custom Codex home
+  supplied a usable, account-named OAuth login and participates in an account card.
+- `discovery: codex candidate ~/.codex-work: keyring identity unverified → hidden until its exact
+  item is bound` — the home uses account-scoped keyring storage, but launch discovery has not safely
+  associated that item with its provider account yet.
+- `discovery: warmed Codex keyring identity for home <hash>` — the post-launch task read that one
+  exact item and recorded a fingerprint-bound account association; its card can appear next launch.
+- `discovery: codex candidate ~/.codex-work: accepted (<hash>, verified keyring)` — the keyring item
+  still matches the verified binding and now participates in an account card.
+- `discovery: codex candidate ~/.codex-work: OAuth credential names no account → skipped` — the
+  home has a token but no provider-owned account identity, so OpenUsage refuses to guess from its
+  path and can't safely turn it into a separate card.
+- `accounts: codex card codex@<hash> from 2 home(s)` — the account card was assembled, and the
+  number says how many same-account Codex homes contribute local session logs to it.
 - `stale account cache discarded for claude` — the account at the default home changed between
   launches, so the previous account's cached snapshot was dropped instead of painting under the new
   login.

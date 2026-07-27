@@ -9,7 +9,8 @@ final class UsageHistoryClassificationTests: XCTestCase {
             CodexProvider().widgetDescriptors,
             CursorProvider().widgetDescriptors,
             GrokProvider().widgetDescriptors,
-            OpenCodeProvider().widgetDescriptors
+            OpenCodeProvider().widgetDescriptors,
+            SakanaProvider().widgetDescriptors
         ]
 
         for descriptors in descriptorSets {
@@ -25,7 +26,8 @@ final class UsageHistoryClassificationTests: XCTestCase {
             "codex": .machineLocal,
             "cursor": .accountWide,
             "grok": .machineLocal,
-            "opencode": .machineLocal
+            "opencode": .machineLocal,
+            "sakana": .machineLocal
         ])
     }
 }

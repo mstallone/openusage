@@ -267,6 +267,12 @@ struct WidgetGroupedListView: View {
             onToggleMeterStyle: { dataStore.meterStyle.toggle() },
             condensedTop: condensedTop
         )
+            // Reset credits are the app's only provider write. Bind this row to the service for its
+            // exact Codex card; non-Codex rows and static renders receive nil/read-only behavior.
+            .environment(
+                \.codexResetClaim,
+                container.codexResetClaims.service(for: providerID)
+            )
             .contentShape(Rectangle())
             .opacity(isActive ? 0 : 1)
             .highPriorityGesture(metricDragGesture(for: descriptor, providerID: providerID))

@@ -16,10 +16,18 @@ final class ProviderMarksTests: XCTestCase {
     }
 
     func testStandardProviderMarksLoad() {
-        for id in ["claude", "codex", "cursor"] {
+        for id in ["claude", "codex", "cursor", "kimi", "sakana"] {
             let mark = ProviderMarks.mark(for: id)
             XCTAssertNotNil(mark, "\(id) should load")
             XCTAssertFalse(mark?.path.isEmpty ?? true, "\(id) mark must carry SVG path data")
         }
+    }
+
+    func testKimiArcMarkParsesAcrossItsFullArtworkBounds() throws {
+        let mark = try XCTUnwrap(ProviderMarks.mark(for: "kimi"))
+        let bounds = SVGPath.parse(mark.path).cgPath.boundingBoxOfPath
+
+        XCTAssertGreaterThan(bounds.width, 700)
+        XCTAssertGreaterThan(bounds.height, 700)
     }
 }

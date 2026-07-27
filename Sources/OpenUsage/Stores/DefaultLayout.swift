@@ -26,11 +26,16 @@ enum DefaultLayout {
         "grok.weekly", "grok.trend",
         "grok.payAsYouGo", "grok.today", "grok.yesterday", "grok.last30",
 
+        "kimi.session", "kimi.weekly", "kimi.extraBalance", "kimi.extraMonthly",
+
         "opencode.session", "opencode.weekly", "opencode.monthly", "opencode.trend",
         "opencode.today", "opencode.yesterday", "opencode.last30",
 
         "openrouter.credits", "openrouter.balance",
         "openrouter.today", "openrouter.week", "openrouter.month", "openrouter.keyLimit",
+
+        "sakana.session", "sakana.weekly", "sakana.trend",
+        "sakana.today", "sakana.yesterday", "sakana.last30",
 
         "zai.session", "zai.weekly", "zai.webSearches"
     ]
@@ -69,7 +74,8 @@ enum DefaultLayout {
     ]
 
     /// Account-card-aware default list: for every extra account card in the registry
-    /// (`claude@ab12cd34`), the family's entries are re-prefixed onto the card and appended, so a
+    /// (for example, `claude@ab12cd34` or `codex@ab12cd34`), the family's entries are re-prefixed
+    /// onto the card and appended, so a
     /// newly discovered account seeds the same metric set (and caret split) as its family's default
     /// card. Pins are deliberately NOT translated — an extra account never claims menu-bar space by
     /// default. `migrationBaselineMetricIDs` is deliberately NOT translated either: account-card ids
@@ -112,12 +118,18 @@ enum DefaultLayout {
         "copilot.orgCredits", "copilot.orgSpend", "copilot.chat", "copilot.completions",
         "devin.extra",
         "grok.payAsYouGo", "grok.today", "grok.yesterday", "grok.last30",
+        // Kimi: Five-Hour Usage stays above the fold; Weekly Usage and the two Extra Usage
+        // account/billing rows sit below the caret.
+        "kimi.weekly", "kimi.extraBalance", "kimi.extraMonthly",
         // OpenCode: the three Go caps (Session/Weekly/Monthly) and Usage Trend stay above the fold —
         // matching every other provider — with the spend tiles (Today/Yesterday/Last 30 Days) below.
         "opencode.today", "opencode.yesterday", "opencode.last30",
         // OpenRouter: Credits meter + Balance stay above the fold; period spend and the per-key cap
         // sit below the caret.
         "openrouter.today", "openrouter.week", "openrouter.month", "openrouter.keyLimit",
+        // Sakana Fugu: Five-Hour Usage and the local Usage Trend stay above the fold; Weekly Usage
+        // and the three local estimated-spend rows sit below the caret.
+        "sakana.weekly", "sakana.today", "sakana.yesterday", "sakana.last30",
         // Z.ai: Session meter stays above the fold; Web Searches (monthly count) sits below the caret.
         "zai.webSearches"
     ]

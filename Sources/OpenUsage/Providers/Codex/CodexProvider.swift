@@ -2,53 +2,66 @@ import Foundation
 
 @MainActor
 final class CodexProvider: ProviderRuntime {
-    let provider = Provider(
-        id: "codex",
-        displayName: "Codex",
-        icon: .providerMark("codex"),
-        links: [
-            .init(label: "Status", url: "https://status.openai.com/"),
-            .init(label: "Dashboard", url: "https://chatgpt.com/codex/settings/usage")
-        ]
-    )
+    /// The default card and every extra account card use identical machinery; only their stable id,
+    /// derived display name, credential scope, and log roots differ.
+    static func makeProvider(id: String = "codex", displayName: String = "Codex") -> Provider {
+        Provider(
+            id: id,
+            displayName: displayName,
+            icon: .providerMark("codex"),
+            links: [
+                .init(label: "Status", url: "https://status.openai.com/"),
+                .init(label: "Dashboard", url: "https://chatgpt.com/codex/settings/usage")
+            ]
+        )
+    }
+
+    let provider: Provider
 
     let authStore: CodexAuthStore
     let usageClient: CodexUsageClient
     let logUsageScanner: CodexLogUsageScanner
     let now: @Sendable () -> Date
     let pricing: @Sendable () async -> ModelPricing
+    /// Pi names only the provider family in its logs. `nil` keeps those account-ambiguous entries
+    /// off this card; the current default-source holder receives the family slice under `codex`.
+    let piUsageCardID: String?
 
     init(
+        provider: Provider = CodexProvider.makeProvider(),
         authStore: CodexAuthStore = CodexAuthStore(),
         usageClient: CodexUsageClient = CodexUsageClient(),
         logUsageScanner: CodexLogUsageScanner = CodexLogUsageScanner(),
         now: @escaping @Sendable () -> Date = Date.init,
-        pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() }
+        pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() },
+        piUsageCardID: String? = "codex"
     ) {
+        self.provider = provider
         self.authStore = authStore
         self.usageClient = usageClient
         self.logUsageScanner = logUsageScanner
         self.now = now
         self.pricing = pricing
+        self.piUsageCardID = piUsageCardID
     }
 
     var widgetDescriptors: [WidgetDescriptor] {
         [
-            .percent(id: "codex.session", provider: provider, title: "Session")
+            .percent(id: "\(provider.id).session", provider: provider, title: "Session")
                 .exportingLimit("session", unit: "percent"),
-            .percent(id: "codex.weekly", provider: provider, title: "Weekly")
+            .percent(id: "\(provider.id).weekly", provider: provider, title: "Weekly")
                 .exportingLimit("weekly", unit: "percent"),
             // Model-specific Spark limits (GPT-5.3-Codex-Spark), parsed from `additional_rate_limits`.
             // Declared right after Weekly so they group with the core rate-limit meters; seeded On
             // Demand (below the caret) and unpinned in `DefaultLayout`.
-            .percent(id: "codex.spark", provider: provider, title: "Spark")
+            .percent(id: "\(provider.id).spark", provider: provider, title: "Spark")
                 .exportingLimit("spark", unit: "percent"),
-            .percent(id: "codex.sparkWeekly", provider: provider, title: "Spark Weekly")
+            .percent(id: "\(provider.id).sparkWeekly", provider: provider, title: "Spark Weekly")
                 .exportingLimit("sparkWeekly", unit: "percent"),
-            .combined(id: "codex.credits", provider: provider, title: "Extra Usage", metricLabel: "Credits")
+            .combined(id: "\(provider.id).credits", provider: provider, title: "Extra Usage", metricLabel: "Credits")
                 .exportingLimit("credits", kind: .balance, unit: "credits", source: .value(kind: .count, label: "credits"))
                 .exportingLimit("creditValue", kind: .balance, unit: "usd", source: .value(kind: .dollars)),
-            .values(id: "codex.rateLimitResets", provider: provider, title: "Rate Limit Resets", metricLabel: "Rate Limit Resets", traySuffix: "resets", showsResetExpiries: true)
+            .values(id: "\(provider.id).rateLimitResets", provider: provider, title: "Rate Limit Resets", metricLabel: "Rate Limit Resets", traySuffix: "resets", showsResetExpiries: true)
                 .exportingLimit("rateLimitResets", kind: .balance, unit: "resets", source: .value(kind: .count, label: "available")),
             .usageTrend(provider: provider)
                 .exportingHistory(
@@ -113,7 +126,7 @@ final class CodexProvider: ProviderRuntime {
             // The `codex` CLI may have rotated the token on disk since we loaded it. Re-read the live
             // credential first and adopt its (newer) access token — refreshing our stale copy would send
             // an already-rotated refresh_token and trip `refresh_token_reused` (issue #516).
-            if let live = reloadLiveAuth(source: authState.source),
+            if let live = authStore.reload(authState),
                let liveToken = live.auth.tokens?.accessToken, !liveToken.isEmpty {
                 authState = live
                 accessToken = liveToken
@@ -128,6 +141,9 @@ final class CodexProvider: ProviderRuntime {
         }
 
         let response = try await fetchUsageWithRetry(accessToken: accessToken, authState: &authState)
+        // A successful exact keyring candidate can now safely bind its home for the next launch's
+        // attributes-only discovery pass.
+        _ = authStore.recordSelectedIdentity(authState)
         // The access token may have rotated during the usage fetch's refresh-and-retry; read the live one.
         let currentToken = authState.auth.tokens?.accessToken ?? accessToken
         let resetCredits = await fetchResetCreditsBestEffort(
@@ -141,7 +157,16 @@ final class CodexProvider: ProviderRuntime {
         // here). Both scans run on their scanner actors, off the main actor.
         let pricing = await pricing()
         let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
-        let piScan = await PiUsageScanner.shared.scan(cardID: provider.id, now: now(), pricing: pricing)
+        let piScan: LogUsageScan?
+        if let piUsageCardID {
+            piScan = await PiUsageScanner.shared.scan(
+                cardID: piUsageCardID,
+                now: now(),
+                pricing: pricing
+            )
+        } else {
+            piScan = nil
+        }
         var usageHistory: ProviderUsageHistory?
         // Cancellation can land between the native and pi scans. Treat the pair as one unit so a
         // partial result cannot replace the last-good combined history in WidgetDataStore.
@@ -207,19 +232,6 @@ final class CodexProvider: ProviderRuntime {
             connectionFailed: CodexUsageError.connectionFailed,
             authExpired: CodexAuthError.tokenExpired
         )
-    }
-
-    /// Re-reads the credential from its original source (the same on-disk file or keychain entry) so a
-    /// token the `codex` CLI rotated out-of-band is picked up before we attempt our own refresh. Reads
-    /// only that one source — matching how `codex` reads the single `auth.json` from `CODEX_HOME` —
-    /// rather than re-scanning every candidate path.
-    private func reloadLiveAuth(source: CodexAuthState.Source) -> CodexAuthState? {
-        switch source {
-        case .file(let path):
-            return authStore.loadAuth(at: path)
-        case .keychain:
-            return authStore.loadKeychainAuth()
-        }
     }
 
     private func refreshAccessToken(authState: inout CodexAuthState, refreshToken: String) async throws -> String {
