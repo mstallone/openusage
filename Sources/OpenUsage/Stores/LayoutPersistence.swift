@@ -27,7 +27,6 @@ final class LayoutPersistence {
     func loadPins() -> [String]? { defaults.stringArray(forKey: keys.pins) }
     func loadExpandedMetrics() -> [String]? { defaults.stringArray(forKey: keys.expandedMetrics) }
     func loadExpandOnEnable() -> [String]? { defaults.stringArray(forKey: keys.expandOnEnable) }
-    func loadExpandedProviders() -> [String]? { defaults.stringArray(forKey: keys.expandedProviders) }
     func loadMenuBarStyle() -> MenuBarStyle { defaults.enumValue(forKey: keys.menuBarStyle, default: .text) }
 
     func savePlaced(_ value: [PlacedWidget]) { encode(value, forKey: keys.placed) }
@@ -43,9 +42,6 @@ final class LayoutPersistence {
     }
     func saveExpandOnEnable(_ value: Set<String>) {
         defaults.set(Array(value), forKey: keys.expandOnEnable)
-    }
-    func saveExpandedProviders(_ value: Set<String>) {
-        defaults.set(Array(value), forKey: keys.expandedProviders)
     }
     func saveMenuBarStyle(_ value: MenuBarStyle) {
         defaults.set(value.rawValue, forKey: keys.menuBarStyle)
@@ -80,7 +76,6 @@ final class LayoutPersistence {
         let pins: String
         let expandedMetrics: String
         let expandOnEnable: String
-        let expandedProviders: String
         let menuBarStyle: String
 
         init(storageKey: String) {
@@ -91,7 +86,6 @@ final class LayoutPersistence {
             pins = "\(storageKey).menuBarPins"
             expandedMetrics = "\(storageKey).expandedMetrics"
             expandOnEnable = "\(storageKey).expandOnEnable"
-            expandedProviders = "\(storageKey).expandedProviders"
             menuBarStyle = "\(storageKey).menuBarStyle"
         }
     }

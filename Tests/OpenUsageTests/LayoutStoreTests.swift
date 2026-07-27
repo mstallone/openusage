@@ -1126,7 +1126,7 @@ final class LayoutStoreTests: XCTestCase {
         XCTAssertTrue(group?.expandedWidgets.isEmpty ?? false)
     }
 
-    func testProviderExpandedStatePersistsAcrossReload() {
+    func testProviderExpandedStateDoesNotPersistAcrossReload() {
         let defaults = makeDefaults("ProviderExpanded")
         let store = LayoutStore(registry: .mock, defaults: defaults, storageKey: "layout")
 
@@ -1134,25 +1134,27 @@ final class LayoutStoreTests: XCTestCase {
         XCTAssertTrue(store.isProviderExpanded("codex"))
 
         let reloaded = LayoutStore(registry: .mock, defaults: defaults, storageKey: "layout")
-        XCTAssertTrue(reloaded.isProviderExpanded("codex"))
-    }
-
-    func testProviderExpandedStateCanCollapseAndPersists() {
-        let defaults = makeDefaults("ProviderCollapsed")
-        let store = LayoutStore(registry: .mock, defaults: defaults, storageKey: "layout")
-        XCTAssertTrue(store.setProviderExpanded(true, for: "codex"))
-        XCTAssertTrue(store.setProviderExpanded(false, for: "codex"))
-
-        let reloaded = LayoutStore(registry: .mock, defaults: defaults, storageKey: "layout")
         XCTAssertFalse(reloaded.isProviderExpanded("codex"))
     }
 
-    func testInvalidPersistedExpandedProviderIDsAreDropped() {
-        let defaults = makeDefaults("InvalidProviderExpanded")
+    func testCollapseExpandedProvidersClosesEveryOpenCard() {
+        let store = makeStore("CollapseExpandedProviders")
+        XCTAssertTrue(store.setProviderExpanded(true, for: "codex"))
+        XCTAssertTrue(store.setProviderExpanded(true, for: "claude"))
+
+        XCTAssertTrue(store.collapseExpandedProviders())
+
+        XCTAssertFalse(store.isProviderExpanded("codex"))
+        XCTAssertFalse(store.isProviderExpanded("claude"))
+        XCTAssertFalse(store.collapseExpandedProviders(), "collapsing an already-collapsed dashboard is a no-op")
+    }
+
+    func testLegacyPersistedExpandedProviderIDsAreIgnored() {
+        let defaults = makeDefaults("LegacyProviderExpanded")
         defaults.set(["codex", "missing"], forKey: "layout.expandedProviders")
 
         let store = LayoutStore(registry: .mock, defaults: defaults, storageKey: "layout")
-        XCTAssertTrue(store.isProviderExpanded("codex"))
+        XCTAssertFalse(store.isProviderExpanded("codex"))
         XCTAssertFalse(store.isProviderExpanded("missing"))
     }
 
