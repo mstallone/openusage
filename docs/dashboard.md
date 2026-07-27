@@ -8,7 +8,7 @@ A fresh install doesn't turn on every provider OpenUsage knows about. It starts 
 
 This full detection only happens on a brand-new install. Updates never change the providers you already have on or off — but when an update ships a provider you've never seen, the same local check runs once for just that provider and turns it on only if you actually have the tool. See [Which Providers Are On](provider-enablement.md) for the full lifecycle.
 
-Each provider card leads with its **Always Visible** metrics. Any metrics you've moved below the **On Demand** line are tucked away behind the in-card caret — click it to reveal them below the caret, click again to collapse. Open cards stay open across popover closes and app restarts. A provider with neither On Demand metrics nor quick links shows no caret.
+Each provider card leads with its **Always Visible** metrics. Any metrics you've moved below the **On Demand** line are tucked away behind the in-card caret — click it to reveal them below the caret, click again to collapse. Closing the popover collapses every open card, so the next open starts compact. A provider with neither On Demand metrics nor quick links shows no caret.
 
 When you expand a card, the tucked-away metrics open below the caret as a single-column list, so each detail row keeps the full card width.
 
@@ -97,4 +97,4 @@ A global shortcut (recorded in Settings) toggles the popover from anywhere.
 
 ## Closing
 
-Closing the popover resets navigation state: scroll position returns to the top and Customize / Settings close. Provider cards remember whether their expand caret was open.
+Closing the popover resets navigation state: scroll position returns to the top, Customize / Settings close, and every provider card collapses.

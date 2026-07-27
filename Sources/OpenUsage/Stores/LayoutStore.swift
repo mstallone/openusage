@@ -56,8 +56,8 @@ final class LayoutStore {
     var expandedMetricIDs: Set<String>
 
     /// Provider IDs whose dashboard cards are currently opened with their expanded metrics visible.
-    /// Unlike hover and drag state, this is a user preference: if someone likes Codex open, it should
-    /// stay open across popover closes and app restarts.
+    /// Transient for one open-panel session: closing the popover collapses every card, and a relaunch
+    /// always starts collapsed.
     private(set) var expandedProviderIDs: Set<String>
 
     /// The three transient popover pills, each an auto-clearing `TransientNotice` (was three copy-pasted
@@ -148,7 +148,7 @@ final class LayoutStore {
         metricOrderByProvider = initial.metricOrderByProvider
         pinnedMetricIDs = initial.pinnedMetricIDs
         expandedMetricIDs = initial.expandedMetricIDs
-        expandedProviderIDs = initial.expandedProviderIDs
+        expandedProviderIDs = []
         defaultExpandedOnEnableIDs = initial.defaultExpandedOnEnableIDs
         menuBarStyle = initial.menuBarStyle
 
@@ -171,7 +171,15 @@ final class LayoutStore {
         } else {
             expandedProviderIDs.remove(providerID)
         }
-        persistExpandedProviders()
+        return true
+    }
+
+    /// Collapses every open provider card when the menu-bar panel closes. Returns whether anything
+    /// changed so the close lifecycle can be regression-tested without opening an AppKit panel.
+    @discardableResult
+    func collapseExpandedProviders() -> Bool {
+        guard !expandedProviderIDs.isEmpty else { return false }
+        expandedProviderIDs.removeAll()
         return true
     }
 
@@ -361,10 +369,6 @@ final class LayoutStore {
         persistence.saveExpandOnEnable(defaultExpandedOnEnableIDs)
     }
 
-    private func persistExpandedProviders() {
-        persistence.saveExpandedProviders(expandedProviderIDs)
-    }
-
     // MARK: - Mutations
 
     func add(_ descriptorID: String) {
@@ -401,7 +405,6 @@ final class LayoutStore {
         persistExpanded()
         persistExpandOnEnable()
         expandedProviderIDs = []
-        persistExpandedProviders()
         persistSeededDefaults(Set(LayoutOrdering.knownMetricIDs(defaultMetricIDs, registry: registry)))
         persist()
     }
@@ -447,9 +450,7 @@ final class LayoutStore {
         persistExpandOnEnable()
 
         // Default is a collapsed card.
-        if expandedProviderIDs.remove(providerID) != nil {
-            persistExpandedProviders()
-        }
+        expandedProviderIDs.remove(providerID)
 
         syncPlacedOrder() // persists `placed`
     }
