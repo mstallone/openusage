@@ -23,4 +23,24 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "hello")
     }
+
+    /// A shell can exit after disowning a descendant that inherited its stdout/stderr descriptors.
+    /// Pipe draining must share the process deadline instead of waiting for that descendant to exit.
+    func testTimeoutIncludesPipeDraining() {
+        let runner = SystemProcessRunner()
+        let startedAt = Date()
+
+        XCTAssertThrowsError(try runner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "sleep 1 & printf ready"],
+            environment: [:],
+            timeout: 0.2
+        )) { error in
+            XCTAssertEqual(
+                error as? ProcessRunnerError,
+                .timedOut(executable: "/bin/sh", timeout: 0.2)
+            )
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.8)
+    }
 }

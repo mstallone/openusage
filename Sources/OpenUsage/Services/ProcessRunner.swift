@@ -62,8 +62,9 @@ struct SystemProcessRunner: ProcessRunning {
         process.terminationHandler = { _ in exited.leave() }
 
         try process.run()
+        let deadline = DispatchTime.now() + timeout
 
-        if exited.wait(timeout: .now() + timeout) == .timedOut {
+        if exited.wait(timeout: deadline) == .timedOut {
             terminateProcessTree(rootPID: process.processIdentifier)
             process.terminate()
             _ = exited.wait(timeout: .now() + 0.1)
@@ -71,12 +72,17 @@ struct SystemProcessRunner: ProcessRunning {
                 kill(process.processIdentifier, SIGKILL)
             }
             process.waitUntilExit()
-            drained.wait() // the killed child closed its pipes, so the drains hit EOF and finish
+            abandonDrains(stdoutPipe, stderrPipe)
             throw ProcessRunnerError.timedOut(executable: executable, timeout: timeout)
         }
 
         process.waitUntilExit()
-        drained.wait()
+        guard drained.wait(timeout: deadline) == .success else {
+            // The direct child can exit while a disowned descendant still holds its inherited pipe
+            // descriptors open. Do not let that descendant extend the operation past its deadline.
+            abandonDrains(stdoutPipe, stderrPipe)
+            throw ProcessRunnerError.timedOut(executable: executable, timeout: timeout)
+        }
         AppLog.debug(.subprocess, "exit \(process.terminationStatus)")
         return ProcessResult(exitCode: process.terminationStatus, stdout: output.stdoutString, stderr: output.stderrString)
     }
@@ -91,6 +97,12 @@ struct SystemProcessRunner: ProcessRunning {
             let data = box.handle.readDataToEndOfFile()
             if isStdout { output.setStdout(data) } else { output.setStderr(data) }
             group.leave()
+        }
+    }
+
+    private func abandonDrains(_ pipes: Pipe...) {
+        for pipe in pipes {
+            try? pipe.fileHandleForReading.close()
         }
     }
 
@@ -156,4 +168,3 @@ private final class SubprocessOutput: @unchecked Sendable {
     var stdoutString: String { lock.lock(); defer { lock.unlock() }; return String(data: stdout, encoding: .utf8) ?? "" }
     var stderrString: String { lock.lock(); defer { lock.unlock() }; return String(data: stderr, encoding: .utf8) ?? "" }
 }
-
