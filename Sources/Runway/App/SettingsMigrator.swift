@@ -94,6 +94,9 @@ enum SettingsMigrator {
     /// Where the applied schema version is recorded, in the same standard domain as the settings it
     /// guards. Integer; absent means "never migrated" — a fresh or legacy install, disambiguated at runtime.
     static let schemaVersionKey = "runway.settings.schemaVersion"
+    /// Survives an interrupted first launch between schema migration and `FirstRunSeeder`. The seeder is
+    /// idempotent, so a resumed launch never overwrites an enabled-provider list that already landed.
+    private static let firstRunSeedPendingKey = "runway.firstRunSeedPending.v1"
 
     /// Bring the domain up to `current`. Returns the resulting schema version (for logging and tests).
     @discardableResult
@@ -106,7 +109,8 @@ enum SettingsMigrator {
         var version: Int
         if let stored = defaults.object(forKey: schemaVersionKey) as? Int {
             version = stored
-        } else if isFreshInstall(defaults: defaults, domainName: domainName) {
+        } else if isFreshInstall(defaults: defaults, domainName: domainName)
+                    || defaults.bool(forKey: firstRunSeedPendingKey) {
             defaults.set(current, forKey: schemaVersionKey)
             AppLog.info(.config, "fresh install — settings schema stamped at v\(current)")
             return current
@@ -141,14 +145,35 @@ enum SettingsMigrator {
         return version
     }
 
+    /// Marks a genuine first launch as needing `FirstRunSeeder` before migration makes the defaults
+    /// domain non-empty. A launch interrupted during asynchronous startup sees the marker and resumes
+    /// the seed; existing installs without the marker are never treated as fresh.
+    static func prepareFirstRunSeed(
+        defaults: UserDefaults = .standard,
+        domainName: String = Bundle.main.bundleIdentifier ?? ""
+    ) -> Bool {
+        if defaults.bool(forKey: firstRunSeedPendingKey) {
+            return true
+        }
+        guard isFreshInstall(defaults: defaults, domainName: domainName) else {
+            return false
+        }
+        defaults.set(true, forKey: firstRunSeedPendingKey)
+        return true
+    }
+
+    /// Clears the resumable marker after the synchronous first-run seed attempt has completed.
+    static func completeFirstRunSeed(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: firstRunSeedPendingKey)
+    }
+
     /// A genuine first launch has nothing persisted yet. The migrator runs before any store writes
     /// defaults, so an empty domain means fresh; existing keys with no schema version mean a legacy
     /// install to migrate forward. An empty `domainName` (unbundled `swift run`) has no domain to
     /// inspect — treat it as fresh, since there is nothing to migrate.
     ///
-    /// Internal (not just the migrator's own check) because `AppDelegate` reads it BEFORE calling
-    /// `migrate()` — stamping the schema version makes the domain non-empty, so the answer must be
-    /// captured first. `FirstRunSeeder` keys off it to seed a fresh install's enabled providers.
+    /// Internal because `prepareFirstRunSeed()` reads it BEFORE calling `migrate()` — stamping the
+    /// schema version makes the domain non-empty, so first-run work must be marked as pending first.
     static func isFreshInstall(
         defaults: UserDefaults = .standard,
         domainName: String = Bundle.main.bundleIdentifier ?? ""

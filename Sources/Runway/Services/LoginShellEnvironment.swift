@@ -76,6 +76,14 @@ final class LoginShellEnvironment: @unchecked Sendable {
         return capturedSuccessfully
     }
 
+    /// Await the bounded capture without ever running or waiting for its subprocess on the caller's
+    /// executor. Launch-time account assembly uses this from the main actor before reading identity.
+    func ensureCapturedAsync() async -> Bool {
+        await Task.detached(priority: .userInitiated) { [self] in
+            ensureCaptured()
+        }.value
+    }
+
     private func cachedSnapshot() -> [String: String]? {
         stateLock.lock()
         defer { stateLock.unlock() }

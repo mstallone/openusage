@@ -5,6 +5,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
     private var singleInstanceLock: SingleInstanceLock.Token?
     private let updater = UpdaterController()
+    private var launchTask: Task<Void, Never>?
 
     public override init() {
         super.init()
@@ -47,9 +48,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // AppContainer stores), so migrated values are in place when the stores load and a genuine fresh
         // install still presents an empty domain — how the migrator tells a first launch from an upgrade.
         // Nothing is wiped now; settings carry across updates. See `SettingsMigrator`.
-        // The fresh-install answer is captured BEFORE migrating (the schema stamp makes the domain
-        // non-empty) and handed to `AppContainer`, whose `FirstRunSeeder` seeds a minimal provider set.
-        let isFreshInstall = SettingsMigrator.isFreshInstall()
+        // Persist first-run work as pending BEFORE migrating (the schema stamp makes the domain
+        // non-empty), so an interruption during asynchronous startup resumes the idempotent seed.
+        let shouldSeedFirstRun = SettingsMigrator.prepareFirstRunSeed()
         SettingsMigrator.migrate()
         // Let only the `SMAppService` login item drive startup: opt out of AppKit's reopen-on-login
         // so a reboot doesn't also restore us and race the login item in the first place. The lock
@@ -60,9 +61,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // preferredColorScheme, so the override is applied at the AppKit level once at launch;
         // the Theme picker on the Settings screen re-applies it on change.
         AppearanceSetting.applyCurrent()
-        let container = AppContainer(isFreshInstall: isFreshInstall)
-        statusItemController = StatusItemController(container: container, updater: updater)
-        // Starts background update checks (release build only; dormant under preview/`swift run`).
-        updater.start()
+        launchTask = Task { [weak self] in
+            guard let self else { return }
+            let container = await AppContainer(shouldSeedFirstRun: shouldSeedFirstRun)
+            guard !Task.isCancelled else { return }
+            self.statusItemController = StatusItemController(container: container, updater: self.updater)
+            // Starts background update checks (release build only; dormant under preview/`swift run`).
+            self.updater.start()
+        }
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        launchTask?.cancel()
     }
 }

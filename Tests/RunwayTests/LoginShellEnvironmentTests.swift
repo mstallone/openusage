@@ -53,6 +53,17 @@ final class LoginShellEnvironmentTests: XCTestCase {
         XCTAssertNil(env.value(for: "K"))
         XCTAssertEqual(runner.callCount, 0)
     }
+
+    @MainActor
+    func testAsyncCaptureRunsSubprocessOffMainThread() async {
+        let runner = RecordingRunner(stdout: [begin, "PATH=/usr/bin", end].joined(separator: "\0"))
+        let env = LoginShellEnvironment(runner: runner)
+
+        let captured = await env.ensureCapturedAsync()
+
+        XCTAssertTrue(captured)
+        XCTAssertEqual(runner.calledOnMainThread, false)
+    }
 }
 
 /// Returns a fixed stdout and counts how many times it was invoked, so tests can assert the capture
@@ -61,13 +72,18 @@ private final class RecordingRunner: ProcessRunning, @unchecked Sendable {
     let stdout: String
     private let lock = NSLock()
     private var count = 0
+    private var calledOnMain = false
 
     var callCount: Int { lock.lock(); defer { lock.unlock() }; return count }
+    var calledOnMainThread: Bool { lock.lock(); defer { lock.unlock() }; return calledOnMain }
 
     init(stdout: String) { self.stdout = stdout }
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval) throws -> ProcessResult {
-        lock.lock(); count += 1; lock.unlock()
+        lock.lock()
+        count += 1
+        calledOnMain = Thread.isMainThread
+        lock.unlock()
         return ProcessResult(exitCode: 0, stdout: stdout, stderr: "")
     }
 }
