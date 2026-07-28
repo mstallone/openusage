@@ -234,14 +234,12 @@ final class ProviderAccountsStore {
     /// be backed by an `@`-suffixed record. Codex already builds scoped runtimes under each stable
     /// record id and therefore keeps the ordinary exact-id lookup.
     func record(backingCardID cardID: String) -> ProviderAccountRecord? {
-        if cardID == "claude",
-           let defaultHolder = records.first(where: {
+        if cardID == "claude" {
+            return records.first(where: {
                $0.family == "claude"
                    && activeRecordIDs.contains($0.id)
                    && $0.sources.contains(where: \.holdsDefaultSource)
            })
-        {
-            return defaultHolder
         }
         return records.first { $0.id == cardID }
     }

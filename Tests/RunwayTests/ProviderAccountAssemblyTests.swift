@@ -292,6 +292,17 @@ final class ProviderAccountAssemblyTests: XCTestCase {
     func testAmbientClaudeTokenKeepsItsSpendRuntimeBesideAConfigDirAccount() throws {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)
+        store.reconcile(with: [ProviderAccountsStore.AccountObservation(
+            family: "claude",
+            identityKey: "former-default",
+            label: "former@example.com",
+            sources: [ProviderAccountSource(
+                kind: .defaultHome,
+                anchor: "/Users/dev/.claude",
+                holdsDefaultSource: true
+            )]
+        )])
+        store.rename(cardID: "claude", to: "Former Account")
         let observer = DefaultAccountObserver(
             environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"]),
             files: FakeFiles([:]),
@@ -322,6 +333,18 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(
             providers.map(\.provider.displayName),
             ["Claude — Environment Token", "Claude"]
+        )
+        XCTAssertNil(
+            store.record(backingCardID: "claude"),
+            "the identity-less runtime must not inherit the inactive default account"
+        )
+        XCTAssertNil(store.resolvedDisplayName(cardID: "claude"))
+        XCTAssertNil(store.resolvedDisplayNamesByCardID["claude"])
+        store.rename(cardID: "claude", to: "Ambient")
+        XCTAssertEqual(
+            store.records.first { $0.identityKey == "former-default" }?.customLabel,
+            "Former Account",
+            "the identity-less runtime cannot rename an inactive account"
         )
         XCTAssertEqual(providers.map(\.authStore.scope), [.standard, .configDir(
             path: "/Users/dev/.claude-work",
