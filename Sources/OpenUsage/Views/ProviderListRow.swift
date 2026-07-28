@@ -14,7 +14,7 @@ struct ProviderListRow<Handle: View>: View {
     var onToggle: ((Bool) -> Void) = { _ in }
     var onOpen: () -> Void = {}
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
     /// Read for the live card name, so a rename re-titles the Customize row without a relaunch.
     @Environment(AppContainer.self) private var container
 
