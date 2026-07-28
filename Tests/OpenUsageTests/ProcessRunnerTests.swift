@@ -81,6 +81,7 @@ final class ProcessRunnerTests: XCTestCase {
         if ($child == 0) {
             my $session = POSIX::setsid();
             die "setsid failed" unless defined $session && $session == $$;
+            $SIG{TERM} = "IGNORE";
             open(my $file, ">", $ENV{"OPENUSAGE_DESCENDANT_PID_PATH"}) or die "open failed";
             print $file "$$\\n";
             close($file);

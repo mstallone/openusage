@@ -79,12 +79,12 @@ struct SystemProcessRunner: ProcessRunning {
             // Preserve the previous process-tree cleanup for descendants that explicitly left the
             // root group with setsid()/setpgid(). The root is still alive here, so its child links
             // are available; collect them before sending any signal that could reparent them.
-            let descendantPIDs = descendantPIDs(of: process.processIdentifier)
-            signalProcesses(descendantPIDs, signal: SIGTERM)
+            let descendants = descendantProcesses(of: process.processIdentifier)
+            signalProcesses(descendants, signal: SIGTERM)
             terminateProcessGroup(processGroupID, signal: SIGTERM)
             process.terminate()
             _ = exited.wait(timeout: .now() + 0.1)
-            signalProcesses(descendantPIDs, signal: SIGKILL)
+            signalProcesses(descendants, signal: SIGKILL)
             terminateProcessGroup(processGroupID, signal: SIGKILL)
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
@@ -113,9 +113,10 @@ struct SystemProcessRunner: ProcessRunning {
         kill(-processGroupID, signal)
     }
 
-    private func descendantPIDs(of rootPID: pid_t) -> [pid_t] {
-        let children = childPIDs(of: rootPID)
-        return children + children.flatMap(descendantPIDs(of:))
+    private func descendantProcesses(of rootPID: pid_t) -> [ProcessIdentity] {
+        let childIDs = childPIDs(of: rootPID)
+        let children = childIDs.compactMap(processIdentity(for:))
+        return children + childIDs.flatMap(descendantProcesses(of:))
     }
 
     private func childPIDs(of parentPID: pid_t) -> [pid_t] {
@@ -136,9 +137,26 @@ struct SystemProcessRunner: ProcessRunning {
         }
     }
 
-    private func signalProcesses(_ processIDs: [pid_t], signal: Int32) {
-        for processID in processIDs.reversed() {
-            kill(processID, signal)
+    private func processIdentity(for processID: pid_t) -> ProcessIdentity? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(processID, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_pid == UInt32(processID)
+        else {
+            return nil
+        }
+        return ProcessIdentity(
+            processID: processID,
+            startedAtSeconds: info.pbi_start_tvsec,
+            startedAtMicroseconds: info.pbi_start_tvusec
+        )
+    }
+
+    private func signalProcesses(_ processes: [ProcessIdentity], signal: Int32) {
+        // A descendant can exit during the TERM grace period and macOS can reuse its PID. Match the
+        // immutable start timestamp before signaling so the delayed KILL cannot target a new process.
+        for process in processes.reversed() where processIdentity(for: process.processID) == process {
+            kill(process.processID, signal)
         }
     }
 
@@ -148,6 +166,12 @@ struct SystemProcessRunner: ProcessRunning {
         }
         group.wait()
     }
+}
+
+private struct ProcessIdentity: Equatable {
+    let processID: pid_t
+    let startedAtSeconds: UInt64
+    let startedAtMicroseconds: UInt64
 }
 
 enum ProcessRunnerError: Error, LocalizedError, Equatable {
