@@ -89,7 +89,8 @@ struct TotalSpendLegendRow: View {
         Text(title)
             .font(.system(size: fontSize))
             .foregroundStyle(.primary)
-            .lineLimit(1)
+            .lineLimit(isHovered ? nil : 1)
+            .fixedSize(horizontal: false, vertical: isHovered)
     }
 
     private var valueLabel: some View {
@@ -118,16 +119,17 @@ struct LegendRowWidthAllocation {
     ) -> Self {
         guard availableWidth > 0, valueWidth > 0 else { return .none }
 
-        let restingTitleWidth = max(0, availableWidth - valueWidth - spacing)
+        let displayedValueWidth = min(valueWidth, availableWidth)
+        let restingTitleWidth = max(0, availableWidth - displayedValueWidth - spacing)
         let reclaimedWidth = min(
-            valueWidth + spacing,
+            displayedValueWidth + spacing,
             max(0, titleWidth - restingTitleWidth)
         )
-        let hiddenValueWidth = min(valueWidth, max(0, reclaimedWidth - spacing))
+        let hiddenValueWidth = min(displayedValueWidth, max(0, reclaimedWidth - spacing))
 
         return Self(
             reclaimedWidth: reclaimedWidth,
-            hiddenValueFraction: hiddenValueWidth / valueWidth
+            hiddenValueFraction: hiddenValueWidth / displayedValueWidth
         )
     }
 }
@@ -149,8 +151,13 @@ private struct LegendRowTextLayout: Layout {
         cache: inout ()
     ) -> CGSize {
         let titleIdeal = subviews[0].sizeThatFits(.unspecified)
-        let valueSize = subviews[1].sizeThatFits(.unspecified)
-        let width = proposal.width ?? titleIdeal.width + spacing + valueSize.width
+        let valueIdeal = subviews[1].sizeThatFits(.unspecified)
+        let width = proposal.width ?? titleIdeal.width + spacing + valueIdeal.width
+        let valueSize = constrainedValueSize(
+            subviews[1],
+            maximumWidth: width,
+            height: proposal.height
+        )
         let titleWidth = max(0, width - reservedWidth(for: valueSize.width))
         let titleSize = subviews[0].sizeThatFits(
             ProposedViewSize(width: titleWidth, height: proposal.height)
@@ -164,7 +171,11 @@ private struct LegendRowTextLayout: Layout {
         subviews: Subviews,
         cache: inout ()
     ) {
-        let valueSize = subviews[1].sizeThatFits(.unspecified)
+        let valueSize = constrainedValueSize(
+            subviews[1],
+            maximumWidth: bounds.width,
+            height: bounds.height
+        )
         let titleWidth = max(0, bounds.width - reservedWidth(for: valueSize.width))
         subviews[0].place(
             at: CGPoint(x: bounds.minX, y: bounds.midY),
@@ -174,7 +185,18 @@ private struct LegendRowTextLayout: Layout {
         subviews[1].place(
             at: CGPoint(x: bounds.maxX, y: bounds.midY),
             anchor: .trailing,
-            proposal: .unspecified
+            proposal: ProposedViewSize(width: valueSize.width, height: bounds.height)
+        )
+    }
+
+    private func constrainedValueSize(
+        _ value: LayoutSubview,
+        maximumWidth: CGFloat,
+        height: CGFloat?
+    ) -> CGSize {
+        let ideal = value.sizeThatFits(.unspecified)
+        return value.sizeThatFits(
+            ProposedViewSize(width: min(ideal.width, maximumWidth), height: height)
         )
     }
 

@@ -49,4 +49,16 @@ final class TotalSpendLegendRowTests: XCTestCase {
         XCTAssertEqual(allocation.reclaimedWidth, 48)
         XCTAssertEqual(allocation.hiddenValueFraction, 1)
     }
+
+    func testValueWiderThanRowUsesTheDisplayedWidthForAllocation() {
+        let allocation = LegendRowWidthAllocation.resolve(
+            availableWidth: 100,
+            titleWidth: 50,
+            valueWidth: 300,
+            spacing: 8
+        )
+
+        XCTAssertEqual(allocation.reclaimedWidth, 50)
+        XCTAssertEqual(allocation.hiddenValueFraction, 0.42)
+    }
 }
