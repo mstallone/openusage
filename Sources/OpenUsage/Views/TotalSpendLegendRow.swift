@@ -89,8 +89,12 @@ struct TotalSpendLegendRow: View {
         Text(title)
             .font(.system(size: fontSize))
             .foregroundStyle(.primary)
-            .lineLimit(isHovered ? nil : 1)
-            .fixedSize(horizontal: false, vertical: isHovered)
+            .lineLimit(titleRequiresWrapping ? nil : 1)
+            .fixedSize(horizontal: false, vertical: titleRequiresWrapping)
+    }
+
+    private var titleRequiresWrapping: Bool {
+        isHovered && textAreaWidth > 0 && titleIdealWidth > textAreaWidth
     }
 
     private var valueLabel: some View {
