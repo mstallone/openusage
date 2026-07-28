@@ -68,6 +68,9 @@ struct TotalSpendLegendRow: View {
         // The two states already have their final geometry. Crossfading them avoids animating a Text
         // proposal through many truncation points, which made long account labels visibly stutter.
         .animation(.easeOut(duration: 0.12), value: revealsHoverLayout)
+        // Clip at the slot assigned by the parent layout. The marquee's fixed-size Text is wider than
+        // that slot by design, so clipping only inside the moving label can inherit its ideal width.
+        .clipped()
     }
 
     private var allocation: LegendRowWidthAllocation {
