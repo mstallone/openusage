@@ -50,10 +50,12 @@ card, with its own limits, plan, and spend tiles read from that home. A custom d
 account as your main login doesn't become a second card — its session logs simply count into the main
 card's spend tiles.
 
-Extra cards are named from the account ("Claude — Acme Corp"); right-click a card and choose **Rename…**
+With one discovered account, the default name is simply "Claude." With multiple accounts, every card
+includes its account email (for example, "Claude — dev@example.com"), including the first/default card.
+An organization name appears after the email when available. Right-click a card and choose **Rename…**
 (or use the Name field in Customize) to call it whatever you like. A card only shows while its login is
-still found on this Mac — log it out or delete the dir and the card disappears, keeping its
-customization and history for if it returns. Turn a card off like any provider in Customize.
+still found on this Mac — log it out or delete the dir and the card disappears, keeping its customization
+and history for if it returns. Turn a card off like any provider in Customize.
 
 In the [CLI](../cli.md) and [local API](../local-http-api.md), extra cards appear under ids like
 `claude@ab12cd34`; requesting `claude` returns every Claude card.

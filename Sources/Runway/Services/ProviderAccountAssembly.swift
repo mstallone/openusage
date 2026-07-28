@@ -7,9 +7,9 @@ struct ClaudeAccountCard: Equatable, Sendable {
     /// The account's stable record id (`claude@ab12cd34`) — the card id everywhere: layout, cache,
     /// CLI/API matching.
     var id: String
-    /// The DERIVED card name (`ProviderAccountRecord.derivedDisplayName`) baked into the launch
-    /// `Provider`. Never a rename: renames live only in the account registry and are resolved at
-    /// render time, so a baked name can never be a stale copy of one.
+    /// The derived card name from `ProviderAccountsStore`, baked into the launch `Provider`. Never
+    /// a rename: renames live only in the account registry and are resolved at render time, so a
+    /// baked name can never be a stale copy of one.
     var displayName: String
     /// The config dir the card's credentials and spend logs are pinned to.
     var configDirPath: String
@@ -46,6 +46,9 @@ struct ProviderAccountAssembly {
     let identityKeysByCard: [String: String]
     /// Extra Claude account cards found on this computer this launch, in stable id order.
     var claudeCards: [ClaudeAccountCard] = []
+    /// The default Claude card's derived title. It stays "Claude" for one discovered account and
+    /// includes that account's label when Claude has active siblings.
+    var claudeDefaultDisplayName: String?
     /// Same-account custom config dirs discovered for the DEFAULT card's login: extra spend-log
     /// roots for the default scanner, never extra credentials.
     var defaultClaudeExtraLogRoots: [URL] = []
@@ -310,6 +313,12 @@ struct ProviderAccountAssembly {
         }
 
         let records = accountsStore.reconcile(with: observations)
+        let claudeDefaultDisplayName: String? = identityKeys["claude"].flatMap { identityKey in
+            guard accountsStore.record(backingCardID: "claude")?.identityKey == identityKey else {
+                return nil
+            }
+            return accountsStore.derivedDisplayName(cardID: "claude")
+        }
 
         // The extra-card build plan: one card per distinct account found this launch, under its
         // reconciled record id.
@@ -329,7 +338,7 @@ struct ProviderAccountAssembly {
             guard let primary = account.dirs.first else { continue }
             claudeCards.append(ClaudeAccountCard(
                 id: record.id,
-                displayName: record.derivedDisplayName,
+                displayName: accountsStore.derivedDisplayName(cardID: record.id) ?? record.family.capitalized,
                 configDirPath: primary.anchorPath,
                 keychainLiteral: primary.keychainLiteral,
                 extraLogRoots: account.dirs.dropFirst().map { URL(fileURLWithPath: $0.anchorPath) }
@@ -354,7 +363,7 @@ struct ProviderAccountAssembly {
             }
             codexCards.append(CodexAccountCard(
                 id: record.id,
-                displayName: record.derivedDisplayName,
+                displayName: accountsStore.derivedDisplayName(cardID: record.id) ?? record.family.capitalized,
                 credentialHomePath: account.credentialHomePath,
                 logRoots: account.logRoots,
                 receivesPiUsage: record.sources.contains(where: \.holdsDefaultSource)
@@ -370,6 +379,7 @@ struct ProviderAccountAssembly {
         return ProviderAccountAssembly(
             identityKeysByCard: identityKeys,
             claudeCards: claudeCards,
+            claudeDefaultDisplayName: claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
             codexCards: codexCards,
             hasResolvedCodexDefault: hasResolvedCodexDefault,

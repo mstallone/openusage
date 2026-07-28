@@ -77,10 +77,11 @@ tests land in-slice (repo policy). Estimated source LOC excludes tests.
   support-trail log lines. Port the discovery internals; **omit** fold/suppression plumbing — a
   candidate naming a known account just attaches as another source/log root on that record, so
   duplicate cards are structurally impossible.
-- New account → new record → new card named by account label ("Claude — Sunstory"), falling back
-  to the short-hash id; user rename in the card's context menu and in Customize. Cards seed
-  enabled; layout seeded from `DefaultLayout.translatedForInstances` (pins never seeded). A card
-  renders only while one of its sources is still found on this computer.
+- New account → new record → new card. One discovered account keeps the stock provider name; with
+  multiple accounts, every card uses its full account label (including email), falling back to the
+  short-hash id. User rename lives in the card's context menu and in Customize. Cards seed enabled;
+  layout is seeded from `DefaultLayout.translatedForInstances` (pins never seeded). A card renders
+  only while one of its sources is still found on this computer.
 - Scoped `ClaudeAuthStore` (per-config-dir keychain names), per-account spend from each home's logs.
 - iCloud identity routing: `PeerHistoryRemapper`, account-identity matching, v1-peer histories to a
   family bucket rendered as remote-only Total Spend slices named by account code (`claude@ab12cd34`).
@@ -95,7 +96,7 @@ tests land in-slice (repo policy). Estimated source LOC excludes tests.
   accessibility, notifications, CLI/API) showed the name baked into the `Provider` at launch, so a
   mid-session rename drifted between surfaces.
 - The rule: `Provider.displayName` only ever carries the *derived* default; a rename lives solely
-  in the account registry (`ProviderAccountRecord.resolvedDisplayName`) and is resolved at render
+  in the account registry (`ProviderAccountsStore.resolvedDisplayName`) and is resolved at render
   time. Renames are never baked at launch and never persist into the snapshot cache or iCloud.
 - Total Spend slices carry a caller-resolved title (so the live legend and the
   outside-the-environment share render agree); menu bar VoiceOver text, quota notifications, and

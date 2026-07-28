@@ -34,6 +34,10 @@ A discovered home must contain a usable OAuth login that names its account throu
 
 Runway never treats a directory name as identity. Every card is pinned to one credential home, and refreshes rotate back into that home's original file or keyring item. That keeps a token, session log, cached snapshot, or reset claim from crossing between accounts when homes are added, removed, or swapped.
 
+With one discovered account, the default name is simply "Codex." With multiple accounts, every card
+includes its account email, including the first/default card. An organization name appears after the
+email when available.
+
 Additional cards use stable ids such as `codex@ab12cd34`. You can rename any Codex card from its context menu or Customize. CLI and local API queries for `codex` return every active Codex account card; querying the full card id selects one.
 
 Older service-level keychain credentials have no trustworthy home address, so they continue through the legacy single Codex card instead of being assigned to an extra account.

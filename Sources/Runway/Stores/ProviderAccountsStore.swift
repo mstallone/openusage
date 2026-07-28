@@ -80,29 +80,19 @@ struct ProviderAccountRecord: Codable, Equatable, Sendable {
     /// Set by a future "Remove Account…". A tombstoned account is never resurrected by rescans.
     var removedTombstone: Bool = false
 
-    /// The name a card carries without a rename: the stock family name for the bare card, a
-    /// "Claude — <org or email>" derived from the account label for an extra card, or the record id
-    /// itself when the account has no label (owner decision 2: short-hash fallback, one rename away
-    /// from good). Never contains `customLabel` — this is what gets baked into the launch
-    /// `Provider`, and baking a rename there is how stale-name bugs are born.
-    var derivedDisplayName: String {
-        guard ProviderAccountID.isAccountCard(id) else { return family.capitalized }
+    /// The name a card carries without a rename. One active account keeps the stock family name;
+    /// when discovery finds siblings, every account — including the bare-id/default card — carries
+    /// its full account label so none is the ambiguous odd one out. A missing label falls back to
+    /// the record id (owner decision 2: short-hash fallback, one rename away from good).
+    ///
+    /// Never contains `customLabel` — this is what gets baked into the launch `Provider`, and baking
+    /// a rename there is how stale-name bugs are born.
+    func derivedDisplayName(disambiguating: Bool) -> String {
+        guard disambiguating else { return family.capitalized }
         guard let label = label?.nilIfEmpty else { return id }
-        // Labels are our own "email (Org Name)" format — prefer the org for a short card title.
-        if label.hasSuffix(")"), let open = label.lastIndex(of: "(") {
-            let org = label[label.index(after: open)..<label.index(before: label.endIndex)]
-                .trimmingCharacters(in: .whitespaces)
-            if !org.isEmpty { return "\(family.capitalized) — \(org)" }
-        }
+        // Labels are our own "email (Org Name)" format. Keep the whole value: the email is the
+        // useful account discriminator, while the org still distinguishes same-email logins.
         return "\(family.capitalized) — \(label)"
-    }
-
-    /// THE name resolver — the single place a rename becomes a card title. Everything that shows a
-    /// card name to a human resolves through this at render time (directly or via
-    /// `AppContainer.displayName(for:)`); `Provider.displayName` only ever carries the derived
-    /// default.
-    var resolvedDisplayName: String {
-        customLabel?.nilIfEmpty ?? derivedDisplayName
     }
 }
 
@@ -117,6 +107,10 @@ final class ProviderAccountsStore {
 
     private let defaults: UserDefaults
     private(set) var records: [ProviderAccountRecord]
+    /// Record ids observed during this launch's discovery pass. This is deliberately not persisted:
+    /// an old account record remains available for customization/history, but must not make a lone
+    /// currently discovered account use a disambiguated default name.
+    @ObservationIgnored private var activeRecordIDs: Set<String> = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -193,6 +187,17 @@ final class ProviderAccountsStore {
             }
         }
 
+        activeRecordIDs = Set(updated.compactMap { record in
+            guard !record.removedTombstone,
+                  observations.contains(where: {
+                      $0.family == record.family && $0.identityKey == record.identityKey
+                  })
+            else {
+                return nil
+            }
+            return record.id
+        })
+
         if changed {
             records = updated
             persist()
@@ -200,22 +205,58 @@ final class ProviderAccountsStore {
         return records
     }
 
+    /// The derived default for a card id. The family name stays bare when only one account of that
+    /// family was discovered this launch; two or more active siblings all include their labels.
+    func derivedDisplayName(cardID: String) -> String? {
+        guard let record = record(backingCardID: cardID) else { return nil }
+        let activeSiblingCount = records.lazy.filter {
+            $0.family == record.family && self.activeRecordIDs.contains($0.id)
+        }.count
+        return record.derivedDisplayName(
+            disambiguating: activeRecordIDs.contains(record.id) && activeSiblingCount > 1
+        )
+    }
+
     /// The resolved card title for a card id, or `nil` when the card has no account record (a
-    /// non-account provider keeps its static `Provider.displayName`). The lookup half of the one
-    /// name resolver — see `ProviderAccountRecord.resolvedDisplayName`.
+    /// non-account provider keeps its static `Provider.displayName`). This is the one place a rename
+    /// becomes a card title; the baked provider name always remains the derived default.
     func resolvedDisplayName(cardID: String) -> String? {
-        records.first { $0.id == cardID }?.resolvedDisplayName
+        guard let record = record(backingCardID: cardID) else { return nil }
+        return record.customLabel?.nilIfEmpty ?? derivedDisplayName(cardID: cardID)
+    }
+
+    /// The account record supplying a runtime card this launch. Claude still uses one legacy bare-id
+    /// runtime for whichever login occupies the default home, so after a login swap that runtime can
+    /// be backed by an `@`-suffixed record. Codex already builds scoped runtimes under each stable
+    /// record id and therefore keeps the ordinary exact-id lookup.
+    func record(backingCardID cardID: String) -> ProviderAccountRecord? {
+        if cardID == "claude",
+           let defaultHolder = records.first(where: {
+               $0.family == "claude"
+                   && activeRecordIDs.contains($0.id)
+                   && $0.sources.contains(where: \.holdsDefaultSource)
+           })
+        {
+            return defaultHolder
+        }
+        return records.first { $0.id == cardID }
     }
 
     /// Card id → resolved title for every record — the map the CLI/API boundary applies to its
     /// snapshots (`LocalUsageAPI.State.resolvingDisplayNames`).
     var resolvedDisplayNamesByCardID: [String: String] {
-        Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0.resolvedDisplayName) })
+        Dictionary(uniqueKeysWithValues: records.compactMap { record in
+            resolvedDisplayName(cardID: record.id).map { (record.id, $0) }
+        })
     }
 
     /// Stores a user rename for a card; `nil` or blank clears it back to the derived name.
     func rename(cardID: String, to name: String?) {
-        guard let index = records.firstIndex(where: { $0.id == cardID }) else { return }
+        guard let recordID = record(backingCardID: cardID)?.id,
+              let index = records.firstIndex(where: { $0.id == recordID })
+        else {
+            return
+        }
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         guard records[index].customLabel != trimmed else { return }
         records[index].customLabel = trimmed

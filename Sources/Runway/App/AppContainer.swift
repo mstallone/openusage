@@ -83,6 +83,7 @@ final class AppContainer {
 
         let providers = ProviderCatalog.make(
             claudeCards: accountAssembly.claudeCards,
+            claudeDefaultDisplayName: accountAssembly.claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
             codexCards: accountAssembly.codexCards,
             hasResolvedCodexDefault: accountAssembly.hasResolvedCodexDefault,
@@ -216,7 +217,7 @@ final class AppContainer {
     }
 
     /// The name a card renders under right now — the app-side face of the one resolver
-    /// (`ProviderAccountRecord.resolvedDisplayName`). Live: a rename in the account registry
+    /// (`ProviderAccountsStore.resolvedDisplayName`). Live: a rename in the account registry
     /// re-titles the card everywhere without a relaunch. Non-account providers (no record) keep
     /// their static display name; `Provider.displayName` itself only ever carries the derived
     /// default, so the fallback can never be a stale rename.
@@ -227,7 +228,7 @@ final class AppContainer {
     /// Whether the card has an account record a rename can attach to (accounts-model families only,
     /// and only once the account's identity has been observed at least once).
     func canRename(_ providerID: String) -> Bool {
-        accounts.records.contains { $0.id == providerID }
+        accounts.record(backingCardID: providerID) != nil
     }
 
     /// Re-runs first-launch credential detection on demand — the enablement half of the Customize

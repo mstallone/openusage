@@ -54,13 +54,19 @@ public struct UsageReader {
                 _ = LoginShellEnvironment.shared.ensureCaptured()
             }.value
         }
+        let accountsStore = ProviderAccountsStore(defaults: defaults)
         let accountAssembly = providersOverride == nil
-            ? ProviderAccountAssembly.make(defaults: defaults, waitsForLoginShell: false)
+            ? ProviderAccountAssembly.make(
+                defaults: defaults,
+                accountsStore: accountsStore,
+                waitsForLoginShell: false
+            )
             : ProviderAccountAssembly(identityKeysByCard: [:])
         let codexIdentityWarmTask = accountAssembly.startCodexIdentityWarmTask()
         let providers = providersOverride ?? ProviderCatalog.make(
             defaults: defaults,
             claudeCards: accountAssembly.claudeCards,
+            claudeDefaultDisplayName: accountAssembly.claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
             codexCards: accountAssembly.codexCards,
             hasResolvedCodexDefault: accountAssembly.hasResolvedCodexDefault,
@@ -138,7 +144,7 @@ public struct UsageReader {
         // CLI output is human-read: resolve card titles against the persisted account registry so
         // renames show, matching the app's UI and HTTP API. Injected-provider tests use their own
         // defaults suite, so this is a no-op there.
-        let accountTitles = ProviderAccountsStore(defaults: defaults).resolvedDisplayNamesByCardID
+        let accountTitles = accountsStore.resolvedDisplayNamesByCardID
         let state = LocalUsageAPI.State(
             enabledOrderedIDs: enabledOrderedIDs,
             knownIDs: knownIDs,

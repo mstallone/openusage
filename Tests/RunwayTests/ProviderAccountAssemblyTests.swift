@@ -125,7 +125,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         let card = try XCTUnwrap(assembly.claudeCards.first)
         XCTAssertEqual(assembly.claudeCards.count, 1)
         XCTAssertTrue(card.id.hasPrefix("claude@"), "a config-dir account never claims the bare id")
-        XCTAssertEqual(card.displayName, "Claude — Sunstory")
+        XCTAssertEqual(assembly.claudeDefaultDisplayName, "Claude — dev@example.com")
+        XCTAssertEqual(card.displayName, "Claude — work@example.com (Sunstory)")
         XCTAssertEqual(card.configDirPath, "/Users/dev/.claude-work")
         XCTAssertEqual(assembly.identityKeysByCard["claude"], "acct-1")
         XCTAssertEqual(assembly.identityKeysByCard[card.id], "acct-2")
@@ -135,6 +136,62 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(record.sources.map(\.kind), [.configDir])
         XCTAssertEqual(record.label, "work@example.com (Sunstory)")
         XCTAssertTrue(assembly.defaultClaudeExtraLogRoots.isEmpty)
+    }
+
+    func testClaudeDefaultSwapResolvesAndRenamesTheAccountBackingTheBareRuntime() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let firstObserver = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles([
+                "/Users/dev/.claude.json": #"{"oauthAccount": {"accountUuid": "ACCT-1", "emailAddress": "first@example.com"}}"#,
+            ]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        _ = ProviderAccountAssembly.make(
+            observer: firstObserver,
+            accountsStore: store,
+            claudeDiscovery: makeDiscovery(files: [:], subdirectories: [])
+        )
+
+        let secondObserver = DefaultAccountObserver(
+            environment: FakeEnvironment([:]),
+            files: FakeFiles([
+                "/Users/dev/.claude.json": #"{"oauthAccount": {"accountUuid": "ACCT-2", "emailAddress": "second@example.com"}}"#,
+            ]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let movedFirstAccount = makeDiscovery(
+            files: [
+                "/Users/dev/.claude-first/.claude.json": #"{"oauthAccount": {"accountUuid": "ACCT-1", "emailAddress": "first@example.com"}}"#,
+                "/Users/dev/.claude-first/.credentials.json": #"{"claudeAiOauth": {"accessToken": "at-1"}}"#,
+            ],
+            subdirectories: ["/Users/dev/.claude-first"]
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: secondObserver,
+            accountsStore: store,
+            claudeDiscovery: movedFirstAccount
+        )
+
+        let currentDefault = try XCTUnwrap(store.defaultBadgeHolder(family: "claude"))
+        XCTAssertNotEqual(currentDefault.id, "claude", "the new account keeps its stable hashed record id")
+        XCTAssertEqual(currentDefault.identityKey, "acct-2")
+        XCTAssertEqual(assembly.identityKeysByCard["claude"], "acct-2")
+        XCTAssertEqual(assembly.claudeDefaultDisplayName, "Claude — second@example.com")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "Claude — second@example.com")
+        XCTAssertEqual(store.resolvedDisplayNamesByCardID["claude"], "Claude — second@example.com")
+        XCTAssertTrue(assembly.claudeCards.isEmpty, "the moved bare-id account remains parked until Claude swap support")
+
+        store.rename(cardID: "claude", to: "Current Default")
+        XCTAssertEqual(
+            store.records.first { $0.identityKey == "acct-2" }?.customLabel,
+            "Current Default",
+            "Rename follows the runtime to the account currently supplying its usage"
+        )
+        XCTAssertNil(store.records.first { $0.identityKey == "acct-1" }?.customLabel)
     }
 
     func testASameAccountConfigDirFoldsOntoTheDefaultCardAsALogRoot() throws {
@@ -248,7 +305,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             observer: observer, accountsStore: store, claudeDiscovery: discovery
         )
         let cardID = try XCTUnwrap(first.claudeCards.first?.id)
-        XCTAssertEqual(first.claudeCards.first?.displayName, cardID, "no label → the short-hash id fallback")
+        XCTAssertEqual(first.claudeCards.first?.displayName, "Claude", "one account keeps the stock family name")
         store.rename(cardID: cardID, to: "Work Max")
 
         let reloadedStore = ProviderAccountsStore(defaults: defaults)
@@ -259,7 +316,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )
         // The baked card name stays the DERIVED default — a rename lives only in the registry and
         // is resolved at render time, so a baked name can never be a stale copy of it.
-        XCTAssertEqual(second.claudeCards.first?.displayName, cardID)
+        XCTAssertEqual(second.claudeCards.first?.displayName, "Claude")
         XCTAssertEqual(reloadedStore.resolvedDisplayName(cardID: cardID), "Work Max")
     }
 
@@ -295,6 +352,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(defaultCard.credentialHomePath, "/Users/dev/.codex")
         XCTAssertEqual(defaultCard.logRoots.map(\.path), ["/Users/dev/.codex"])
         XCTAssertTrue(defaultCard.receivesPiUsage)
+        XCTAssertEqual(defaultCard.displayName, "Codex — personal@example.com")
         XCTAssertEqual(workCard.displayName, "Codex — work@example.com")
         XCTAssertEqual(workCard.credentialHomePath, "/Users/dev/.codex-work")
         XCTAssertFalse(workCard.receivesPiUsage)
@@ -333,6 +391,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         let card = try XCTUnwrap(assembly.codexCards.first)
         XCTAssertEqual(assembly.codexCards.count, 1)
         XCTAssertEqual(card.id, "codex")
+        XCTAssertEqual(card.displayName, "Codex")
         XCTAssertEqual(card.credentialHomePath, "/Users/dev/.codex")
         XCTAssertEqual(
             card.logRoots.map(\.path),

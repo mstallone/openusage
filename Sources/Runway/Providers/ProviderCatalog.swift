@@ -10,6 +10,7 @@ enum ProviderCatalog {
     static func make(
         defaults: UserDefaults = .standard,
         claudeCards: [ClaudeAccountCard] = [],
+        claudeDefaultDisplayName: String? = nil,
         defaultClaudeExtraLogRoots: [URL] = [],
         codexCards: [CodexAccountCard] = [],
         hasResolvedCodexDefault: Bool = false,
@@ -20,10 +21,11 @@ enum ProviderCatalog {
         // their family's default card.
         //
         // Every baked `Provider.displayName` here is the DERIVED default — renames live only in the
-        // account registry and are resolved at render time (`ProviderAccountRecord.resolvedDisplayName`),
+        // account registry and are resolved at render time (`ProviderAccountsStore.resolvedDisplayName`),
         // so a baked name can never be a stale copy of one.
         var runtimes: [ProviderRuntime] = []
         runtimes.append(ClaudeProvider(
+            provider: ClaudeProvider.makeProvider(displayName: claudeDefaultDisplayName ?? "Claude"),
             // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
             // belongs to one of them — fetching that account's usage onto the default card. Desktop
             // returns as its own properly-pinned source kind in Phase 3.

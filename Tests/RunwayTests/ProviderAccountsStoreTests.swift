@@ -126,12 +126,12 @@ final class ProviderAccountsStoreTests: XCTestCase {
 
         store.rename(cardID: "claude", to: "  Work  ")
         XCTAssertEqual(store.records[0].customLabel, "Work", "renames are trimmed")
-        XCTAssertEqual(store.records[0].resolvedDisplayName, "Work", "the resolver surfaces the rename")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "Work", "the resolver surfaces the rename")
         XCTAssertEqual(ProviderAccountsStore(defaults: defaults).records[0].customLabel, "Work", "renames persist")
 
         store.rename(cardID: "claude", to: "   ")
         XCTAssertNil(store.records[0].customLabel, "a blank rename clears back to the derived name")
-        XCTAssertEqual(store.records[0].resolvedDisplayName, "Claude", "the bare card derives the stock family name")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "Claude", "one account derives the stock family name")
 
         store.rename(cardID: "missing", to: "X")
         XCTAssertEqual(store.records.count, 1, "renaming an unknown card is a no-op")
@@ -148,6 +148,61 @@ final class ProviderAccountsStoreTests: XCTestCase {
 
         XCTAssertEqual(records[0].label, "new")
         XCTAssertEqual(records[0].customLabel, "Work", "rescans update the label but never the rename")
+    }
+
+    func testEveryAccountIncludesItsLabelOnlyWhenMultipleAreActive() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: "acct-a",
+                label: "a@example.com"
+            ),
+        ])
+
+        XCTAssertEqual(store.derivedDisplayName(cardID: "claude"), "Claude")
+
+        let records = store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: "acct-a",
+                label: "a@example.com"
+            ),
+            ProviderAccountsStore.AccountObservation(
+                family: "claude",
+                identityKey: "acct-b",
+                label: "b@example.com (Acme)",
+                sources: [
+                    ProviderAccountSource(
+                        kind: .configDir,
+                        anchor: "/Users/dev/.claude-work",
+                        holdsDefaultSource: false
+                    ),
+                ]
+            ),
+        ])
+        let secondID = try XCTUnwrap(records.first { $0.identityKey == "acct-b" }?.id)
+
+        XCTAssertEqual(store.derivedDisplayName(cardID: "claude"), "Claude — a@example.com")
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: secondID),
+            "Claude — b@example.com (Acme)",
+            "the email remains in the default name even when an organization is known"
+        )
+    }
+
+    func testOldInactiveSiblingDoesNotDisambiguateTheOnlyAccountFoundThisLaunch() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(family: "codex", identityKey: "personal", label: "personal@example.com"),
+            defaultHomeObservation(family: "codex", identityKey: "work", label: "work@example.com"),
+        ])
+
+        store.reconcile(with: [
+            defaultHomeObservation(family: "codex", identityKey: "personal", label: "personal@example.com"),
+        ])
+
+        XCTAssertEqual(store.derivedDisplayName(cardID: "codex"), "Codex")
     }
 
     func testFamilyHelperSplitsCardIDs() {
