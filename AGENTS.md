@@ -54,7 +54,6 @@ Every PR description must follow this structure so reviewers can skim it quickly
 - **What this changes** — bullet points describing what the PR actually changes.
 - **Heads-up** (optional) — noteworthy things a reviewer or future maintainer should consider (risks, follow-ups, trade-offs).
 - **Tests** (optional) — how the change was verified.
-- **Screenshots** (optional in general, but **required for any PR that makes a visual change**) — images of the affected UI after the change.
 
 ## Documentation
 
