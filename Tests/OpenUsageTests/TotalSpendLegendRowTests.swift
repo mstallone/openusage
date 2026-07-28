@@ -58,7 +58,11 @@ final class TotalSpendLegendRowTests: XCTestCase {
             spacing: 8
         )
 
-        XCTAssertEqual(allocation.reclaimedWidth, 50)
-        XCTAssertEqual(allocation.hiddenValueFraction, 0.42)
+        XCTAssertEqual(allocation.reclaimedWidth, 58)
+        XCTAssertEqual(allocation.hiddenValueFraction, 0.5)
+
+        let displayedValueWidth: CGFloat = 100
+        let reservedWidth = max(0, displayedValueWidth + 8 - allocation.reclaimedWidth)
+        XCTAssertEqual(100 - reservedWidth, 50, "the title receives its full requested width")
     }
 }

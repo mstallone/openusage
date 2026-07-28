@@ -124,7 +124,9 @@ struct LegendRowWidthAllocation {
         guard availableWidth > 0, valueWidth > 0 else { return .none }
 
         let displayedValueWidth = min(valueWidth, availableWidth)
-        let restingTitleWidth = max(0, availableWidth - displayedValueWidth - spacing)
+        // Keep the signed resting width here. When value + spacing already exceeds the row, its
+        // negative remainder is the overflow that must be reclaimed before the title gains width.
+        let restingTitleWidth = availableWidth - displayedValueWidth - spacing
         let reclaimedWidth = min(
             displayedValueWidth + spacing,
             max(0, titleWidth - restingTitleWidth)
