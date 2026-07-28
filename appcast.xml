@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>OpenUsage</title>
+        <item>
+            <title>0.8.0</title>
+            <pubDate>Tue, 28 Jul 2026 03:59:57 +0000</pubDate>
+            <sparkle:version>506</sparkle:version>
+            <sparkle:shortVersionString>0.8.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/mstallone/openusage/releases/download/v0.8.0/OpenUsage-0.8.0.dmg" length="20757445" type="application/octet-stream" sparkle:edSignature="mVeHA72GnTCSAoUqIwDY9ai5B2yz0BUA8DFhGM5BUtxemC7F+ZBtkVE0PDD16D+apPFoSRDRnYFQDierd92BAw=="/>
+        </item>
+    </channel>
+</rss>
