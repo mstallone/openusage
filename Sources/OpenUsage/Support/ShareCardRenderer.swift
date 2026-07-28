@@ -59,10 +59,8 @@ enum ShareCardRenderer {
     /// The rows mirror what the dashboard shows — always-shown plus expanded only when the provider's
     /// caret is open — so the export matches what the user sees.
     ///
-    /// The render is pinned to the regular density regardless of the user's popover density slider: the
-    /// rows read density via `@AppStorage`, so the saved value is swapped to `.regular` for the duration
-    /// of the render and restored on exit (synchronously), keeping the exported card consistent without
-    /// disturbing the live popover.
+    /// The render uses the same compact layout as the popover, keeping the exported card consistent
+    /// with the live view.
     /// `displayName` carries the live card title (a rename can land mid-session, after the
     /// `Provider`'s own name was baked at launch); `nil` falls back to the baked name.
     @discardableResult
@@ -95,8 +93,8 @@ enum ShareCardRenderer {
     }
 
     /// The Total Spend counterpart to `share(group:…)`: renders the aggregate ring card for the
-    /// currently selected period and metric and copies the PNG to the clipboard, with the same
-    /// pinned-density render and the same "Copied to clipboard" confirmation. `total` is passed
+    /// currently selected period and metric and copies the PNG to the clipboard, with the same compact
+    /// render and the same "Copied to clipboard" confirmation. `total` is passed
     /// already aggregated — the card computed it for the on-screen ring, so the export can't drift
     /// from the display. Returns whether the PNG landed on the pasteboard, so the share button can
     /// gate its own "copied" micro-animation on actual success.
@@ -116,24 +114,12 @@ enum ShareCardRenderer {
         return renderAndCopy(view, label: metric.title.lowercased(), layout: layout)
     }
 
-    /// Shared render→copy pipeline for both share actions. Pins the render to regular density (the rows
-    /// read density via `@AppStorage`, so the saved value is swapped to `.regular` for the render and
-    /// restored on exit) so the export ignores the user's popover density slider; rasterizes `view`;
-    /// copies the PNG; and on a successful copy surfaces the transient "Copied to clipboard" pill (a
-    /// clipboard write gives no other signal). Beeps and logs (naming the card with `label`) on failure,
-    /// so a failed export is never silently swallowed. Returns whether the PNG landed on the pasteboard.
+    /// Shared render→copy pipeline for both share actions. Rasterizes `view`, copies the PNG, and on a
+    /// successful copy surfaces the transient "Copied to clipboard" pill (a clipboard write gives no
+    /// other signal). Beeps and logs (naming the card with `label`) on failure, so a failed export is
+    /// never silently swallowed. Returns whether the PNG landed on the pasteboard.
     @discardableResult
     private static func renderAndCopy<Card: View>(_ view: Card, label: String, layout: LayoutStore) -> Bool {
-        let densityKey = DensitySetting.key
-        let savedDensity = UserDefaults.standard.string(forKey: densityKey)
-        UserDefaults.standard.set(DensitySetting.regular.rawValue, forKey: densityKey)
-        defer {
-            if let savedDensity {
-                UserDefaults.standard.set(savedDensity, forKey: densityKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: densityKey)
-            }
-        }
         guard let image = image(for: view) else {
             AppLog.error(.lifecycle, "share card: ImageRenderer produced no image for \(label)")
             NSSound.beep()

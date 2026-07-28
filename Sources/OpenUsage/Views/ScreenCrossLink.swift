@@ -18,7 +18,7 @@ struct ScreenCrossLinkRow: View {
     /// Where the row navigates.
     let destination: PopoverScreen
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     var body: some View {
         Button {

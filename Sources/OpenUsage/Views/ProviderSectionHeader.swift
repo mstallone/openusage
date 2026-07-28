@@ -25,9 +25,8 @@ struct ProviderSectionHeader: View {
     /// row type and is unaffected by this header.
     var onCopyScreenshot: (() -> Bool)?
 
-    /// Header type and icon track the density setting like the rows do, so Compact shrinks the
-    /// whole section anatomy — not just the rows under it.
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    /// Header type and icon use the same compact layout definition as the rows beneath them.
+    private let density = DensitySetting.compact
     /// Read for the live card name: a rename lands in the account registry and re-titles the header
     /// without a relaunch (the `Provider`'s own name is baked at launch).
     @Environment(AppContainer.self) private var container
@@ -116,7 +115,7 @@ struct ProviderSectionHeader: View {
 struct ProviderPlanBadge: View {
     let plan: String
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     var body: some View {
         // Plain text — no pill/capsule — for a cleaner header. Secondary (not tertiary): the plan

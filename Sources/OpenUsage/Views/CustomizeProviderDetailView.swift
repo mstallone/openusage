@@ -23,7 +23,7 @@ struct CustomizeProviderDetailView: View {
     let rowFrames: [String: CGRect]
 
     @State private var activeMetricID: String?
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     var body: some View {
         if let group = layout.customizeDetail(for: providerID) {
@@ -180,7 +180,7 @@ struct CustomizeProviderDetailView: View {
 private struct CardNameSection: View {
     let providerID: String
     @Environment(AppContainer.self) private var container
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
     @State private var draft = ""
     @FocusState private var isFocused: Bool
 

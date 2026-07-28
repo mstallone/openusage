@@ -20,11 +20,11 @@ struct WidgetRowView: View {
     /// Same supply rules as `onToggleResetDisplay`.
     var onToggleMeterStyle: (() -> Void)?
     /// True when this text-only row sits directly under another text-only row. Rows don't know
-    /// their neighbors — the list supplies it — and both densities use it to pull consecutive
-    /// one-liners into a single cluster (Compact a step harder).
+    /// their neighbors — the list supplies it — and the compact layout pulls consecutive one-liners
+    /// into a single cluster.
     var condensedTop: Bool = false
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
     @State private var modelHover = HoverPopoverState()
     /// Backs the resets popover's claim flow; `nil` outside the live dashboard (previews, share
     /// renders), which renders the timeline read-only.
@@ -33,8 +33,7 @@ struct WidgetRowView: View {
     /// default everywhere else.
     @Environment(\.popoverPartyMode) private var partyMode
 
-    /// Both row fonts come from the density setting: point sizes — not just padding — are what make
-    /// Compact read as a denser mode. The sizes are explicit because semantic
+    /// Both row fonts come from the compact layout definition. The sizes are explicit because semantic
     /// `.headline.weight(.regular)` does not match `.headline` on macOS, and `minimumScaleFactor`
     /// was shrinking only the trailing value.
     private var labelFont: Font {
@@ -64,8 +63,8 @@ struct WidgetRowView: View {
         // Bar rows are multi-line and earn breathing room; single-line text rows (Today / Yesterday /
         // Last 30 Days) stay tighter so consecutive ones read as a cluster, not evenly-spaced
         // full-height rows. This differentiation — not the fonts — is what kills the "jumpy" rhythm.
-        // All values come from the global density setting; a text row pulls up against a preceding
-        // text row (`condensedTop`) in both densities.
+        // All values come from the compact layout definition; a text row pulls up against a preceding
+        // text row (`condensedTop`).
         .padding(.top, topPadding)
         .padding(.bottom, bottomPadding)
     }
