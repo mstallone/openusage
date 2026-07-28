@@ -338,31 +338,15 @@ struct TotalSpendRingContent: View {
     private var legend: some View {
         VStack(alignment: .leading, spacing: 7) {
             ForEach(projection.slices) { slice in
-                legendRow(slice)
+                TotalSpendLegendRow(
+                    title: slice.title,
+                    value: formatValue(slice.displayAmount, style: legendValueStyle),
+                    color: TotalSpendPalette.color(for: slice.provider.id),
+                    fontSize: density.supportingPointSize
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func legendRow(_ slice: TotalSpendProjectedSlice) -> some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(TotalSpendPalette.color(for: slice.provider.id))
-                .frame(width: 8, height: 8)
-            Text(slice.title)
-                .font(.system(size: density.supportingPointSize))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            // Tokens always abbreviate in the legend (12.4M), matching spend rows elsewhere —
-            // `.full` would spill every digit. Cost modes keep cents via `.row` / `.full`.
-            Text(formatValue(slice.displayAmount, style: legendValueStyle))
-                .font(.system(size: density.supportingPointSize, weight: .medium))
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
     }
 
     /// Legend amounts: tokens always abbreviated; dollar modes keep exact cents like before.
