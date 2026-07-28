@@ -144,7 +144,10 @@ jobs:
       - name: Carry forward the existing appcast
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
+          set -euo pipefail
+
           # generate_appcast works on a folder: it reads the existing appcast.xml there and the new DMG,
           # then writes a merged appcast. "feed/" is that folder. Seed it with the live appcast so prior
           # versions and the OTHER channel's items are preserved (verified: items whose archive isn't in
@@ -161,11 +164,35 @@ jobs:
             git fetch origin gh-pages
             if git show origin/gh-pages:appcast.xml > feed/appcast.xml; then
               echo "Loaded existing appcast from gh-pages."
-            elif [ "$(gh release list --limit 1 --json tagName --jq 'length')" = "0" ]; then
-              echo "No prior fork release or appcast — starting a fresh feed."
             else
-              echo "gh-pages exists but appcast.xml is unreadable — aborting to protect the feed." >&2
-              exit 1
+              # `git show > file` creates an empty file even when the source path is absent. Remove it
+              # so generate_appcast genuinely starts fresh in the two safe bootstrap states below.
+              rm -f feed/appcast.xml
+
+              # Two tags are enough to distinguish an empty fork / first-release retry from real
+              # history. A rerun after action-gh-release published the current tag but before the
+              # appcast reached gh-pages must be recoverable; any other release history still fails
+              # closed so a missing feed can never silently discard prior Sparkle entries.
+              release_state="$(
+                gh release list --limit 2 --json tagName --jq '.[].tagName' \
+                  | "$GITHUB_WORKSPACE/script/classify_appcast_bootstrap.sh" "$RELEASE_TAG"
+              )"
+              case "$release_state" in
+                fresh)
+                  echo "No prior fork release or appcast — starting a fresh feed."
+                  ;;
+                retry)
+                  echo "Only the partial release for $RELEASE_TAG exists — rebuilding its first appcast."
+                  ;;
+                history)
+                  echo "gh-pages has no appcast but prior release history exists — aborting to protect the feed." >&2
+                  exit 1
+                  ;;
+                *)
+                  echo "Unexpected appcast bootstrap state: $release_state" >&2
+                  exit 1
+                  ;;
+              esac
             fi
           elif [ "$rc" -eq 2 ]; then
             echo "No gh-pages branch yet — starting a fresh feed."

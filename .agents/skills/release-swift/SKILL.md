@@ -76,6 +76,11 @@ gh release edit v{version} --notes-file /tmp/notes-v{version}.md
 
 Never leave a release blank.
 
+A failed first-release run is safe to rerun. If the GitHub Release for the current tag was published
+but the appcast was not, the workflow rebuilds the fresh feed only when that tag is the fork's sole
+release. If any older release history exists while `appcast.xml` is missing, it aborts rather than
+silently dropping prior Sparkle entries.
+
 ### 7. Verify (never leave a draft)
 
 ```sh
