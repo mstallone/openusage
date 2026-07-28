@@ -1,8 +1,10 @@
 import SwiftUI
 
 /// One ranked legend entry. At rest the amount keeps the rows easy to compare. When that leaves too
-/// little room for the title, hovering crossfades to a second, full-width title that was laid out in
-/// advance. Only opacity animates: the title never reflows and the row never changes height.
+/// little room for the title, hovering crossfades to a second layout that gives the title only the
+/// width it needs. The amount yields from its leading edge through a soft fade, preserving its
+/// trailing digits whenever they still fit. Both layouts are final and single-line before the
+/// crossfade starts, so the title never reflows and the row never changes height.
 struct TotalSpendLegendRow: View {
     let title: String
     let value: String
@@ -41,15 +43,21 @@ struct TotalSpendLegendRow: View {
 
     private var textContent: some View {
         ZStack(alignment: .leading) {
-            LegendRowTextLayout(spacing: valueSpacing) {
+            LegendRowTextLayout(reclaimedWidth: 0, spacing: valueSpacing) {
                 measuredTitleLabel
                 measuredValueLabel
             }
-            .opacity(revealsFullWidthTitle ? 0 : 1)
+            .opacity(revealsHoverLayout ? 0 : 1)
 
-            titleLabel
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(revealsFullWidthTitle ? 1 : 0)
+            LegendRowTextLayout(
+                reclaimedWidth: allocation.reclaimedWidth,
+                spacing: valueSpacing
+            ) {
+                titleLabel
+                valueLabel
+                    .mask(LegendValueFadeMask(hiddenFraction: allocation.hiddenValueFraction))
+            }
+            .opacity(revealsHoverLayout ? 1 : 0)
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
@@ -58,16 +66,20 @@ struct TotalSpendLegendRow: View {
         }
         // The two states already have their final geometry. Crossfading them avoids animating a Text
         // proposal through many truncation points, which made long account labels visibly stutter.
-        .animation(.easeOut(duration: 0.12), value: revealsFullWidthTitle)
+        .animation(.easeOut(duration: 0.12), value: revealsHoverLayout)
     }
 
-    private var revealsFullWidthTitle: Bool {
-        isHovered && LegendRowPresentation.titleNeedsFullWidth(
+    private var allocation: LegendRowWidthAllocation {
+        LegendRowWidthAllocation.resolve(
             availableWidth: textAreaWidth,
             titleWidth: titleIdealWidth,
             valueWidth: valueIdealWidth,
             spacing: valueSpacing
         )
+    }
+
+    private var revealsHoverLayout: Bool {
+        isHovered && allocation.reclaimedWidth > 0
     }
 
     private var measuredTitleLabel: some View {
@@ -115,26 +127,42 @@ struct TotalSpendLegendRow: View {
     }
 }
 
-/// Keeps the hover decision independently testable. A short title stays in the stable title/value
-/// state; only a title truncated by its own amount gets the full-width hover state.
-struct LegendRowPresentation {
-    static func titleNeedsFullWidth(
+/// The final hover allocation is computed before hover changes the presentation. The title first
+/// consumes the inter-column spacing, then only the leading portion of the amount it actually needs.
+struct LegendRowWidthAllocation {
+    let reclaimedWidth: CGFloat
+    let hiddenValueFraction: CGFloat
+
+    static let none = LegendRowWidthAllocation(reclaimedWidth: 0, hiddenValueFraction: 0)
+
+    static func resolve(
         availableWidth: CGFloat,
         titleWidth: CGFloat,
         valueWidth: CGFloat,
         spacing: CGFloat
-    ) -> Bool {
-        guard availableWidth > 0, titleWidth > 0, valueWidth > 0 else { return false }
+    ) -> Self {
+        guard availableWidth > 0, titleWidth > 0, valueWidth > 0 else { return .none }
 
         let displayedValueWidth = min(valueWidth, availableWidth)
-        let restingTitleWidth = max(0, availableWidth - displayedValueWidth - spacing)
-        return titleWidth > restingTitleWidth
+        let restingTitleWidth = availableWidth - displayedValueWidth - spacing
+        let reclaimedWidth = min(
+            displayedValueWidth + spacing,
+            max(0, titleWidth - restingTitleWidth)
+        )
+        let hiddenValueWidth = min(displayedValueWidth, max(0, reclaimedWidth - spacing))
+
+        return Self(
+            reclaimedWidth: reclaimedWidth,
+            hiddenValueFraction: hiddenValueWidth / displayedValueWidth
+        )
     }
 }
 
-/// The resting title/value layout. Its geometry never changes on hover; the full-width title is a
-/// separate overlay in `TotalSpendLegendRow`.
+/// One of the two final title/value layouts. `reclaimedWidth` is deliberately not animatable: hover
+/// crossfades between a resting instance and an already-expanded instance instead of changing a
+/// Text proposal frame by frame.
 private struct LegendRowTextLayout: Layout {
+    let reclaimedWidth: CGFloat
     let spacing: CGFloat
 
     func sizeThatFits(
@@ -193,6 +221,38 @@ private struct LegendRowTextLayout: Layout {
     }
 
     private func reservedWidth(for valueWidth: CGFloat) -> CGFloat {
-        valueWidth + spacing
+        max(0, valueWidth + spacing - reclaimedWidth)
+    }
+}
+
+/// Keeps the trailing digits anchored while only the portion competing with the title disappears.
+/// The mask is already at its final state before the hover crossfade begins.
+private struct LegendValueFadeMask: View {
+    let hiddenFraction: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let clamped = min(1, max(0, hiddenFraction))
+
+            if clamped <= 0.001 {
+                Rectangle()
+                    .fill(.white)
+            } else if clamped >= 0.999 {
+                Rectangle()
+                    .fill(.clear)
+            } else {
+                let fadeFraction = min(1 - clamped, 10 / max(1, proxy.size.width))
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .clear, location: clamped),
+                        .init(color: .white, location: clamped + fadeFraction),
+                        .init(color: .white, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+        }
     }
 }
