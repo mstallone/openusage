@@ -14,8 +14,8 @@ The project script owns the build/run loop. From the repo root:
 ```
 
 The script builds a signed app bundle under `dist/` and launches it in place — nothing is installed to
-`/Applications`. The dev build uses its own bundle id (`com.mattstallone.openusage.dev`), so it keeps its
-own settings and keychain and never disturbs a released OpenUsage. It ships no update feed, so it never
+`/Applications`. The dev build uses its own bundle id (`com.mattstallone.runway.dev`), so it keeps its
+own settings and keychain and never disturbs a released Runway. It ships no update feed, so it never
 checks for updates — test updates with a real signed, notarized release build.
 
 ## Stream logs
@@ -30,19 +30,19 @@ This launches the dev app and then streams its unified logs. Under the hood it f
 the app's process, equivalent to:
 
 ```sh
-log stream --info --style compact --predicate 'process == "OpenUsage"'
+log stream --info --style compact --predicate 'process == "Runway"'
 ```
 
 To read logs *after the fact* instead of live, use `log show` with a time window:
 
 ```sh
-log show --last 10m --info --predicate 'process == "OpenUsage"'
+log show --last 10m --info --predicate 'process == "Runway"'
 ```
 
 ## Log file
 
 In addition to the unified log above, the app writes a file log to
-`~/Library/Logs/OpenUsage/OpenUsage.log` — this is what to send with a support report. It is capped at
+`~/Library/Logs/Runway/Runway.log` — this is what to send with a support report. It is capped at
 ~10 MB with one `.1` archive. Raise the detail in **Settings -> Advanced -> Log Level** (use **Debug**
 for full detail), then grab the file with **Copy Log Path** or **Reveal in Finder** in that same
 section. See [Logging](logging.md) for the levels, subsystem tags, and the never-log-secrets guarantee.
@@ -68,7 +68,7 @@ short trail in the log file:
 - `discovery: codex candidate ~/.codex-work: accepted (<hash>, verified keyring)` — the keyring item
   still matches the verified binding and now participates in an account card.
 - `discovery: codex candidate ~/.codex-work: OAuth credential names no account → skipped` — the
-  home has a token but no provider-owned account identity, so OpenUsage refuses to guess from its
+  home has a token but no provider-owned account identity, so Runway refuses to guess from its
   path and can't safely turn it into a separate card.
 - `accounts: codex card codex@<hash> from 2 home(s)` — the account card was assembled, and the
   number says how many same-account Codex homes contribute local session logs to it.

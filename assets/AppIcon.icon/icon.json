@@ -1,31 +1,24 @@
 {
-  "features" : [
-    "refractivity"
+  "fill-specializations" : [
+    {
+      "value" : "system-dark"
+    },
+    {
+      "appearance" : "dark",
+      "value" : "automatic"
+    }
   ],
-  "fill" : {
-    "automatic-gradient" : "extended-srgb:0.17008,0.49616,1.02141,1.00000"
-  },
   "groups" : [
     {
       "layers" : [
         {
-          "fill-specializations" : [
-            {
-              "value" : {
-                "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
-              }
-            },
-            {
-              "appearance" : "dark",
-              "value" : {
-                "solid" : "extended-srgb:0.17008,0.49616,1.02141,1.00000"
-              }
-            }
-          ],
-          "image-name" : "dashboard-3-line.svg",
-          "name" : "dashboard-3-line",
+          "fill" : "automatic",
+          "glass" : false,
+          "hidden" : false,
+          "image-name" : "runway.png",
+          "name" : "runway",
           "position" : {
-            "scale" : 37.48,
+            "scale" : 1,
             "translation-in-points" : [
               0,
               0
@@ -33,25 +26,19 @@
           }
         }
       ],
-      "refractivity" : {
-        "depth" : 0.4239062500000001,
-        "enabled" : true,
-        "strength" : 0.64328125
-      },
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 1.08
+        "opacity" : 0.35
       },
       "translucency" : {
-        "enabled" : true,
-        "value" : 0.46
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],
   "supported-platforms" : {
-    "circles" : [
-      "watchOS"
-    ],
-    "squares" : "shared"
+    "squares" : [
+      "macOS"
+    ]
   }
 }

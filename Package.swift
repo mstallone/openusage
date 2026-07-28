@@ -2,13 +2,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "OpenUsage",
+    name: "Runway",
     platforms: [
         .macOS(.v15)
     ],
     products: [
-        .executable(name: "OpenUsage", targets: ["OpenUsageApp"]),
-        .executable(name: "openusage-cli", targets: ["OpenUsageCLI"])
+        .executable(name: "Runway", targets: ["RunwayApp"]),
+        .executable(name: "runway-cli", targets: ["RunwayCLI"])
     ],
     dependencies: [
         // The de-facto standard recorder + global hotkey for Mac apps (System Settings-style field).
@@ -19,12 +19,12 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "OpenUsage",
+            name: "Runway",
             dependencies: [
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
                 .product(name: "Sparkle", package: "Sparkle")
             ],
-            path: "Sources/OpenUsage",
+            path: "Sources/Runway",
             resources: [
                 .copy("Resources/ProviderIcons"),
                 .copy("Resources/pricing_supplement.json"),
@@ -36,33 +36,33 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "OpenUsageApp",
-            dependencies: ["OpenUsage"],
-            path: "Sources/OpenUsageApp",
+            name: "RunwayApp",
+            dependencies: ["Runway"],
+            path: "Sources/RunwayApp",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
         ),
         .executableTarget(
-            name: "OpenUsageCLI",
-            dependencies: ["OpenUsage"],
-            path: "Sources/OpenUsageCLI",
+            name: "RunwayCLI",
+            dependencies: ["Runway"],
+            path: "Sources/RunwayCLI",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
         ),
         .testTarget(
-            name: "OpenUsageTests",
-            dependencies: ["OpenUsage"],
-            path: "Tests/OpenUsageTests",
+            name: "RunwayTests",
+            dependencies: ["Runway"],
+            path: "Tests/RunwayTests",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
         ),
         .testTarget(
-            name: "OpenUsageCLITests",
-            dependencies: ["OpenUsageCLI"],
-            path: "Tests/OpenUsageCLITests",
+            name: "RunwayCLITests",
+            dependencies: ["RunwayCLI"],
+            path: "Tests/RunwayCLITests",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]

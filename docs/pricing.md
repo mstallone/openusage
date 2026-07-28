@@ -1,6 +1,6 @@
 # Model Pricing
 
-How OpenUsage turns token counts into the estimated dollars on the spend tiles (Claude, Codex,
+How Runway turns token counts into the estimated dollars on the spend tiles (Claude, Codex,
 Cursor, Grok, and fixed-rate Sakana Fugu models). OpenRouter and OpenCode are the exceptions:
 OpenRouter's API reports billed dollars directly, and OpenCode records its own per-message cost in its
 local logs, so nothing here applies to them.
@@ -9,15 +9,15 @@ local logs, so nothing here applies to them.
 
 Prices are layered from three sources; when the same model appears in more than one, the higher layer wins:
 
-1. **OpenUsage pricing supplement** — a small JSON file maintained in this repo and published to GitHub Pages. It covers models no public catalog carries (Cursor-native models like `auto` and `composer-*`), fast-variant multipliers, and alias rules that map provider log/CSV slugs to catalog keys.
+1. **Runway pricing supplement** — a small JSON file maintained in this repo and published to GitHub Pages. It covers models no public catalog carries (Cursor-native models like `auto` and `composer-*`), fast-variant multipliers, and alias rules that map provider log/CSV slugs to catalog keys.
 2. **LiteLLM** — the community-maintained `model_prices_and_context_window.json`, covering the vast majority of API-priced models.
 3. **models.dev** — a gap-filler for models LiteLLM misses (e.g. some brand-new or niche models).
 
-The app ships with bundled snapshots of all three, so pricing works offline and on first launch. At runtime each source is refetched about once an hour (with ETag revalidation) and cached in `~/Library/Application Support/OpenUsage/pricing/`. A refresh never blocks a usage scan — scans always price against the freshest data already on hand.
+The app ships with bundled snapshots of all three, so pricing works offline and on first launch. At runtime each source is refetched about once an hour (with ETag revalidation) and cached in `~/Library/Application Support/Runway/pricing/`. A refresh never blocks a usage scan — scans always price against the freshest data already on hand.
 
 Because the supplement is published to GitHub Pages on merge, a pricing correction reaches installed apps within about an hour — no app update needed.
 
-Sakana Fugu is a narrow provider-specific exception to the layered catalogs. OpenUsage carries
+Sakana Fugu is a narrow provider-specific exception to the layered catalogs. Runway carries
 Sakana's published fixed Ultra and Cyber rates beside its log scanner because those prices include a
 provider-specific 272K-token tier and are not general model-catalog entries. Plain `fugu` remains
 unpriced because its rate depends on the underlying routed model.
@@ -38,7 +38,7 @@ cached-input, and output rates. Codex rollouts do not preserve Sakana's separate
 fields, so Fugu estimates and graph tokens can undercount orchestration; reasoning output is already
 part of output and is not added again. A published cache discount is used when available; Codex cached
 input falls back to the full input rate when the source publishes no discount. Cursor's export combines
-many requests into each row, so OpenUsage uses the normal rate there rather than guessing that one
+many requests into each row, so Runway uses the normal rate there rather than guessing that one
 request crossed the limit. When a Claude log line carries an explicit `costUSD`, that value is used
 as-is. Nested Claude advisor usage has no carried cost, so it is priced separately from its tokens
 using the advisor model. The result is an estimate of API-rate value, not a bill: subscription plans
@@ -50,5 +50,5 @@ The pricing refresh fetches three public price lists (from `raw.githubuserconten
 
 ## Maintainer notes
 
-- **Supplement changes** (new Cursor-native model, price correction, new alias): edit `Sources/OpenUsage/Resources/pricing_supplement.json`, sync entries from [Cursor models & pricing](https://cursor.com/docs/models-and-pricing.md), and update `updated_at`. On merge to `main`, `.github/workflows/pricing-supplement.yml` publishes it to gh-pages; installed apps pick it up within about an hour. The bundled copy ships with the next release for first launches. The **pricing-update skill** (`.agents/skills/pricing-update/`) walks an agent through the whole sync: pull the Cursor page, diff, edit, validate, and open a PR.
+- **Supplement changes** (new Cursor-native model, price correction, new alias): edit `Sources/Runway/Resources/pricing_supplement.json`, sync entries from [Cursor models & pricing](https://cursor.com/docs/models-and-pricing.md), and update `updated_at`. On merge to `main`, `.github/workflows/pricing-supplement.yml` publishes it to gh-pages; installed apps pick it up within about an hour. The bundled copy ships with the next release for first launches. The **pricing-update skill** (`.agents/skills/pricing-update/`) walks an agent through the whole sync: pull the Cursor page, diff, edit, validate, and open a PR.
 - **Bundled snapshots** (`pricing_litellm_snapshot.json`, `pricing_models_dev_snapshot.json`): regenerate occasionally (e.g. before a release) with `script/update_pricing_snapshots.sh`. Staleness is harmless — runtime fetches override them.

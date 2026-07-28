@@ -1,7 +1,7 @@
 # Updates
 
-OpenUsage keeps itself up to date using [Sparkle](https://sparkle-project.org), the standard update
-framework for Mac apps. Updates are downloaded from OpenUsage's own release feed and verified before
+Runway keeps itself up to date using [Sparkle](https://sparkle-project.org), the standard update
+framework for Mac apps. Updates are downloaded from Runway's own release feed and verified before
 they install, so you always get a genuine, unmodified build.
 
 ## How it works
@@ -12,8 +12,8 @@ they install, so you always get a genuine, unmodified build.
   notes, download, install) front and center. The banner's close button snoozes it; it comes back the
   next time the app finds the update.
 - **Manual check.** Open **Settings → Updates** and click **Check for Updates…** at any time.
-  For both manual checks and banner installs, OpenUsage brings itself to the foreground before opening
-  Sparkle so the update window doesn't get buried behind another app. Because OpenUsage normally lives
+  For both manual checks and banner installs, Runway brings itself to the foreground before opening
+  Sparkle so the update window doesn't get buried behind another app. Because Runway normally lives
   only in the menu bar, it briefly shows a Dock icon for the update session, then hides again.
 - **Turn it off.** The **Update Automatically** switch in **Settings → Updates** stops the
   background checks. You can still check manually.
@@ -22,8 +22,8 @@ they install, so you always get a genuine, unmodified build.
 
 ## Where updates come from
 
-Stable update builds are published on OpenUsage's GitHub releases, and the list of available versions (the
-"appcast") is served from `https://mstallone.github.io/openusage/appcast.xml`. Each download is
-signed two ways — Apple notarization plus OpenUsage's own signature — and the app refuses anything that
+Stable update builds are published on Runway's GitHub releases, and the list of available versions (the
+"appcast") is served from `https://mstallone.github.io/runway/appcast.xml`. Each download is
+signed two ways — Apple notarization plus Runway's own signature — and the app refuses anything that
 doesn't match. This is only available in the official signed release build, not in local developer
 builds.

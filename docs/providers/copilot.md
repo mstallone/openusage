@@ -19,12 +19,12 @@ Since June 2026 GitHub Copilot bills all plans by **AI credits**, so what each a
 
 - **Paid plans** meter the credit pool — so you see Credits (and Extra Usage if you've turned on additional spend). Chat and completions are unlimited on paid plans, so those rows read "No data".
 - **Free plans** have no credits, so Credits reads "No data"; instead you see your fixed Chat and Completions counts under the caret.
-- **Org-managed seats (Copilot Business / Enterprise assigned by an organization)** return no per-seat quota, so the personal meters have nothing to show. OpenUsage then looks the usage up in the organization's billing instead: it lists your organizations, finds the one whose billing reports Copilot AI-credit usage, and shows **Org Credits** (credits the whole org used this month) and **Org Spend** (dollars billed beyond the included pool). Two caveats:
+- **Org-managed seats (Copilot Business / Enterprise assigned by an organization)** return no per-seat quota, so the personal meters have nothing to show. Runway then looks the usage up in the organization's billing instead: it lists your organizations, finds the one whose billing reports Copilot AI-credit usage, and shows **Org Credits** (credits the whole org used this month) and **Org Spend** (dollars billed beyond the included pool). Two caveats:
   - The numbers are **organization-wide**, not your personal share — GitHub doesn't expose per-seat usage.
   - Reading an org's billing requires you to be an **org owner or billing manager**. Regular members keep the previous behavior: the plan shows, the meters read "No data".
-- Org Credits is shown as a plain count, not a percentage: the billing API reports usage only, never the org's credit allotment, and OpenUsage doesn't fabricate a denominator.
+- Org Credits is shown as a plain count, not a percentage: the billing API reports usage only, never the org's credit allotment, and Runway doesn't fabricate a denominator.
 
-A dollar credit figure (e.g. "$12 of $15 used") isn't shown: GitHub only exposes that through its logged-in web billing page, which would require reading browser cookies — OpenUsage does not do that. Editors like VS Code show the same credit *percentage* from this endpoint, not a dollar amount.
+A dollar credit figure (e.g. "$12 of $15 used") isn't shown: GitHub only exposes that through its logged-in web billing page, which would require reading browser cookies — Runway does not do that. Editors like VS Code show the same credit *percentage* from this endpoint, not a dollar amount.
 
 ## Where credentials come from
 

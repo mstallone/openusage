@@ -10,11 +10,11 @@ Settings lives inside the popover — there is no separate window. Open it from 
 | Launch at Login | on/off | Registers the app as a login item (the system's login-item registry is the source of truth). |
 | Global Shortcut | record a shortcut | Global shortcut that toggles the popover from anywhere. Click the field and press a combo; the ⓧ clears it and disables the shortcut. |
 
-**Upgrading from the legacy (pre-0.7) edition:** the old edition managed start-on-login with its own launcher file, which an in-place update left behind. That leftover could start the app a second time at every login and showed up in System Settings → Login Items under the signing company's name ("SUNSTORY LLC") instead of OpenUsage. The app now removes it automatically on launch — only when the file verifiably points at OpenUsage itself — so login starts exactly one copy, controlled by the Launch at Login toggle above.
+**Upgrading from the legacy (pre-0.7) edition:** the old edition managed start-on-login with its own launcher file, which an in-place update left behind. That leftover could start the app a second time at every login and showed up in System Settings → Login Items under the signing company's name ("SUNSTORY LLC") instead of Runway. The app now removes it automatically on launch — only when the file verifiably points at Runway itself — so login starts exactly one copy, controlled by the Launch at Login toggle above.
 
 ## iCloud Sync
 
-**Sync Across Macs** is off by default. Turning it on shares normalized OpenUsage history through the
+**Sync Across Macs** is off by default. Turning it on shares normalized Runway history through the
 app's private iCloud container and combines machine-local tokens and spend across Macs signed into the
 same iCloud account. Settings shows the five-minute write cadence and each Mac's relative **Updated**
 time; it also reports unavailable iCloud, loading, write, and malformed-file states. See
@@ -39,7 +39,7 @@ time; it also reports unavailable iCloud, loading, write, and malformed-file sta
 
 ## Notifications
 
-OpenUsage can alert you with a macOS notification when a metric runs low or its pace gets worse, so you don't have to keep the popover open to catch a quota creeping toward its limit. Alerts work while the app runs in the menu bar, even with the popover closed.
+Runway can alert you with a macOS notification when a metric runs low or its pace gets worse, so you don't have to keep the popover open to catch a quota creeping toward its limit. Alerts work while the app runs in the menu bar, even with the popover closed.
 
 | Setting | Options | What it does |
 |---|---|---|
@@ -47,22 +47,22 @@ OpenUsage can alert you with a macOS notification when a metric runs low or its 
 | Cutting It Close | On / Off | Alerts when a metric is projected to finish the period with little left — close to its limit. |
 | Will Run Out | On / Off | Alerts when a metric is projected to run out before it resets. |
 
-Alerts fire on a new crossing or pace worsening, then stay deduplicated while that condition is unchanged, so you do not get repeats on every refresh. A quota already in a bad state when OpenUsage launches establishes the baseline without alerting. If it recovers and later worsens again, the alert re-arms; a new reset period also clears the reset-based history. **Almost Out** is based only on the remaining share, so it also works for bounded balances without a reset window. **Cutting It Close** and **Will Run Out** require reset-window pace context. Metrics whose data cannot be read never alert. Turn all three triggers off to silence everything. When several alerts fire at once, they stack into a single grouped banner.
+Alerts fire on a new crossing or pace worsening, then stay deduplicated while that condition is unchanged, so you do not get repeats on every refresh. A quota already in a bad state when Runway launches establishes the baseline without alerting. If it recovers and later worsens again, the alert re-arms; a new reset period also clears the reset-based history. **Almost Out** is based only on the remaining share, so it also works for bounded balances without a reset window. **Cutting It Close** and **Will Run Out** require reset-window pace context. Metrics whose data cannot be read never alert. Turn all three triggers off to silence everything. When several alerts fire at once, they stack into a single grouped banner.
 
-All three alerts default off. The first time you turn one on, OpenUsage asks for notification permission; if you decline (or turn notifications off for OpenUsage in System Settings later), a warning mark appears on the Notifications header and an "Open System Settings" button shows under the toggles so you can re-enable them. A notification's title is the alert name, its subtitle names the provider and metric, and its body is the plain-language verdict. Tapping an alert opens the popover on the dashboard.
+All three alerts default off. The first time you turn one on, Runway asks for notification permission; if you decline (or turn notifications off for Runway in System Settings later), a warning mark appears on the Notifications header and an "Open System Settings" button shows under the toggles so you can re-enable them. A notification's title is the alert name, its subtitle names the provider and metric, and its body is the plain-language verdict. Tapping an alert opens the popover on the dashboard.
 
 ## Privacy
 
 | Setting | Options | What it does |
 |---|---|---|
-| Hide From Screen Share | On / Off | Off (default). On replaces the menu bar strip with the OpenUsage icon and wordmark while your screen is being shared or recorded, and restores your starred metrics the moment the capture ends. See [Menu bar](menu-bar.md#hiding-usage-while-screen-sharing). |
+| Hide From Screen Share | On / Off | Off (default). On replaces the menu bar strip with the Runway icon and wordmark while your screen is being shared or recorded, and restores your starred metrics the moment the capture ends. See [Menu bar](menu-bar.md#hiding-usage-while-screen-sharing). |
 
 ## Advanced
 
 | Setting | Options | What it does |
 |---|---|---|
 | Log Level | Error / Warning / Info / Debug | How much detail the app writes to its log file. Defaults to Info and persists across launches; raise to Debug while reproducing a problem. Applies immediately. |
-| Copy Log Path | button | Copies the log file path (`~/Library/Logs/OpenUsage/OpenUsage.log`) to the clipboard. |
+| Copy Log Path | button | Copies the log file path (`~/Library/Logs/Runway/Runway.log`) to the clipboard. |
 | Reveal in Finder | button | Opens a Finder window with the log file selected. |
 
 See [Logging](logging.md) for the full behavior: subsystem tags, the file size cap, and the guarantee that secrets are never written.

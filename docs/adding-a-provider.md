@@ -1,19 +1,19 @@
 # Adding a Provider
 
-How to add a new AI provider to OpenUsage. Read the [architecture overview](architecture.md) first so the
+How to add a new AI provider to Runway. Read the [architecture overview](architecture.md) first so the
 pieces below make sense.
 
 ## What a provider is
 
-A provider is a small Swift module under `Sources/OpenUsage/Providers/<Name>/` that conforms to
+A provider is a small Swift module under `Sources/Runway/Providers/<Name>/` that conforms to
 `ProviderRuntime`. It has three parts:
 
 - an **auth store** that reads credentials already on the user's machine (config files, keychain),
 - a **usage client** that calls the provider's API,
 - a **mapper** that turns the response into the app's metric vocabulary.
 
-OpenUsage never asks the user to paste a token — if the provider's own CLI or app has already logged in,
-OpenUsage reads those existing credentials.
+Runway never asks the user to paste a token — if the provider's own CLI or app has already logged in,
+Runway reads those existing credentials.
 
 Besides `refresh()`, every provider implements `hasLocalCredentials()` — a cheap, local-only check
 (files, keychain; never the network) for whether those credentials exist at all. A fresh install probes
@@ -53,16 +53,16 @@ return stale or empty data silently.
 
 1. **Check first.** Look at open issues and `docs/providers/` to see if the provider is already requested
    or in progress.
-2. **Create the module.** Add `Sources/OpenUsage/Providers/<Name>/` with the auth store, usage client, and
+2. **Create the module.** Add `Sources/Runway/Providers/<Name>/` with the auth store, usage client, and
    mapper, conforming to `ProviderRuntime` — both `refresh()` and `hasLocalCredentials()` (the compiler
    enforces the latter; there is no default). The probe must stay local-only and reuse the same auth-store
    loaders and credential-usability filters that `refresh()` starts with — don't write a second
    credential-reading path. Reuse the shared helpers in `Support/` (`ProviderParse` for
-   JSON/number/percent parsing, `OpenUsageISO8601` for timestamps) instead of copying them.
+   JSON/number/percent parsing, `RunwayISO8601` for timestamps) instead of copying them.
 3. **Declare its widgets.** Expose the provider's metrics as `WidgetDescriptor`s using the factories in
    `WidgetDescriptor+Factories.swift` (`percent`, `boundedDollars`, `spend`, `tokenSpend`, `combined`, `values`, `badge`, and so on).
 4. **Register it.** Add the provider to the list in `AppContainer`.
-5. **Test it.** Add focused tests under `Tests/OpenUsageTests/`, including a mapper test that feeds a
+5. **Test it.** Add focused tests under `Tests/RunwayTests/`, including a mapper test that feeds a
    sample API response and checks the resulting metric lines.
 6. **Document it.** Add a page under `docs/providers/` covering what it tracks, where its credentials come
    from, the endpoints it calls, and what its error states mean.

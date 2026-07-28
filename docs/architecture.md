@@ -1,11 +1,11 @@
 # Architecture
 
-A high-level map of how OpenUsage is put together, for people working on the code. For what the app
+A high-level map of how Runway is put together, for people working on the code. For what the app
 *does*, start with the [behavior docs](README.md).
 
 ## The shape of the app
 
-OpenUsage is a SwiftPM package with a shared module and two thin executables — there is no Xcode project.
+Runway is a SwiftPM package with a shared module and two thin executables — there is no Xcode project.
 The main executable is a menu-bar app: a SwiftUI interface hosted inside an AppKit status item and panel.
 The code is grouped by role:
 
@@ -24,7 +24,7 @@ providers, turns it into a `WidgetRegistry`, creates the stores, starts the peri
 starts the local HTTP API. Everything else receives what it needs from here rather than reaching for
 globals, which keeps the pieces testable in isolation.
 
-The `openusage` executable imports the same module. A normal invocation reads `ProviderSnapshotCache`
+The `runway` executable imports the same module. A normal invocation reads `ProviderSnapshotCache`
 and exits; `--force` constructs the canonical `ProviderCatalog` and calls `WidgetDataStore`'s forced
 refresh path before reading. Providers annotate the scalar resources they export through the stable
 limits contract; the CLI and `/v1/limits` share one serializer over those same normalized snapshots.
@@ -34,7 +34,7 @@ It never launches the GUI or duplicates provider, auth, pricing, or mapping logi
 
 Each provider is a small module that conforms to `ProviderRuntime`. A refresh flows through three parts:
 
-1. **Auth store** — reads credentials that already exist on the machine (config files, keychain). OpenUsage
+1. **Auth store** — reads credentials that already exist on the machine (config files, keychain). Runway
    never asks the user to paste tokens.
 2. **Usage client** — makes the HTTP calls to the provider's API.
 3. **Mapper** — turns the provider's response into the app's own vocabulary: a `ProviderSnapshot`
@@ -74,7 +74,7 @@ re-renders only the spend rows from the union, leaving quota and error state loc
 
 ## The AppKit bridge
 
-macOS menu-bar apps live in an `NSStatusItem`. OpenUsage shows its content in a custom, key-capable
+macOS menu-bar apps live in an `NSStatusItem`. Runway shows its content in a custom, key-capable
 `NSPanel` rather than an `NSPopover`: a popover's window is only key while the whole app is active, and
 activating a menu-bar (accessory) app is asynchronous and unreliable on recent macOS, so a popover
 ends up unable to receive keystrokes until a second click. A non-activating `NSPanel` whose
@@ -84,7 +84,7 @@ the bulk of the UI can stay plain SwiftUI.
 
 ## Platform support
 
-OpenUsage runs on macOS 15 (Sequoia) and later. It is built against the latest SDK and back-deploys:
+Runway runs on macOS 15 (Sequoia) and later. It is built against the latest SDK and back-deploys:
 on macOS 26 (Tahoe) it uses the system's Liquid Glass controls, and on macOS 15 it falls back to the
 standard controls with the same behavior (the footer still pins, the buttons keep their states). Every
 one of those version checks lives in a single file — `Support/LiquidGlassFallbacks.swift` — so the views

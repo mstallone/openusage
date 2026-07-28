@@ -3,8 +3,8 @@
 > **Historical / superseded.** This report records the repository as it stood on 2026-07-04. A
 > provider-neutral model breakdown on spend-row hover shipped on 2026-07-04 and has evolved since;
 > see [Dashboard rows](../../dashboard.md#rows),
-> [`SpendTileMapper.swift`](../../../Sources/OpenUsage/Providers/SpendTileMapper.swift), and
-> [`ModelUsageDetail.swift`](../../../Sources/OpenUsage/Views/ModelUsageDetail.swift) for current
+> [`SpendTileMapper.swift`](../../../Sources/Runway/Providers/SpendTileMapper.swift), and
+> [`ModelUsageDetail.swift`](../../../Sources/Runway/Views/ModelUsageDetail.swift) for current
 > behavior and implementation. The historical branch analysis below is intentionally unchanged.
 
 Research date: 2026-07-04. PR remains **open** and **unmerged** on branch `claude/eager-banach-ecf5a1` (~106 commits behind `main` as of this writing). This note compares that branch to current `main` for anyone revisiting per-model / model-hover UX.
@@ -71,7 +71,7 @@ This is the largest break. #740 assumes a **Cursor-local pricing stack** that no
 
 | #740 branch | Current `main` |
 |-------------|----------------|
-| `CursorPricing`, `CursorModelManifest`, bundled **`model_manifest.json`** | **Removed.** All imputation through **`Sources/OpenUsage/Pricing/`** (`ModelPricing`, `ModelPricingStore`, LiteLLM + models.dev + **`pricing_supplement.json`**) — see **`docs/pricing.md`**. |
+| `CursorPricing`, `CursorModelManifest`, bundled **`model_manifest.json`** | **Removed.** All imputation through **`Sources/Runway/Pricing/`** (`ModelPricing`, `ModelPricingStore`, LiteLLM + models.dev + **`pricing_supplement.json`**) — see **`docs/pricing.md`**. |
 | `CursorUsageCSV.parse(csv:)` without injected pricing | **`CursorUsageCSV.parse(csv:pricing:)`**; `imputedCostDollars` is **`Double?`** (nil = unpriced). |
 | `CursorPricing.family(for:)` / `family_display_name` for leaderboard labels | **No `family_id` in supplement.** Grouping is via **alias rules → canonical keys**, not display families. Human-readable names must be derived elsewhere (formatting slug / catalog metadata), not from manifest fields #740 added. |
 | Claude/Codex spend via **`CcusageRunner`**; follow-up **`ccusage --breakdown`** | **`CcusageRunner` deleted.** **`ClaudeLogUsageScanner`** / **`CodexLogUsageScanner`** read local logs; output **`DailyUsageSeries`** only (day buckets). |
@@ -80,14 +80,14 @@ This is the largest break. #740 assumes a **Cursor-local pricing stack** that no
 ### Other `main` deltas relevant to a rebase
 
 - **No `MetricLine.modelBreakdown`**, no `ModelUsageEntry`, no `isModelList` / `ModelLeaderboard*` views on `main`.
-- **Snapshot cache key:** #740 bumps to **`openusage.providerSnapshots.v7`** (model breakdown + variants). `main` is at **`v6`** (`.values` **`unknownModels`** on spend tiles) — different schema story; a revival would need a fresh bump and migration reasoning.
+- **Snapshot cache key:** #740 bumps to **`runway.providerSnapshots.v7`** (model breakdown + variants). `main` is at **`v6`** (`.values` **`unknownModels`** on spend tiles) — different schema story; a revival would need a fresh bump and migration reasoning.
 - **~106 commits** on `main` not on the PR branch (Copilot, Claude Cowork logs, notifications, enterprise Cursor paths, pricing supplement churn, etc.) — expect heavy conflicts in Cursor provider, mappers, `MetricLine`, `WidgetDataStore`, and docs.
 - **Grok:** `GrokLogUsageScanner` **does** attribute each inference to a model (per-`pid` tracking) but, like Claude/Codex scanners, **aggregates to daily totals only** — no existing `MetricLine` carries per-model series. #740’s “Grok already has model attribution” is still true at scan time, but nothing exposes it in the UI pipeline today.
 - **Claude / Codex:** Scanners retain **per-event `model`** (`ClaudeLogUsageScanner.Entry.model`, `CodexLogUsageScanner.Event.model`) but **discard the dimension** when building `DailyUsageSeries` — same structural gap #740 called out for Cursor day-bucketing, now the common pattern for all log-based providers.
 
 ### Pricing supplement (operational change)
 
-- **`Sources/OpenUsage/Resources/pricing_supplement.json`** is published to GitHub Pages; apps refresh ~daily without a release. #740’s approach of extending **`model_manifest.json`** for family metadata is obsolete; new models/aliases belong in the **supplement** and **`docs/pricing.md`** maintainer flow.
+- **`Sources/Runway/Resources/pricing_supplement.json`** is published to GitHub Pages; apps refresh ~daily without a release. #740’s approach of extending **`model_manifest.json`** for family metadata is obsolete; new models/aliases belong in the **supplement** and **`docs/pricing.md`** maintainer flow.
 
 ---
 
@@ -124,8 +124,8 @@ This is the largest break. #740 assumes a **Cursor-local pricing stack** that no
 
 ## References
 
-- PR: https://github.com/robinebers/openusage/pull/740  
-- Pricing overhaul: https://github.com/robinebers/openusage/pull/827 (merged)  
+- PR: https://github.com/robinebers/openusage/pull/740
+- Pricing overhaul: https://github.com/robinebers/openusage/pull/827 (merged)
 - Current pricing doc: `docs/pricing.md`  
-- Shared spend tiles: `Sources/OpenUsage/Providers/SpendTileMapper.swift`  
-- Cursor CSV + day aggregation (model still dropped): `Sources/OpenUsage/Providers/Cursor/CursorUsageMapper.swift` (`appendSpendLines`)
+- Shared spend tiles: `Sources/Runway/Providers/SpendTileMapper.swift`
+- Cursor CSV + day aggregation (model still dropped): `Sources/Runway/Providers/Cursor/CursorUsageMapper.swift` (`appendSpendLines`)
