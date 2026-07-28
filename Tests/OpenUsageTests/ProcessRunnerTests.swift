@@ -65,4 +65,58 @@ final class ProcessRunnerTests: XCTestCase {
         }
         wait(for: [stopped], timeout: 1.1)
     }
+
+    /// A descendant can explicitly leave the process group while its direct parent is still running.
+    /// Timeout cleanup must retain parent-child traversal for that case instead of relying on the root
+    /// process group alone.
+    func testTimeoutTerminatesDescendantThatCreatesOwnSession() throws {
+        let runner = SystemProcessRunner()
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openusage-process-runner-session-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        let script = """
+        use POSIX ();
+        my $child = fork();
+        die "fork failed" unless defined $child;
+        if ($child == 0) {
+            my $session = POSIX::setsid();
+            die "setsid failed" unless defined $session && $session == $$;
+            open(my $file, ">", $ENV{"OPENUSAGE_DESCENDANT_PID_PATH"}) or die "open failed";
+            print $file "$$\\n";
+            close($file);
+            sleep 30;
+            exit 0;
+        }
+        sleep 30;
+        """
+
+        XCTAssertThrowsError(try runner.run(
+            executable: "/usr/bin/perl",
+            arguments: ["-e", script],
+            environment: ["OPENUSAGE_DESCENDANT_PID_PATH": pidFile.path],
+            timeout: 0.2
+        )) { error in
+            XCTAssertEqual(
+                error as? ProcessRunnerError,
+                .timedOut(executable: "/usr/bin/perl", timeout: 0.2)
+            )
+        }
+
+        let descendantPID = try XCTUnwrap(
+            Int32(String(contentsOf: pidFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines))
+        )
+        defer { kill(descendantPID, SIGKILL) }
+
+        let stopped = expectation(description: "session descendant terminated")
+        DispatchQueue.global().async {
+            for _ in 0 ..< 100 where kill(descendantPID, 0) == 0 {
+                usleep(10_000)
+            }
+            if kill(descendantPID, 0) != 0, errno == ESRCH {
+                stopped.fulfill()
+            }
+        }
+        wait(for: [stopped], timeout: 1.1)
+    }
 }

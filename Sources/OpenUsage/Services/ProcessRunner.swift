@@ -76,9 +76,15 @@ struct SystemProcessRunner: ProcessRunning {
         let deadline = DispatchTime.now() + timeout
 
         if exited.wait(timeout: deadline) == .timedOut {
+            // Preserve the previous process-tree cleanup for descendants that explicitly left the
+            // root group with setsid()/setpgid(). The root is still alive here, so its child links
+            // are available; collect them before sending any signal that could reparent them.
+            let descendantPIDs = descendantPIDs(of: process.processIdentifier)
+            signalProcesses(descendantPIDs, signal: SIGTERM)
             terminateProcessGroup(processGroupID, signal: SIGTERM)
             process.terminate()
             _ = exited.wait(timeout: .now() + 0.1)
+            signalProcesses(descendantPIDs, signal: SIGKILL)
             terminateProcessGroup(processGroupID, signal: SIGKILL)
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
@@ -104,6 +110,35 @@ struct SystemProcessRunner: ProcessRunning {
 
     private func terminateProcessGroup(_ processGroupID: pid_t, signal: Int32) {
         kill(-processGroupID, signal)
+    }
+
+    private func descendantPIDs(of rootPID: pid_t) -> [pid_t] {
+        let children = childPIDs(of: rootPID)
+        return children + children.flatMap(descendantPIDs(of:))
+    }
+
+    private func childPIDs(of parentPID: pid_t) -> [pid_t] {
+        var capacity = 8
+        while true {
+            var pids = [pid_t](repeating: 0, count: capacity)
+            let count = proc_listchildpids(
+                parentPID,
+                &pids,
+                Int32(MemoryLayout<pid_t>.stride * pids.count)
+            )
+            guard count > 0 else { return [] }
+            guard count < capacity else {
+                capacity *= 2
+                continue
+            }
+            return Array(pids.prefix(Int(count)))
+        }
+    }
+
+    private func signalProcesses(_ processIDs: [pid_t], signal: Int32) {
+        for processID in processIDs.reversed() {
+            kill(processID, signal)
+        }
     }
 
     private func cancelDrains(_ drains: [PipeDrain], group: DispatchGroup) {
