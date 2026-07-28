@@ -62,7 +62,8 @@ and history for if it returns. Turn a card off like any provider in Customize.
 
 An ambient `CLAUDE_CODE_OAUTH_TOKEN` cannot identify its account. When a separate account card is also
 discovered, default-home local spend remains available under a clearly labeled
-"Claude — Environment Token" card.
+"Claude — Environment Token" card. A leftover Claude state file does not lend an old account name to
+that token-only card.
 
 In the [CLI](../cli.md) and [local API](../local-http-api.md), extra cards appear under ids like
 `claude@ab12cd34`; requesting `claude` returns every Claude card.

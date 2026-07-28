@@ -38,6 +38,10 @@ same id the account's card carries on any Mac it's signed in on (the synced file
 names to label it with). The moment you log that account in locally, its card appears — under that
 same id — with the full cross-machine history already attached.
 
+If a synced file cannot identify the account behind a main Claude or Codex card, Runway keeps its
+spend in one remote family slice instead of attaching it to a different local account or dropping it
+from Total Spend.
+
 Macs running an older Runway read their own format but report this Mac's newer file as "update
 Runway" — update both sides to sync multi-account machines.
 

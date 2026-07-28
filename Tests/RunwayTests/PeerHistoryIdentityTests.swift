@@ -95,6 +95,24 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
     }
 
+    func testIdentitylessBarePeerBecomesRemoteOnlyWhenNoBareLocalCardExists() {
+        let doc = makeDocument(
+            deviceName: "Mac mini",
+            providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
+            identities: nil
+        )
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [doc],
+            localCardIDs: ["claude@f15456b0"],
+            localIdentityByCardID: ["claude@f15456b0": maxKey]
+        )
+
+        XCTAssertTrue(remapped.histories.isEmpty)
+        XCTAssertEqual(remapped.remoteOnly.count, 1)
+        XCTAssertEqual(remapped.remoteOnly.first?.family, "claude")
+        XCTAssertEqual(remapped.remoteOnly.first?.cardID, "claude")
+    }
+
     func testRemapLegacyV1DocumentKeepsSameCardMerge() {
         let v1 = UsageHistoryDocument(
             schema: UsageHistoryDocument.legacySchemaV1,

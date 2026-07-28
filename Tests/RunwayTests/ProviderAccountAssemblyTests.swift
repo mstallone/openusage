@@ -310,7 +310,10 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         store.rename(cardID: "claude", to: "Former Account")
         let observer = DefaultAccountObserver(
             environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"]),
-            files: FakeFiles([:]),
+            files: FakeFiles([
+                "/Users/dev/.claude.json":
+                    #"{"oauthAccount": {"accountUuid": "FORMER-DEFAULT", "emailAddress": "former@example.com"}}"#,
+            ]),
             keychain: FakeKeychain(nil),
             homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
         )

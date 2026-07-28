@@ -111,6 +111,30 @@ final class DefaultAccountObserverTests: XCTestCase {
         XCTAssertEqual(observer.observeClaude(), .unresolved(reason: "identity file present but names no account"))
     }
 
+    func testClaudeAmbientTokenDoesNotInheritAStateFileWithoutStoredCredentials() {
+        let observer = makeObserver(
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+            files: ["/Users/dev/.claude.json": claudeStateJSON()]
+        )
+
+        XCTAssertEqual(observer.observeClaude(), .absent)
+    }
+
+    func testClaudeStoredCredentialKeepsStateFileIdentityAheadOfAmbientToken() {
+        let observer = makeObserver(
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+            files: [
+                "/Users/dev/.claude.json": claudeStateJSON(),
+                "/Users/dev/.claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stored-token"}}"#,
+            ]
+        )
+
+        XCTAssertEqual(
+            observer.observeClaude(),
+            .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude")
+        )
+    }
+
     // MARK: - Codex
 
     private func codexAuthJSON(accountID: String? = "codex-acct-1", idToken: String? = nil) -> String {

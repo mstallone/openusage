@@ -98,6 +98,14 @@ struct DefaultAccountObserver: Sendable {
         let identityPath = anchor == expandTilde("~/.claude")
             ? expandTilde("~/.claude.json")
             : anchor + "/.claude.json"
+        // Attribute the state-file identity only when an account-bound credential footprint backs
+        // it. An ambient token carries no identity and can outlive an old state file, so the state
+        // file alone must never lend that token a stale account name.
+        let hasCredentialFile = files.exists(anchor + "/.credentials.json")
+        let keychainPresence = ClaudeAuthStore.standardKeychainServiceCandidates(
+            environment: environment,
+            configDirOverride: configDirOverride
+        ).map { keychain.genericPasswordExists(service: $0) }
         let text: String?
         do {
             text = try files.readTextIfPresent(identityPath)
@@ -107,11 +115,7 @@ struct DefaultAccountObserver: Sendable {
         guard let text else {
             // No state file. File or keychain credentials without it can't be attributed. Probe only
             // keychain attributes on this launch path, never the secret (which could prompt).
-            let keychainPresence = ClaudeAuthStore.standardKeychainServiceCandidates(
-                environment: environment,
-                configDirOverride: configDirOverride
-            ).map { keychain.genericPasswordExists(service: $0) }
-            if files.exists(anchor + "/.credentials.json") || keychainPresence.contains(true) {
+            if hasCredentialFile || keychainPresence.contains(true) {
                 return .unresolved(reason: "credentials present but no identity file")
             }
             if keychainPresence.contains(where: { $0 == nil }) {
@@ -124,6 +128,12 @@ struct DefaultAccountObserver: Sendable {
               let key = Self.claudeIdentityKey(account)
         else {
             return .unresolved(reason: "identity file present but names no account")
+        }
+        if hasAmbientClaudeToken, !hasCredentialFile, !keychainPresence.contains(true) {
+            if keychainPresence.contains(where: { $0 == nil }) {
+                return .unresolved(reason: "keychain credential presence unverifiable")
+            }
+            return .absent
         }
         return .resolved(identityKey: key, label: Self.claudeIdentityLabel(account), anchor: anchor)
     }
