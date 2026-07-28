@@ -224,7 +224,6 @@ final class CursorEnterpriseProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(snapshot.plan, "Enterprise")
         XCTAssertEqual(progress(snapshot.lines, "Total usage")?.used, 37)
         XCTAssertEqual(progress(snapshot.lines, "Total usage")?.limit, 750)

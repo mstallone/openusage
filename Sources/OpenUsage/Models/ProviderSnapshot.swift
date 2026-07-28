@@ -15,14 +15,10 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
     /// history is combined only in the in-memory rendered view and is never written into the cache.
     var usageHistory: ProviderUsageHistory?
     /// A soft, non-blocking notice carried on a *successful* snapshot — e.g. Claude's "Re-login for live
-    /// usage" when the saved login lacks the `user:profile` scope. Distinct from `errorCategory` (which is
-    /// only on error snapshots): the refresh succeeded and partial data (spend tiles) still loads, so this
-    /// surfaces as the provider header's amber triangle rather than blanking the provider. Cached with the
-    /// snapshot; cleared on the next refresh when the condition resolves.
+    /// usage" when the saved login lacks the `user:profile` scope. The refresh succeeded and partial data
+    /// (spend tiles) still loads, so this surfaces as the provider header's amber triangle rather than
+    /// blanking the provider. Cached with the snapshot; cleared on the next refresh when the condition resolves.
     var warning: String?
-    /// Set only on error snapshots: a stable, non-PII bucket for the failure, read by telemetry on the
-    /// failure path. Always `nil` on success (and error snapshots aren't cached), so it never persists.
-    var errorCategory: ErrorCategory?
 
     init(
         providerID: String,
@@ -31,8 +27,7 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         lines: [MetricLine],
         refreshedAt: Date = Date(),
         usageHistory: ProviderUsageHistory? = nil,
-        warning: String? = nil,
-        errorCategory: ErrorCategory? = nil
+        warning: String? = nil
     ) {
         self.providerID = providerID
         self.displayName = displayName
@@ -41,7 +36,6 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         self.refreshedAt = refreshedAt
         self.usageHistory = usageHistory
         self.warning = warning
-        self.errorCategory = errorCategory
     }
 
     func line(label: String) -> MetricLine? {
@@ -70,24 +64,17 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         )
     }
 
-    /// Build an error snapshot straight from a caught error: the badge text stays the error's
-    /// user-facing `localizedDescription` (UI copy is unchanged), and the telemetry category is derived
-    /// from the error's `CategorizedError` conformance (falling back to `.other` for anything that
-    /// doesn't classify itself). Preferred over `error(provider:message:)` wherever an `Error` is in hand.
+    /// Build an error snapshot straight from a caught error, preserving its user-facing
+    /// `localizedDescription`. Preferred over `error(provider:message:)` wherever an `Error` is in hand.
     static func error(provider: Provider, error: Error) -> ProviderSnapshot {
-        Self.error(
-            provider: provider,
-            message: error.localizedDescription,
-            category: (error as? CategorizedError)?.errorCategory ?? .other
-        )
+        Self.error(provider: provider, message: error.localizedDescription)
     }
 
-    static func error(provider: Provider, message: String, category: ErrorCategory? = nil) -> ProviderSnapshot {
+    static func error(provider: Provider, message: String) -> ProviderSnapshot {
         ProviderSnapshot(
             providerID: provider.id,
             displayName: provider.displayName,
-            lines: [.badge(label: MetricLine.errorBadgeLabel, text: message, colorHex: "#EF4444")],
-            errorCategory: category
+            lines: [.badge(label: MetricLine.errorBadgeLabel, text: message, colorHex: "#EF4444")]
         )
     }
 }

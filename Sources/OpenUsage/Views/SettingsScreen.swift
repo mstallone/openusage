@@ -170,21 +170,6 @@ struct SettingsScreen: View {
                         .padding(.horizontal, 12)
                         .padding(.bottom, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    row("Share Anonymous Usage") {
-                        Toggle("", isOn: Binding(
-                            get: { container.telemetry.isEnabled },
-                            set: { container.telemetry.setEnabled($0) }
-                        ))
-                        .settingsSwitchStyle()
-                    }
-                    // Plain-language disclosure of exactly what leaves the machine — coarse counts and
-                    // error types only, never account details or usage values.
-                    Text("Shares anonymous usage counts and error types to help improve OpenUsage. No account details, credentials, or usage values are sent.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             if mountStage >= 2 {
