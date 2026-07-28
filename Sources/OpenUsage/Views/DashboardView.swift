@@ -259,10 +259,11 @@ struct DashboardView: View {
         dashboardScrollPosition.scrollTo(edge: .top)
     }
 
-    /// The popover keeps exactly one live screen tree. On a switch the destination enters from the
-    /// direction implied by `slideRank`, but the outgoing screen is removed immediately instead of
-    /// remaining mounted beside it. Settings and the dashboard are both substantial trees; the former
-    /// two-page pager made SwiftUI update, measure, and draw both throughout the window morph.
+    /// The popover keeps exactly one live screen tree. On a switch the destination's scrolling body
+    /// enters from the direction implied by `slideRank`, but the fixed chrome stays in place and the
+    /// outgoing screen is removed immediately instead of remaining mounted beside it. Settings and the
+    /// dashboard are both substantial trees; the former two-page pager made SwiftUI update, measure,
+    /// and draw both throughout the window morph.
     ///
     /// Why an offset and not a SwiftUI `.transition`: the cards' fill is translucent `.quaternary`
     /// glass. Any transition carrying `.opacity` composites a screen into a transparency layer where
@@ -275,7 +276,6 @@ struct DashboardView: View {
         screenView(layout.screen)
             .frame(width: Self.popoverWidth)
             .frame(maxHeight: .infinity, alignment: .top)
-            .offset(x: screenEntranceOffset)
         .animation(nil, value: layout.screenSlideID)
     }
 
@@ -295,11 +295,14 @@ struct DashboardView: View {
         return direction * Self.screenEntranceDistance * (1 - progress)
     }
 
-    /// Builds the one mounted screen: its scroll body wrapped in pinned chrome. The soft scroll-edge
-    /// styles and bars attach to the screen's `PopoverScrollView`, the documented place for them.
+    /// Builds the one mounted screen: its entering scroll body wrapped in stationary pinned chrome.
+    /// Applying the offset before the pinned modifiers keeps the top bar and footer fixed while the
+    /// destination content moves. The soft scroll-edge styles and bars still attach to the screen's
+    /// `PopoverScrollView`, the documented place for them.
     @ViewBuilder
     private func screenView(_ screen: PopoverScreen) -> some View {
         scrollBody(for: screen)
+            .offset(x: screenEntranceOffset)
             // Auto-fit: the scroll content publishes its intrinsic height (invariant to the viewport),
             // which we sum with the chrome into this screen's ideal window height.
             .onPreferenceChange(ScrollContentHeightKey.self) { height in
