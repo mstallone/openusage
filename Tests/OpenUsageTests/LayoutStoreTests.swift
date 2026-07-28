@@ -1146,6 +1146,28 @@ final class LayoutStoreTests: XCTestCase {
         XCTAssertEqual(group?.hasExpandedMetrics, true)
     }
 
+    func testDisplayGroupsChecksEachProviderEnablementOnce() {
+        var checksByProvider: [String: Int] = [:]
+        let store = LayoutStore(
+            registry: .mock,
+            defaults: makeDefaults("DisplayProjectionEnablement"),
+            storageKey: "layout",
+            isProviderEnabled: { providerID in
+                checksByProvider[providerID, default: 0] += 1
+                return true
+            }
+        )
+        checksByProvider.removeAll()
+
+        _ = store.displayGroups
+
+        XCTAssertEqual(Set(checksByProvider.keys), Set(WidgetRegistry.mock.providers.map(\.id)))
+        XCTAssertTrue(
+            checksByProvider.values.allSatisfy { $0 == 1 },
+            "building dashboard groups should check enablement once per provider, not once per widget"
+        )
+    }
+
     func testProviderWithOnlyExpandedMetricsStillShowsRows() {
         // Only session + weekly enabled, both primary to start, so expanding both makes the whole
         // provider expanded — independent of DefaultLayout's seeding.

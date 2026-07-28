@@ -54,13 +54,28 @@ extension LayoutStore {
     /// provider's metrics kept in the provider's custom metric order. Drives the grouped dashboard list; providers with
     /// no visible metric are dropped so the dashboard only shows groups that have something to show.
     var displayGroups: [ProviderGroup] {
-        orderedProviders().compactMap { provider in
-            let widgetsByDescriptor = Dictionary(
-                visiblePlaced
-                    .filter { providerID(of: $0) == provider.id }
-                    .map { ($0.descriptorID, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
+        let providers = orderedProviders().filter { isProviderEnabled($0.id) }
+        let enabledProviderIDs = Set(providers.map(\.id))
+        var widgetsByProvider: [String: [String: PlacedWidget]] = [:]
+
+        // Build the provider/descriptor lookup once. The previous implementation recomputed
+        // `visiblePlaced`, scanned every placed widget, and rebuilt a dictionary once per provider.
+        // Dashboard body evaluation happens frequently during window morphs, so that O(P × W) work
+        // became a transition hotspot even though the underlying layout had not changed.
+        for widget in placed {
+            guard
+                let providerID = providerID(of: widget),
+                enabledProviderIDs.contains(providerID)
+            else { continue }
+            // Preserve Dictionary(uniquingKeysWith: { first, _ in first }) semantics for any damaged
+            // persisted layout that happens to contain the same descriptor more than once.
+            if widgetsByProvider[providerID]?[widget.descriptorID] == nil {
+                widgetsByProvider[providerID, default: [:]][widget.descriptorID] = widget
+            }
+        }
+
+        return providers.compactMap { provider in
+            let widgetsByDescriptor = widgetsByProvider[provider.id] ?? [:]
             let widgets = metricOrder(for: provider.id).compactMap { widgetsByDescriptor[$0] }
             guard !widgets.isEmpty else { return nil }
             let alwaysShown = widgets.filter { !expandedMetricIDs.contains($0.descriptorID) }

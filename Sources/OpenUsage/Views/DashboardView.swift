@@ -5,16 +5,18 @@ import SwiftUI
 /// chrome on Dashboard and Settings. Customize uses its top bar and scrolling content without footer
 /// controls.
 ///
-/// The chrome is fixed: it's keyed off `layout.screen` and applied uniformly in `screenView`, so on a
-/// screen switch only the content slides while the footer and top bar stay put. Each screen's scroll
+/// The chrome is fixed: it's keyed off `layout.screen` and applied uniformly in `screenView`. A screen
+/// switch mounts only its destination and gives it a short directional entrance; keeping the outgoing
+/// tree alive for a full-width pager doubled the expensive dashboard/Settings layouts during every
+/// transition. Each screen's scroll
 /// content underlaps the footer with the native soft scroll-edge fade (`softBottomScrollEdge` →
 /// `.scrollEdgeEffectStyle(.soft)`, macOS 26+) — Apple's blurred boundary, not a custom gradient or a
 /// material bar. On macOS 15 the footer/top bar still pin via `safeAreaInset`, just without the blur
 /// (content scrolls flush). The panel **auto-fits its content**: each screen publishes its intrinsic
 /// height (`ScrollContentHeightKey` + the measured footer), and the host window is driven to that on
-/// SwiftUI's animation clock (`drivesPanelHeight` / `PanelHeightModifier`) — so a screen switch morphs
-/// the window height in lockstep with the slide (one spring), and the scroll views only take over once
-/// content exceeds the screen-height cap.
+/// SwiftUI's animation clock (`drivesPanelHeight` / `PanelHeightModifier`). The destination is the only
+/// live screen tree during a switch, and its height morph rides the same spring as its entrance. Scroll
+/// views take over once content exceeds the screen-height cap.
 struct DashboardView: View {
     @Environment(AppContainer.self) private var container
     @Environment(LayoutStore.self) private var layout
@@ -24,8 +26,8 @@ struct DashboardView: View {
     @State private var reorderLift: ReorderLift?
     /// The panel height SwiftUI drives — the single animation clock. `PanelHeightModifier` follows it
     /// frame-by-frame onto the AppKit panel, so the window resize rides the same spring as the screen
-    /// slide (no second AppKit animation to fight). 0 means "not established yet": the panel keeps the
-    /// size the controller opened it at until the first measurement lands, then we snap un-animated.
+    /// entrance. 0 means "not established yet": the panel keeps the size the controller opened it at
+    /// until the first measurement lands, then we snap un-animated.
     @State private var animatedHeight: CGFloat = 0
     /// Whether `animatedHeight` has been seeded for this open. Until then the first measurement (or a
     /// reopen) establishes it without animation; afterwards, changes spring.
@@ -60,6 +62,9 @@ struct DashboardView: View {
     private static let popoverWidth: CGFloat = 320
     /// Fixed height of the Customize / Settings back nav bar — the bar pins itself to exactly this height.
     private static let topBarHeight: CGFloat = 44
+    /// A compact directional entrance communicates hierarchy without keeping a second full screen tree
+    /// alive. The opaque popover surface fills the small uncovered strip while the page settles.
+    private static let screenEntranceDistance: CGFloat = 36
 
     var body: some View {
         modeBody
@@ -75,9 +80,8 @@ struct DashboardView: View {
             // and scroll content all sit on it; separation from the footer comes from the native soft
             // scroll-edge fade (not a distinct bar).
             .background(PopoverSurface())
-            // Drive the host panel's height on SwiftUI's clock. At the body root, OUTSIDE `modeBody`'s
-            // `.animation(nil, value: layout.screenSlideID)`, so the height rides the active spring (the
-            // slide's, during a switch) instead of being snapped.
+            // Drive the host panel's height on SwiftUI's clock. At the body root, outside `modeBody`'s
+            // structural-animation suppression, so it can ride the active transition spring.
             .drivesPanelHeight(animatedHeight)
             .overlay(alignment: .topLeading) {
                 if let reorderLift {
@@ -167,25 +171,19 @@ struct DashboardView: View {
             .onChange(of: layout.screen == .customize && layout.customizeProviderID == nil) { _, isL1Visible in
                 if !isL1Visible { isPresentingResetAllConfirm = false }
             }
-            // Each screen switch: pin to the outgoing screen for one render (`slideProgress = 0`),
-            // then spring to the incoming one on the next runloop tick. Deferring the animation one
-            // tick is what makes it animate — setting 0 then 1 in the same closure collapses to a
-            // no-op (SwiftUI animates from the last *committed* value). `slideProgress` drives the
-            // page offset so the screens slide between modes on one spring.
+            // Each screen switch mounts the destination at its directional entrance
+            // (`slideProgress = 0`), then springs it to rest on the next runloop tick. Deferring the
+            // animation one tick is what makes it animate — setting 0 then 1 in the same closure
+            // collapses to a no-op (SwiftUI animates from the last *committed* value).
             .onChange(of: layout.screenSlideID) { _, id in
                 guard id != 0 else { return }
                 slideProgress = 0
                 animatedSlideID = id
                 let destination = layout.screen
                 Task { @MainActor in
-                    // Co-animate the slide and the height on ONE spring → the coordinated morph: the
-                    // panel grows/shrinks to the destination's size as that screen slides in. The
-                    // destination is usually mounted+measured by now (it mounted on the slideProgress=0
-                    // render), so we morph to its ideal. If it ISN'T measured yet and the height was
-                    // never established (animatedHeight still the 0 sentinel — e.g. opening Settings
-                    // straight from the status-item menu), we must NOT morph to a clamped zero, which
-                    // floors to minPanelHeight and wrongly shrinks the panel: leave the height alone and
-                    // let the completion / measurement establish it once a real ideal lands.
+                    // Co-animate the entrance and height on one spring. The destination is usually
+                    // mounted and measured by now; if it is not, keep the current opening height and
+                    // establish the real target once its measurement lands.
                     let coTarget: CGFloat? = heightCoordinator.target(for: destination)
                         ?? (animatedHeight > 0 ? animatedHeight : nil)
                     if coTarget != nil { didEstablishHeight = true }
@@ -196,7 +194,7 @@ struct DashboardView: View {
                         guard let target = heightCoordinator.target(for: layout.screen) else { return }
                         if !didEstablishHeight {
                             didEstablishHeight = true
-                            animatedHeight = target            // un-animated establish — never grow from 0
+                            animatedHeight = target
                         } else if abs(target - animatedHeight) > 1 {
                             withAnimation(Motion.spring) { animatedHeight = target }
                         }
@@ -261,33 +259,23 @@ struct DashboardView: View {
         dashboardScrollPosition.scrollTo(edge: .top)
     }
 
-    /// The popover's screens as a horizontal pager. At rest only the current screen is mounted (one
-    /// page at offset 0), so drag-reorder's coordinate math and the footer's scroll-edge underlap are
-    /// exactly what they'd be with the screen rendered alone. During a switch the outgoing and incoming
-    /// screens are both mounted, ordered left-to-right by `slideRank`, and slid by a pure offset — while
-    /// the chrome (top bar + footer), keyed off `layout.screen` in `screenView`, is identical on both
-    /// pages, so it stays visually fixed while only the content slides beneath it.
+    /// The popover keeps exactly one live screen tree. On a switch the destination's scrolling body
+    /// enters from the direction implied by `slideRank`, but the fixed chrome stays in place and the
+    /// outgoing screen is removed immediately instead of remaining mounted beside it. Settings and the
+    /// dashboard are both substantial trees; the former two-page pager made SwiftUI update, measure,
+    /// and draw both throughout the window morph.
     ///
     /// Why an offset and not a SwiftUI `.transition`: the cards' fill is translucent `.quaternary`
     /// glass. Any transition carrying `.opacity` composites a screen into a transparency layer where
     /// that material has no vibrant backdrop to sample and resolves to its opaque near-white base — a
     /// white flash across the grey cards (the regression this removes; it has no clean SwiftUI fix).
-    /// A pure offset never touches opacity, so the glass keeps sampling the live popover backdrop. The
-    /// pages are a `ForEach` keyed by screen, so the incoming page keeps its identity (and scroll
-    /// position) when the slide collapses back to one page. `.animation(nil, value:)` stops the
-    /// one-frame structural re-layout at the start of a switch from inheriting the footer buttons'
-    /// mode-switch animation — only `slideProgress` animates the offset.
+    /// A pure offset never touches opacity, so the glass keeps sampling the live popover backdrop.
+    /// `.animation(nil, value:)` stops the structural screen replacement from inheriting the caller's
+    /// mode-switch animation — only `slideProgress` animates the destination's offset.
     private var modeBody: some View {
-        let pages = slidePages
-        return HStack(alignment: .top, spacing: 0) {
-            ForEach(pages, id: \.self) { screen in
-                screenView(screen)
-                    .frame(width: Self.popoverWidth)
-                    .frame(maxHeight: .infinity, alignment: .top)
-            }
-        }
-        .frame(width: Self.popoverWidth, alignment: .leading)
-        .offset(x: slideOffset(pages))
+        screenView(layout.screen)
+            .frame(width: Self.popoverWidth)
+            .frame(maxHeight: .infinity, alignment: .top)
         .animation(nil, value: layout.screenSlideID)
     }
 
@@ -297,39 +285,26 @@ struct DashboardView: View {
             && (layout.screenSlideID != animatedSlideID || slideProgress < 1)
     }
 
-    /// One page at rest (the current screen); the two involved screens in left-to-right rank order
-    /// while a switch animates.
-    private var slidePages: [PopoverScreen] {
-        guard isSliding else { return [layout.screen] }
-        let from = layout.screenSlideFrom
-        let to = layout.screen
-        return from.slideRank < to.slideRank ? [from, to] : [to, from]
-    }
-
-    /// Horizontal offset that places the outgoing screen at `slideProgress == 0` and the incoming one
-    /// at `1`. Pinned to the outgoing screen until this transition's animation has actually started, so
-    /// the first frame after a switch shows the screen being left — never a flash of the destination.
-    private func slideOffset(_ pages: [PopoverScreen]) -> CGFloat {
-        guard isSliding, pages.count > 1 else { return 0 }
-        let fromOffset = -CGFloat(pages.firstIndex(of: layout.screenSlideFrom) ?? 0) * Self.popoverWidth
-        let toOffset = -CGFloat(pages.firstIndex(of: layout.screen) ?? 0) * Self.popoverWidth
+    /// Starts the newly-mounted destination a short distance toward the edge it came from, then settles
+    /// it at zero. Until this transition's state has committed, progress remains zero so the first frame
+    /// cannot flash at its final position.
+    private var screenEntranceOffset: CGFloat {
+        guard isSliding else { return 0 }
+        let direction: CGFloat = layout.screenSlideFrom.slideRank < layout.screen.slideRank ? 1 : -1
         let progress = animatedSlideID == layout.screenSlideID ? slideProgress : 0
-        return fromOffset + progress * (toOffset - fromOffset)
+        return direction * Self.screenEntranceDistance * (1 - progress)
     }
 
-    /// Builds one screen: its scroll body wrapped in the fixed chrome. The chrome (top bar + footer)
-    /// is keyed off `layout.screen` — the *destination* — not the per-page `screen`, so during a switch
-    /// both mounted pages render identical chrome pinned to the
-    /// same edges. The chrome therefore stays put while only the content offsets beneath it (the
-    /// "one fixed footer / top bar doesn't slide" behaviour). The soft scroll-edge styles and the
-    /// pinned bars attach to each page's scroll view (`PopoverScrollView`), the documented place for
-    /// them. Identity stays stable across the slide via the `ForEach` key in `modeBody`.
+    /// Builds the one mounted screen: its entering scroll body wrapped in stationary pinned chrome.
+    /// Applying the offset before the pinned modifiers keeps the top bar and footer fixed while the
+    /// destination content moves. The soft scroll-edge styles and bars still attach to the screen's
+    /// `PopoverScrollView`, the documented place for them.
     @ViewBuilder
     private func screenView(_ screen: PopoverScreen) -> some View {
         scrollBody(for: screen)
+            .offset(x: screenEntranceOffset)
             // Auto-fit: the scroll content publishes its intrinsic height (invariant to the viewport),
-            // which we sum with the chrome into this screen's ideal window height. Keyed by the per-page
-            // `screen`, so during a slide each mounted page measures its own content.
+            // which we sum with the chrome into this screen's ideal window height.
             .onPreferenceChange(ScrollContentHeightKey.self) { height in
                 heightCoordinator.setScrollContent(height, for: screen)
             }
@@ -359,8 +334,7 @@ struct DashboardView: View {
             }
     }
 
-    /// The scrolling content for a screen, without chrome — this is the part that slides during a
-    /// switch (its `screen` is the per-page one, so each mounted page shows its own content).
+    /// The scrolling content for the current screen, without chrome.
     @ViewBuilder
     private func scrollBody(for screen: PopoverScreen) -> some View {
         switch screen {

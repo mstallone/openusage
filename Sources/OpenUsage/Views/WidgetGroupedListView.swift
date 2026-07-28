@@ -14,6 +14,7 @@ struct WidgetGroupedListView: View {
     @Environment(LayoutStore.self) private var layout
     @Environment(WidgetDataStore.self) private var dataStore
     @Environment(\.colorScheme) private var colorScheme
+    let groups: [ProviderGroup]
     let reorderSpaceName: String
     @Binding var reorderLift: ReorderLift?
 
@@ -29,13 +30,13 @@ struct WidgetGroupedListView: View {
         // Provider-section spacing is noticeably wider than the in-card row rhythm (so groups
         // still read as groups); the exact step comes from the density setting.
         VStack(alignment: .leading, spacing: density.sectionSpacing) {
-            ForEach(layout.displayGroups) { group in
+            ForEach(groups) { group in
                 section(group)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onPreferenceChange(ReorderFramePreferenceKey.self) { rowFrames = $0 }
-        .animation(Motion.spring, value: layout.displayGroups.map(\.provider.id))
+        .animation(Motion.spring, value: groups.map(\.provider.id))
         .alert("Rename Card", isPresented: isRenamePresented) {
             TextField("Name", text: $renameDraft)
             Button("Rename") {
@@ -326,7 +327,7 @@ struct WidgetGroupedListView: View {
             active: $activeProviderID,
             lift: $reorderLift,
             makeLift: { makeProviderLift(for: group, value: $0) },
-            orderedIDs: { layout.displayGroups.map(\.provider.id) },
+            orderedIDs: { groups.map(\.provider.id) },
             reorder: { layout.reorderProvider(dragged: group.provider.id, target: $0) }
         )
     }
@@ -359,7 +360,7 @@ struct WidgetGroupedListView: View {
     }
 
     private func metricTargetIDs(for providerID: String) -> [String] {
-        guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
+        guard let group = groups.first(where: { $0.provider.id == providerID }) else {
             return []
         }
         let alwaysShown = group.alwaysShownWidgets.compactMap { layout.descriptor(for: $0)?.id }
