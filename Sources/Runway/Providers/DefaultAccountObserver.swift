@@ -101,7 +101,16 @@ struct DefaultAccountObserver: Sendable {
         // Attribute the state-file identity only when an account-bound credential footprint backs
         // it. An ambient token carries no identity and can outlive an old state file, so the state
         // file alone must never lend that token a stale account name.
-        let hasCredentialFile = files.exists(anchor + "/.credentials.json")
+        let credentialFileUsable: Bool?
+        do {
+            if let text = try files.readTextIfPresent(anchor + "/.credentials.json") {
+                credentialFileUsable = ClaudeAuthStore.parseUsableCredentials(text) != nil
+            } else {
+                credentialFileUsable = false
+            }
+        } catch {
+            credentialFileUsable = nil
+        }
         let keychainPresence = ClaudeAuthStore.standardKeychainServiceCandidates(
             environment: environment,
             configDirOverride: configDirOverride
@@ -115,11 +124,11 @@ struct DefaultAccountObserver: Sendable {
         guard let text else {
             // No state file. File or keychain credentials without it can't be attributed. Probe only
             // keychain attributes on this launch path, never the secret (which could prompt).
-            if hasCredentialFile || keychainPresence.contains(true) {
+            if credentialFileUsable == true || keychainPresence.contains(true) {
                 return .unresolved(reason: "credentials present but no identity file")
             }
-            if keychainPresence.contains(where: { $0 == nil }) {
-                return .unresolved(reason: "keychain credential presence unverifiable")
+            if credentialFileUsable == nil || keychainPresence.contains(where: { $0 == nil }) {
+                return .unresolved(reason: "credential presence unverifiable")
             }
             return .absent
         }
@@ -129,9 +138,9 @@ struct DefaultAccountObserver: Sendable {
         else {
             return .unresolved(reason: "identity file present but names no account")
         }
-        if hasAmbientClaudeToken, !hasCredentialFile, !keychainPresence.contains(true) {
-            if keychainPresence.contains(where: { $0 == nil }) {
-                return .unresolved(reason: "keychain credential presence unverifiable")
+        if hasAmbientClaudeToken, credentialFileUsable != true, !keychainPresence.contains(true) {
+            if credentialFileUsable == nil || keychainPresence.contains(where: { $0 == nil }) {
+                return .unresolved(reason: "credential presence unverifiable")
             }
             return .absent
         }

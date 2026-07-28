@@ -85,7 +85,8 @@ final class DefaultAccountObserverTests: XCTestCase {
 
     func testClaudeCredentialsWithoutStateFileAreUnresolvedNotAbsent() {
         let observer = makeObserver(files: [
-            "/Users/dev/.claude/.credentials.json": "{}",
+            "/Users/dev/.claude/.credentials.json":
+                #"{"claudeAiOauth":{"accessToken":"file-token"}}"#,
         ])
 
         XCTAssertEqual(observer.observeClaude(), .unresolved(reason: "credentials present but no identity file"))
@@ -133,6 +134,24 @@ final class DefaultAccountObserverTests: XCTestCase {
             observer.observeClaude(),
             .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude")
         )
+    }
+
+    func testClaudeAmbientTokenDoesNotInheritStateFileFromUnusableCredentialFiles() {
+        for credential in [
+            "{ malformed",
+            #"{"claudeAiOauth":{}}"#,
+            #"{"claudeAiOauth":{"accessToken":"   "}}"#,
+        ] {
+            let observer = makeObserver(
+                environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+                files: [
+                    "/Users/dev/.claude.json": claudeStateJSON(),
+                    "/Users/dev/.claude/.credentials.json": credential,
+                ]
+            )
+
+            XCTAssertEqual(observer.observeClaude(), .absent)
+        }
     }
 
     // MARK: - Codex

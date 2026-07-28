@@ -313,6 +313,8 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             files: FakeFiles([
                 "/Users/dev/.claude.json":
                     #"{"oauthAccount": {"accountUuid": "FORMER-DEFAULT", "emailAddress": "former@example.com"}}"#,
+                "/Users/dev/.claude/.credentials.json":
+                    #"{"claudeAiOauth": {}}"#,
             ]),
             keychain: FakeKeychain(nil),
             homeDirectory: { URL(fileURLWithPath: "/Users/dev") }

@@ -483,6 +483,17 @@ struct ClaudeAuthStore: Sendable {
         ProviderParse.decodeJSONWithHexFallback(text, as: ClaudeCredentialsFile.self)
     }
 
+    /// The single file/keychain usability rule: the payload must parse and carry a nonblank access
+    /// token. Discovery and identity attribution use this too, so an unusable leftover credential
+    /// can never name an ambient-token runtime that refresh itself would reject.
+    static func parseUsableCredentials(_ text: String) -> ClaudeCredentialsFile? {
+        guard let parsed = parseCredentials(text),
+              let token = parsed.claudeAiOauth?.accessToken,
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return parsed
+    }
+
     /// Keychain and file credentials in fixed keychain-before-file order. The keychain is Claude Code's
     /// source of truth on macOS — recent versions keep the current session there and can leave a stale
     /// `~/.claude/.credentials.json` behind — so it must win when valid; the file is only a fallback
@@ -509,9 +520,8 @@ struct ClaudeAuthStore: Sendable {
         let path = credentialsPath()
         guard files.exists(path),
               let text = try? files.readText(path),
-              let parsed = Self.parseCredentials(text),
-              let oauth = parsed.claudeAiOauth,
-              oauth.accessToken?.isEmpty == false
+              let parsed = Self.parseUsableCredentials(text),
+              let oauth = parsed.claudeAiOauth
         else {
             return nil
         }
@@ -547,9 +557,8 @@ struct ClaudeAuthStore: Sendable {
         source: ClaudeCredentialState.Source
     ) -> ClaudeCredentialState? {
         guard let value,
-              let parsed = Self.parseCredentials(value),
-              let oauth = parsed.claudeAiOauth,
-              oauth.accessToken?.isEmpty == false
+              let parsed = Self.parseUsableCredentials(value),
+              let oauth = parsed.claudeAiOauth
         else {
             return nil
         }
