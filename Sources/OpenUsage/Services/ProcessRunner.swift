@@ -51,8 +51,10 @@ struct SystemProcessRunner: ProcessRunning {
         // timeout below — reading only after exit deadlocks. (`ps -ax -o command=` alone is ~240KB.)
         let output = SubprocessOutput()
         let drained = DispatchGroup()
-        drain(stdoutPipe.fileHandleForReading, into: output, isStdout: true, group: drained)
-        drain(stderrPipe.fileHandleForReading, into: output, isStdout: false, group: drained)
+        let drains = [
+            PipeDrain(stdoutPipe.fileHandleForReading, into: output, isStdout: true, group: drained),
+            PipeDrain(stderrPipe.fileHandleForReading, into: output, isStdout: false, group: drained),
+        ]
 
         // One kernel-level wait instead of a 50ms poll loop: the termination handler trips the
         // group (registered before `run()` so an instantly-exiting child can't race it), and
@@ -61,80 +63,58 @@ struct SystemProcessRunner: ProcessRunning {
         exited.enter()
         process.terminationHandler = { _ in exited.leave() }
 
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            cancelDrains(drains, group: drained)
+            throw error
+        }
+        let processGroupID = isolatedProcessGroupID(for: process.processIdentifier)
         let deadline = DispatchTime.now() + timeout
 
         if exited.wait(timeout: deadline) == .timedOut {
-            terminateProcessTree(rootPID: process.processIdentifier)
+            terminateProcessGroup(processGroupID, signal: SIGTERM)
             process.terminate()
             _ = exited.wait(timeout: .now() + 0.1)
+            terminateProcessGroup(processGroupID, signal: SIGKILL)
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
             }
             process.waitUntilExit()
-            abandonDrains(stdoutPipe, stderrPipe)
+            cancelDrains(drains, group: drained)
             throw ProcessRunnerError.timedOut(executable: executable, timeout: timeout)
         }
 
         process.waitUntilExit()
         guard drained.wait(timeout: deadline) == .success else {
             // The direct child can exit while a disowned descendant still holds its inherited pipe
-            // descriptors open. Do not let that descendant extend the operation past its deadline.
-            abandonDrains(stdoutPipe, stderrPipe)
+            // descriptors open. Terminate the isolated subprocess group and cancel both nonblocking
+            // readers so neither descendants nor drain workers outlive the operation.
+            terminateProcessGroup(processGroupID, signal: SIGTERM)
+            terminateProcessGroup(processGroupID, signal: SIGKILL)
+            cancelDrains(drains, group: drained)
             throw ProcessRunnerError.timedOut(executable: executable, timeout: timeout)
         }
         AppLog.debug(.subprocess, "exit \(process.terminationStatus)")
         return ProcessResult(exitCode: process.terminationStatus, stdout: output.stdoutString, stderr: output.stderrString)
     }
 
-    /// Read a pipe to EOF on a background queue, accumulating into `output`. Started before the child
-    /// runs so the pipe is continuously drained and can never fill (EOF arrives when the child exits and
-    /// closes its write end).
-    private func drain(_ handle: FileHandle, into output: SubprocessOutput, isStdout: Bool, group: DispatchGroup) {
-        let box = FileHandleBox(handle)
-        group.enter()
-        DispatchQueue.global(qos: .utility).async {
-            let data = box.handle.readDataToEndOfFile()
-            if isStdout { output.setStdout(data) } else { output.setStderr(data) }
-            group.leave()
-        }
+    private func isolatedProcessGroupID(for pid: pid_t) -> pid_t? {
+        // Foundation launches Process instances as process-group leaders on macOS. Verify that
+        // invariant before using a negative PID so a timeout can never signal OpenUsage's group.
+        getpgid(pid) == pid ? pid : nil
     }
 
-    private func abandonDrains(_ pipes: Pipe...) {
-        for pipe in pipes {
-            try? pipe.fileHandleForReading.close()
-        }
+    private func terminateProcessGroup(_ processGroupID: pid_t?, signal: Int32) {
+        guard let processGroupID else { return }
+        kill(-processGroupID, signal)
     }
 
-    private func terminateProcessTree(rootPID: Int32) {
-        let children = childPIDs(of: rootPID)
-        for child in children {
-            terminateProcessTree(rootPID: child)
+    private func cancelDrains(_ drains: [PipeDrain], group: DispatchGroup) {
+        for drain in drains {
+            drain.cancel()
         }
-        kill(rootPID, SIGTERM)
-        for child in children {
-            kill(child, SIGKILL)
-        }
-    }
-
-    private func childPIDs(of pid: Int32) -> [Int32] {
-        let pgrep = Process()
-        pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        pgrep.arguments = ["-P", String(pid)]
-        let pipe = Pipe()
-        pgrep.standardOutput = pipe
-        pgrep.standardError = Pipe()
-        do {
-            try pgrep.run()
-            pgrep.waitUntilExit()
-        } catch {
-            return []
-        }
-
-        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return text
-            .split(whereSeparator: \.isNewline)
-            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        group.wait()
     }
 }
 
@@ -149,11 +129,69 @@ enum ProcessRunnerError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Passes a non-Sendable `FileHandle` into the background drain closure under Swift 6 strict
-/// concurrency. The handle is read by exactly one queue, so the unchecked conformance is sound.
-private final class FileHandleBox: @unchecked Sendable {
-    let handle: FileHandle
-    init(_ handle: FileHandle) { self.handle = handle }
+/// Continuously drains one subprocess pipe without dedicating a blocked worker thread. Cancellation
+/// stops future reads and closes the descriptor after any active event handler has returned.
+private final class PipeDrain: @unchecked Sendable {
+    private let handle: FileHandle
+    private let descriptor: Int32
+    private let output: SubprocessOutput
+    private let isStdout: Bool
+    private let group: DispatchGroup
+    private let source: DispatchSourceRead
+
+    init(_ handle: FileHandle, into output: SubprocessOutput, isStdout: Bool, group: DispatchGroup) {
+        self.handle = handle
+        self.descriptor = handle.fileDescriptor
+        self.output = output
+        self.isStdout = isStdout
+        self.group = group
+        self.source = DispatchSource.makeReadSource(
+            fileDescriptor: handle.fileDescriptor,
+            queue: DispatchQueue.global(qos: .utility)
+        )
+
+        let flags = fcntl(descriptor, F_GETFL)
+        if flags >= 0 {
+            _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+        }
+
+        group.enter()
+        source.setEventHandler { [weak self] in
+            self?.readAvailableData()
+        }
+        source.setCancelHandler { [weak self] in
+            guard let self else { return }
+            try? self.handle.close()
+            self.group.leave()
+        }
+        source.resume()
+    }
+
+    func cancel() {
+        source.cancel()
+    }
+
+    private func readAvailableData() {
+        var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+        while true {
+            let byteCount = buffer.withUnsafeMutableBytes {
+                Darwin.read(descriptor, $0.baseAddress, $0.count)
+            }
+            if byteCount > 0 {
+                output.append(Data(buffer.prefix(byteCount)), isStdout: isStdout)
+            } else if byteCount == 0 {
+                source.cancel()
+                return
+            } else if errno == EINTR {
+                continue
+            } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                return
+            } else {
+                source.cancel()
+                return
+            }
+        }
+    }
 }
 
 /// Lock-guarded accumulator for the two concurrently-drained pipes.
@@ -162,8 +200,15 @@ private final class SubprocessOutput: @unchecked Sendable {
     private var stdout = Data()
     private var stderr = Data()
 
-    func setStdout(_ data: Data) { lock.lock(); stdout = data; lock.unlock() }
-    func setStderr(_ data: Data) { lock.lock(); stderr = data; lock.unlock() }
+    func append(_ data: Data, isStdout: Bool) {
+        lock.lock()
+        if isStdout {
+            stdout.append(data)
+        } else {
+            stderr.append(data)
+        }
+        lock.unlock()
+    }
 
     var stdoutString: String { lock.lock(); defer { lock.unlock() }; return String(data: stdout, encoding: .utf8) ?? "" }
     var stderrString: String { lock.lock(); defer { lock.unlock() }; return String(data: stderr, encoding: .utf8) ?? "" }

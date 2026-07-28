@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import OpenUsage
 
 final class ProcessRunnerTests: XCTestCase {
@@ -25,15 +26,19 @@ final class ProcessRunnerTests: XCTestCase {
     }
 
     /// A shell can exit after disowning a descendant that inherited its stdout/stderr descriptors.
-    /// Pipe draining must share the process deadline instead of waiting for that descendant to exit.
-    func testTimeoutIncludesPipeDraining() {
+    /// Pipe draining must share the process deadline and terminate that descendant instead of leaving
+    /// either it or blocked drain work behind.
+    func testTimeoutIncludesPipeDrainingAndTerminatesDescendant() throws {
         let runner = SystemProcessRunner()
         let startedAt = Date()
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openusage-process-runner-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: pidFile) }
 
         XCTAssertThrowsError(try runner.run(
             executable: "/bin/sh",
-            arguments: ["-c", "sleep 1 & printf ready"],
-            environment: [:],
+            arguments: ["-c", "sleep 30 & echo $! > \"$OPENUSAGE_DESCENDANT_PID_PATH\"; printf ready"],
+            environment: ["OPENUSAGE_DESCENDANT_PID_PATH": pidFile.path],
             timeout: 0.2
         )) { error in
             XCTAssertEqual(
@@ -42,5 +47,22 @@ final class ProcessRunnerTests: XCTestCase {
             )
         }
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.8)
+
+        let descendantPID = try XCTUnwrap(
+            Int32(String(contentsOf: pidFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines))
+        )
+        defer { kill(descendantPID, SIGKILL) }
+
+        let stopped = expectation(description: "descendant terminated")
+        DispatchQueue.global().async {
+            for _ in 0 ..< 100 where kill(descendantPID, 0) == 0 {
+                usleep(10_000)
+            }
+            if kill(descendantPID, 0) != 0, errno == ESRCH {
+                stopped.fulfill()
+            }
+        }
+        wait(for: [stopped], timeout: 1.1)
     }
 }
