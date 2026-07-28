@@ -425,6 +425,23 @@ struct ClaudeAuthStore: Sendable {
         "\(baseKeychainServiceName(environment: environment))-\(hashSuffix(literal))"
     }
 
+    /// The exact keychain services a standard-scope store probes, shared with default-account
+    /// observation so a keychain-only login is never mistaken for an absent default source.
+    static func standardKeychainServiceCandidates(
+        environment: EnvironmentReading,
+        configDirOverride: String?
+    ) -> [String] {
+        let base = baseKeychainServiceName(environment: environment)
+        guard let configDirOverride else { return [base] }
+        return [
+            scopedKeychainServiceName(
+                forConfigDirLiteral: configDirOverride,
+                environment: environment
+            ),
+            base,
+        ]
+    }
+
     // baseAPI/refreshURL can derive from user-set env vars (CLAUDE_CODE_CUSTOM_OAUTH_URL,
     // CLAUDE_LOCAL_OAUTH_API_BASE). A malformed value is a system-boundary input that must fail
     // loudly — never force-unwrap (crashes the app) and never silently fall back to prod (that hides
@@ -455,10 +472,10 @@ struct ClaudeAuthStore: Sendable {
             // login.
             return ["\(base)-\(hashSuffix(keychainLiteral))"]
         case .standard:
-            if let configDir = claudeHomeOverride() {
-                return ["\(base)-\(hashSuffix(configDir))", base]
-            }
-            return [base]
+            return Self.standardKeychainServiceCandidates(
+                environment: environment,
+                configDirOverride: claudeHomeOverride()
+            )
         }
     }
 

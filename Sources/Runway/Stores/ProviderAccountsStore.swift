@@ -216,9 +216,22 @@ final class ProviderAccountsStore {
         let activeSiblingCount = records.lazy.filter {
             $0.family == record.family && self.activeRecordIDs.contains($0.id)
         }.count
-        return record.derivedDisplayName(
-            disambiguating: activeRecordIDs.contains(record.id) && activeSiblingCount > 1
-        )
+        let disambiguating = activeRecordIDs.contains(record.id) && activeSiblingCount > 1
+        let derived = record.derivedDisplayName(disambiguating: disambiguating)
+        let normalizedLabel = record.label?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard disambiguating, let normalizedLabel, !normalizedLabel.isEmpty else {
+            return derived
+        }
+        let duplicateLabelCount = records.lazy.filter {
+            $0.family == record.family
+                && self.activeRecordIDs.contains($0.id)
+                && $0.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased() == normalizedLabel
+        }.count
+        guard duplicateLabelCount > 1 else { return derived }
+        return "\(derived) · \(ProviderAccountID.hash8(record.identityKey))"
     }
 
     /// The resolved card title for a card id, or `nil` when the card has no account record (a

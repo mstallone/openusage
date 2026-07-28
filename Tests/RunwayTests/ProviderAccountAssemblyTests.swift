@@ -228,12 +228,10 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)
         let observer = DefaultAccountObserver(
-            environment: FakeEnvironment([:]),
-            files: FakeFiles([
-                // Credentials exist but the state file names no account → unresolved, footprint present.
-                "/Users/dev/.claude/.credentials.json": #"{"claudeAiOauth": {"accessToken": "at-1"}}"#,
-            ]),
-            keychain: FakeKeychain(nil),
+            environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"]),
+            files: FakeFiles([:]),
+            // A supported keychain-only default login has no state file to name its account.
+            keychain: FakeKeychain(#"{"claudeAiOauth": {"accessToken": "at-1"}}"#),
             homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
         )
         let discovery = makeDiscovery(
@@ -253,6 +251,13 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             "with a nameless default login, an accepted candidate could be that very account — skip"
         )
         XCTAssertTrue(store.records.isEmpty)
+        XCTAssertNil(assembly.claudeDefaultDisplayName, "the live keychain login is not an environment token")
+        let providers = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards,
+            claudeDefaultDisplayName: assembly.claudeDefaultDisplayName
+        ).compactMap { $0 as? ClaudeProvider }
+        XCTAssertEqual(providers.map(\.provider.id), ["claude"])
+        XCTAssertEqual(providers.map(\.provider.displayName), ["Claude"])
     }
 
     func testNoDefaultLoginStillAcceptsAConfigDirOnlyAccount() throws {

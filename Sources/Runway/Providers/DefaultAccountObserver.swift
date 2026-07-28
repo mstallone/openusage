@@ -84,8 +84,9 @@ struct DefaultAccountObserver: Sendable {
     /// when exported, else `~/.claude`. A comma-separated list can't be assigned one identity.
     func observeClaude() -> Outcome {
         var configDir = "~/.claude"
-        if let raw = environment.value(for: "CLAUDE_CONFIG_DIR")?
-            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+        let configDirOverride = environment.value(for: "CLAUDE_CONFIG_DIR")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if let raw = configDirOverride {
             guard !raw.contains(",") else {
                 return .unresolved(reason: "CLAUDE_CONFIG_DIR is a comma-separated list")
             }
@@ -104,10 +105,19 @@ struct DefaultAccountObserver: Sendable {
             return .unresolved(reason: "identity file unreadable: \(error.localizedDescription)")
         }
         guard let text else {
-            // No state file. A credential file without it can't be attributed; no footprint = absent.
-            return files.exists(anchor + "/.credentials.json")
-                ? .unresolved(reason: "credentials present but no identity file")
-                : .absent
+            // No state file. File or keychain credentials without it can't be attributed. Probe only
+            // keychain attributes on this launch path, never the secret (which could prompt).
+            let keychainPresence = ClaudeAuthStore.standardKeychainServiceCandidates(
+                environment: environment,
+                configDirOverride: configDirOverride
+            ).map { keychain.genericPasswordExists(service: $0) }
+            if files.exists(anchor + "/.credentials.json") || keychainPresence.contains(true) {
+                return .unresolved(reason: "credentials present but no identity file")
+            }
+            if keychainPresence.contains(where: { $0 == nil }) {
+                return .unresolved(reason: "keychain credential presence unverifiable")
+            }
+            return .absent
         }
         guard let parsed = try? JSONDecoder().decode(ClaudeStateFile.self, from: Data(text.utf8)),
               let account = parsed.oauthAccount,

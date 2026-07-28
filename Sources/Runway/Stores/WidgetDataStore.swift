@@ -466,8 +466,14 @@ final class WidgetDataStore {
         now: Date
     ) -> [(provider: Provider, snapshot: ProviderSnapshot)] {
         remoteOnly.compactMap { entry in
-            guard let familyProvider = registry.provider(id: entry.family),
-                  let descriptor = registry.historyDescriptorsByProvider[entry.family]
+            // Scoped account cards are the complete local family when no default-home login exists,
+            // so the bare provider may be absent. Any live sibling carries the same icon and history
+            // rendering metadata needed for a remote-only Total Spend slice.
+            guard let familyProvider = registry.provider(id: entry.family)
+                    ?? registry.providers.first(where: {
+                        ProviderAccountID.family(of: $0.id) == entry.family
+                    }),
+                  let descriptor = registry.historyDescriptorsByProvider[familyProvider.id]
             else { return nil }
             let history = UsageHistoryAggregator.mergeHistories(entry.histories, now: now)
             guard !history.series.daily.isEmpty else { return nil }

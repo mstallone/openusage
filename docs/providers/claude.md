@@ -52,8 +52,9 @@ card's spend tiles.
 
 With one discovered account, the default name is simply "Claude." With multiple accounts, every card
 includes its account email (for example, "Claude — dev@example.com"), including the first/default card.
-An organization name appears after the email when available. If the only login lives in a custom config
-dir, it is the sole Claude card; Runway does not add an empty default-home card beside it. Right-click
+An organization name appears after the email when available. If two active accounts still have the
+same label, Runway adds a short stable account code. If the only login lives in a custom config dir,
+it is the sole Claude card; Runway does not add an empty default-home card beside it. Right-click
 a card and choose **Rename…**
 (or use the Name field in Customize) to call it whatever you like. A card only shows while its login is
 still found on this Mac — log it out or delete the dir and the card disappears, keeping its customization

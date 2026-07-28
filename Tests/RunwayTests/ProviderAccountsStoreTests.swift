@@ -191,6 +191,39 @@ final class ProviderAccountsStoreTests: XCTestCase {
         )
     }
 
+    func testDuplicateActiveLabelsGainStableIdentitySuffixes() throws {
+        let firstIdentity = "acct-a"
+        let secondIdentity = "acct-b"
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let records = store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: firstIdentity,
+                label: "shared@example.com"
+            ),
+            ProviderAccountsStore.AccountObservation(
+                family: "claude",
+                identityKey: secondIdentity,
+                label: "shared@example.com",
+                sources: [ProviderAccountSource(
+                    kind: .configDir,
+                    anchor: "/Users/dev/.claude-work",
+                    holdsDefaultSource: false
+                )]
+            ),
+        ])
+        let secondID = try XCTUnwrap(records.first { $0.identityKey == secondIdentity }?.id)
+
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: "claude"),
+            "Claude — shared@example.com · \(ProviderAccountID.hash8(firstIdentity))"
+        )
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: secondID),
+            "Claude — shared@example.com · \(ProviderAccountID.hash8(secondIdentity))"
+        )
+    }
+
     func testUnlabeledBareAccountUsesAnIdentityHashWhenDisambiguating() {
         let identityKey = "account-without-email"
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
