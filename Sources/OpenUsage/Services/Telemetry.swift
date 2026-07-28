@@ -13,7 +13,7 @@ enum TelemetryConfig {
     /// The project token baked into the build. Replace `phc_REPLACE_ME` with the real US-region
     /// `phc_…` key (safe to commit — it's a client write-only key), or leave it and set
     /// `OPENUSAGE_POSTHOG_TOKEN` at runtime for local testing.
-    private static let bakedToken = "phc_vGEqXEpQNwViyKnMNWvmKWpv8XxMT3yaeYi6gfidr4nf"
+    private static let bakedToken = placeholderToken
 
     static var token: String {
         let env = ProcessInfo.processInfo.environment["OPENUSAGE_POSTHOG_TOKEN"]?
@@ -70,7 +70,8 @@ final class PostHogTelemetrySink: TelemetrySink {
         // Crash / uncaught-exception autocapture, gated on the SAME opt-out (anonymous `$exception`
         // events, sent on the NEXT launch after a crash). It captures Mach exceptions, POSIX signals,
         // and uncaught NSExceptions; Swift traps may surface as a bare `SIGTRAP` without the message —
-        // the symbolicated stack (dSYMs uploaded from release.yml) is what makes them actionable.
+        // a symbolicated stack is what makes them actionable when a future NextByte telemetry project
+        // and symbol-upload workflow are configured.
         // Gating install on `enabled` (not relying on `optOut` alone) means an opted-out launch wires
         // up no handler and writes nothing to disk. A runtime opt-IN therefore activates crash capture
         // from the next launch; `optOut` (mirrored by `setEnabled`) still hard-stops sending in-session.

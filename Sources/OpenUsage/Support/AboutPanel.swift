@@ -34,7 +34,7 @@ enum AboutPanel {
         credits.append(NSAttributedString(string: " & ", attributes: base))
         credits.append(link("David", "https://github.com/davidarny", base: base))
         credits.append(NSAttributedString(string: "\n\nOpen source on ", attributes: base))
-        credits.append(link("GitHub", "https://github.com/robinebers/openusage", base: base))
+        credits.append(link("GitHub", "https://github.com/mstallone/openusage", base: base))
         return credits
     }
 

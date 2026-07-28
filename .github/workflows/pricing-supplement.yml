@@ -1,6 +1,6 @@
 # Publishes the pricing supplement to GitHub Pages whenever it changes on main.
 #
-# Installed apps fetch https://robinebers.github.io/openusage/pricing_supplement.json on their daily
+# Installed apps fetch https://mstallone.github.io/openusage/pricing_supplement.json on their daily
 # pricing refresh, so merging a change to the supplement updates Cursor-native model pricing (auto,
 # composer-*, github_bugbot), fast multipliers, and model alias rules in the field within ~a day —
 # no tag, no release, no Sparkle involvement.
@@ -28,7 +28,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Validate supplement JSON
         run: |
@@ -63,7 +63,7 @@ jobs:
           cp Sources/OpenUsage/Resources/pricing_supplement.json public/pricing_supplement.json
 
       - name: Publish to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages

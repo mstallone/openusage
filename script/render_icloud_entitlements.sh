@@ -12,6 +12,10 @@ trap 'rm -f "$PROFILE_PLIST"' EXIT
 
 TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")"
 [ -n "$TEAM_ID" ] || { echo "provisioning profile has no team identifier" >&2; exit 1; }
+if [ -n "${APPLE_TEAM_ID:-}" ] && [ "$TEAM_ID" != "$APPLE_TEAM_ID" ]; then
+  echo "provisioning profile belongs to team $TEAM_ID, expected $APPLE_TEAM_ID" >&2
+  exit 1
+fi
 
 APP_ID="$(/usr/libexec/PlistBuddy \
   -c 'Print :Entitlements:com.apple.application-identifier' "$PROFILE_PLIST")"

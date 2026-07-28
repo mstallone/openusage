@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Applies the branch/tag protections this repo uses on GitHub, mirroring
-# robinebers/openusage. GitHub gates these features on private repos
+# Applies the branch/tag protections this repo uses on GitHub. GitHub gates these features on private repos
 # (free plan), so run this once after the repo goes public:
 #
 #   ./script/apply_github_protections.sh
 #
 # Requires: gh CLI authenticated as a repo admin.
 
-REPO="${REPO:-robinebers/openusage}"
+REPO="${REPO:-mstallone/openusage}"
 
 # No visibility pre-check: a private repo on a paid plan supports these
 # settings, so let GitHub be the judge and surface its error if not.
@@ -57,7 +56,7 @@ apply_ruleset() {
 # The bypass actor is the repo-admin role because rulesets have no per-user
 # actor type; on a user-owned repo collaborators top out at write, so the
 # owner is the only admin and the bypass is owner-only in practice. This
-# matches the original repo's ruleset exactly.
+# keeps release tags owner-only.
 echo "==> Tag ruleset: only the repo owner can create/update/delete v* release tags"
 apply_ruleset "Release tags owner only" '{
   "name": "Release tags owner only",

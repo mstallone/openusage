@@ -27,8 +27,10 @@ concurrency:
 jobs:
   release:
     runs-on: macos-26
+    env:
+      APPLE_TEAM_ID: 8KZBNZJBAX
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Build the requested tag. On a tag push `inputs.tag` is empty and checkout defaults to the
           # triggering tag; on workflow_dispatch this pins the tag instead of the default branch.
@@ -56,26 +58,67 @@ jobs:
             echo "prerelease=$PRERELEASE"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Validate release tag and required secrets
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_DEVELOPER_ID_ICLOUD_PROFILE: ${{ secrets.APPLE_DEVELOPER_ID_ICLOUD_PROFILE }}
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::Release tags must use the form v1.2.3 or v1.2.3-beta.1."
+            exit 1
+          fi
+
+          for name in \
+            DEVELOPER_ID_CERTIFICATE_BASE64 \
+            DEVELOPER_ID_CERTIFICATE_PASSWORD \
+            APPLE_NOTARY_PRIVATE_KEY_BASE64 \
+            APPLE_NOTARY_KEY_ID \
+            APPLE_NOTARY_ISSUER_ID \
+            APPLE_DEVELOPER_ID_ICLOUD_PROFILE \
+            SPARKLE_PUBLIC_KEY \
+            SPARKLE_PRIVATE_KEY
+          do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required repository secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Run tests
+        run: swift test
+
       # Imports the Developer ID cert into a temporary keychain and adds it to the search list (cleaned up
       # automatically in a post step). Replaces a hand-rolled `security create-keychain`/`import` block.
       - name: Import Developer ID certificate
-        uses: apple-actions/import-codesign-certs@v7
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
         with:
           # Developer ID Application cert (.p12, base64) used to sign the app and DMG.
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          p12-file-base64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
 
       - name: Resolve signing identity
         run: |
           # The cert is now in the search list; codesign needs the identity's display name.
           IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
           [ -n "$IDENTITY" ] || { echo "No Developer ID Application identity found in the imported cert" >&2; exit 1; }
+          [[ "$IDENTITY" == *"($APPLE_TEAM_ID)" ]] \
+            || { echo "Developer ID identity does not belong to NextByte team $APPLE_TEAM_ID" >&2; exit 1; }
           echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
       - name: Write Sparkle private key
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
+          set -euo pipefail
           printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_ed_private_key"
           echo "SPARKLE_PRIVATE_KEY_FILE=$RUNNER_TEMP/sparkle_ed_private_key" >> "$GITHUB_ENV"
 
@@ -83,11 +126,28 @@ jobs:
         env:
           ICLOUD_PROFILE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_ICLOUD_PROFILE }}
         run: |
+          set -euo pipefail
           printf '%s' "$ICLOUD_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/openusage-icloud.provisionprofile"
           echo "ICLOUD_PROVISIONING_PROFILE=$RUNNER_TEMP/openusage-icloud.provisionprofile" >> "$GITHUB_ENV"
 
-      - name: Carry forward the existing appcast
+      - name: Write App Store Connect notarization key
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
         run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_NOTARY_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Carry forward the existing appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+
           # generate_appcast works on a folder: it reads the existing appcast.xml there and the new DMG,
           # then writes a merged appcast. "feed/" is that folder. Seed it with the live appcast so prior
           # versions and the OTHER channel's items are preserved (verified: items whose archive isn't in
@@ -102,9 +162,38 @@ jobs:
           set -e
           if [ "$rc" -eq 0 ]; then
             git fetch origin gh-pages
-            git show origin/gh-pages:appcast.xml > feed/appcast.xml \
-              || { echo "gh-pages exists but appcast.xml is unreadable — aborting to protect the feed." >&2; exit 1; }
-            echo "Loaded existing appcast from gh-pages."
+            if git show origin/gh-pages:appcast.xml > feed/appcast.xml; then
+              echo "Loaded existing appcast from gh-pages."
+            else
+              # `git show > file` creates an empty file even when the source path is absent. Remove it
+              # so generate_appcast genuinely starts fresh in the two safe bootstrap states below.
+              rm -f feed/appcast.xml
+
+              # Two tags are enough to distinguish an empty fork / first-release retry from real
+              # history. A rerun after action-gh-release published the current tag but before the
+              # appcast reached gh-pages must be recoverable; any other release history still fails
+              # closed so a missing feed can never silently discard prior Sparkle entries.
+              release_state="$(
+                gh release list --limit 2 --json tagName --jq '.[].tagName' \
+                  | "$GITHUB_WORKSPACE/script/classify_appcast_bootstrap.sh" "$RELEASE_TAG"
+              )"
+              case "$release_state" in
+                fresh)
+                  echo "No prior fork release or appcast — starting a fresh feed."
+                  ;;
+                retry)
+                  echo "Only the partial release for $RELEASE_TAG exists — rebuilding its first appcast."
+                  ;;
+                history)
+                  echo "gh-pages has no appcast but prior release history exists — aborting to protect the feed." >&2
+                  exit 1
+                  ;;
+                *)
+                  echo "Unexpected appcast bootstrap state: $release_state" >&2
+                  exit 1
+                  ;;
+              esac
+            fi
           elif [ "$rc" -eq 2 ]; then
             echo "No gh-pages branch yet — starting a fresh feed."
           else
@@ -115,55 +204,20 @@ jobs:
       - name: Build, sign, and notarize the DMG
         env:
           SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
-          # Apple ID + app-specific password + team ID for notarytool.
-          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
-          NOTARY_APP_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           OPENUSAGE_VERSION: ${{ steps.meta.outputs.version }}
         run: ./script/release.sh
 
-      # Upload the dSYM produced by release.sh so PostHog can symbolicate crash reports (the in-app
-      # crash autocapture is anonymous and honors the Share-Anonymous-Usage opt-out; see docs/privacy.md).
-      # posthog-cli is a CI-only build tool (npm), never shipped in the app bundle. Skips with a loud
-      # warning when POSTHOG_CLI_API_KEY is unset (e.g. forks), so a missing key never blocks a release;
-      # when the key IS set, an upload failure fails the step so we never silently ship unsymbolicated.
-      - name: Upload dSYMs to PostHog
-        env:
-          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
-          POSTHOG_CLI_PROJECT_ID: ${{ secrets.POSTHOG_CLI_PROJECT_ID }}
-          # US region, matching TelemetryConfig.host in the app.
-          POSTHOG_CLI_HOST: https://us.i.posthog.com
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          if [ -z "${POSTHOG_CLI_API_KEY}" ]; then
-            echo "::warning::POSTHOG_CLI_API_KEY not set — skipping dSYM upload; crashes for $VERSION will NOT symbolicate."
-            exit 0
-          fi
-          [ -d dist/dSYMs ] || { echo "dist/dSYMs missing — release.sh did not produce a dSYM." >&2; exit 1; }
-          npm install -g @posthog/cli
-          # Symbolication matches a crash report to its symbols by the binary's Mach-O UUID (carried in
-          # the dSYM), so `--directory` is all that's required — no per-release flags to keep in sync.
-          posthog-cli dsym upload --directory dist/dSYMs
-
       - name: Publish DMG to GitHub Releases
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.5
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: OpenUsage ${{ steps.meta.outputs.version }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
-          files: dist/OpenUsage-${{ steps.meta.outputs.version }}.dmg
-
-      - name: Preserve Tauri updater manifest on stable releases
-        if: steps.meta.outputs.channel == 'stable'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.meta.outputs.tag }}
-        run: |
-          # Older Tauri builds fetch releases/latest/download/latest.json. Every stable Swift release
-          # becomes GitHub "Latest", so carry the final Tauri manifest forward on each stable release.
-          tmpdir="$(mktemp -d)"
-          gh release download v0.6.28 --pattern latest.json --dir "$tmpdir"
-          gh release upload "$TAG" "$tmpdir/latest.json" --clobber
+          files: |
+            dist/OpenUsage-${{ steps.meta.outputs.version }}.dmg
+            dist/OpenUsage-${{ steps.meta.outputs.version }}.dmg.sha256
 
       - name: Generate appcast with Sparkle
         env:
@@ -212,7 +266,7 @@ jobs:
           cp feed/appcast.xml public/appcast.xml
 
       - name: Publish appcast to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
@@ -220,3 +274,14 @@ jobs:
           # gh-pages also hosts pricing_supplement.json (see pricing-supplement.yml). Without
           # keep_files, publishing the appcast would delete it from the branch.
           keep_files: true
+
+      - name: Remove release credentials
+        if: always()
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          rm -f "$RUNNER_TEMP/openusage-icloud.provisionprofile"
+          rm -f "$RUNNER_TEMP/sparkle_ed_private_key"
+          if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
+            rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          fi

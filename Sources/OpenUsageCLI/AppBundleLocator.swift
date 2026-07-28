@@ -22,6 +22,6 @@ struct AppBundleLocator: Sendable {
             )
         }
 
-        return AppBundleLocator(bundleIdentifier: "com.robinebers.openusage", version: nil)
+        return AppBundleLocator(bundleIdentifier: "com.mattstallone.openusage", version: nil)
     }
 }

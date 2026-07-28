@@ -8,7 +8,7 @@ set -euo pipefail
 # on a Mac with the same env. This script does NOT push anything to GitHub.
 #
 # Required env:
-#   CODESIGN_IDENTITY     Developer ID Application identity (name or hash)
+#   CODESIGN_IDENTITY     Developer ID Application identity display name
 #   ICLOUD_PROVISIONING_PROFILE  Developer ID provisioning profile with the production iCloud container
 #   SPARKLE_PUBLIC_KEY    base64 EdDSA public key -> baked into Info.plist (SUPublicEDKey). generate_appcast
 #                         only signs the DMG if this matches the private key it signs with.
@@ -16,8 +16,9 @@ set -euo pipefail
 # Optional env:
 #   OPENUSAGE_BUILD       CFBundleVersion (monotonic). Default: git commit count.
 #   FEED_URL              appcast URL baked into the app. Default: GitHub Pages project URL.
-#   NOTARY_APPLE_ID / NOTARY_APP_PASSWORD / NOTARY_TEAM_ID   Apple ID, app-specific password, and team
-#                         ID for notarytool. When all three are set, the app and DMG are notarized + stapled.
+#   APPLE_NOTARY_KEY_PATH / APPLE_NOTARY_KEY_ID / APPLE_NOTARY_ISSUER_ID
+#                         App Store Connect API private key path, key ID, and issuer ID for notarytool.
+#                         When all three are set, the app and DMG are notarized + stapled.
 #   ALLOW_UNNOTARIZED=1   Skip notarization for a LOCAL dry run. Without it, missing notary creds is a
 #                         hard error so CI never publishes an un-notarized build.
 
@@ -30,7 +31,10 @@ cd "$ROOT_DIR"
 : "${OPENUSAGE_VERSION:?set OPENUSAGE_VERSION, e.g. 0.7.0}"
 
 APP_NAME="OpenUsage"
-BUNDLE_ID="com.robinebers.openusage"
+BUNDLE_ID="com.mattstallone.openusage"
+EXPECTED_TEAM_ID="${APPLE_TEAM_ID:-8KZBNZJBAX}"
+APPLE_TEAM_ID="$EXPECTED_TEAM_ID"
+export APPLE_TEAM_ID
 MIN_SYSTEM_VERSION="15.0"
 VERSION="$OPENUSAGE_VERSION"
 # CFBundleShortVersionString carries the full version, including any pre-release suffix (e.g.
@@ -39,7 +43,7 @@ VERSION="$OPENUSAGE_VERSION"
 # monotonic commit count below), not this string, and Developer ID notarization does not require it to
 # be numeric. (Sparkle's own docs use a beta short version, e.g. "2.0b1".)
 BUILD="${OPENUSAGE_BUILD:-$(git rev-list --count HEAD)}"
-FEED_URL="${FEED_URL:-https://robinebers.github.io/openusage/appcast.xml}"
+FEED_URL="${FEED_URL:-https://mstallone.github.io/openusage/appcast.xml}"
 DMG_NAME="$APP_NAME-$VERSION.dmg"
 
 DIST_DIR="$ROOT_DIR/dist"
@@ -51,42 +55,46 @@ APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 CLI_BINARY="$APP_HELPERS/openusage"
 DMG_PATH="$DIST_DIR/$DMG_NAME"
-# dSYMs for crash symbolication (uploaded to PostHog by release.yml). A folder, since posthog-cli's
-# `dsym upload --directory` and Sparkle both want a directory of bundles, not a single path.
-DSYM_DIR="$DIST_DIR/dSYMs"
-APP_DSYM="$DSYM_DIR/$APP_NAME.app.dSYM"
+DMG_CHECKSUM_PATH="$DMG_PATH.sha256"
 ENTITLEMENTS_TEMPLATE="$ROOT_DIR/script/OpenUsage.release.entitlements.plist"
 ENTITLEMENTS="$DIST_DIR/OpenUsage.release.resolved.entitlements.plist"
 
-# Decide notarization up front. CI always supplies the notarization login; a local dry run can
+[[ "$CODESIGN_IDENTITY" == Developer\ ID\ Application:*"($EXPECTED_TEAM_ID)" ]] \
+  || { echo "CODESIGN_IDENTITY must belong to NextByte team $EXPECTED_TEAM_ID" >&2; exit 1; }
+
+# Decide notarization up front. CI always supplies the App Store Connect API key; a local dry run can
 # opt out with ALLOW_UNNOTARIZED=1 (the build will then be Gatekeeper-blocked on other Macs). Missing
 # creds without that opt-out is a hard error so CI never publishes an un-notarized DMG.
 NOTARIZE=0
-if [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${NOTARY_APP_PASSWORD:-}" ] && [ -n "${NOTARY_TEAM_ID:-}" ]; then
+if [ -n "${APPLE_NOTARY_KEY_PATH:-}" ] \
+  && [ -f "${APPLE_NOTARY_KEY_PATH:-}" ] \
+  && [ -n "${APPLE_NOTARY_KEY_ID:-}" ] \
+  && [ -n "${APPLE_NOTARY_ISSUER_ID:-}" ]; then
   NOTARIZE=1
 elif [ "${ALLOW_UNNOTARIZED:-}" = "1" ]; then
   echo "WARNING: ALLOW_UNNOTARIZED=1 — build will NOT be notarized (other Macs will block it)." >&2
 else
-  echo "Notarization creds missing (NOTARY_APPLE_ID / NOTARY_APP_PASSWORD / NOTARY_TEAM_ID)." >&2
-  echo "Set them, or set ALLOW_UNNOTARIZED=1 for a local dry run." >&2
+  echo "Notarization credentials missing or invalid." >&2
+  echo "Set APPLE_NOTARY_KEY_PATH, APPLE_NOTARY_KEY_ID, and APPLE_NOTARY_ISSUER_ID," >&2
+  echo "or set ALLOW_UNNOTARIZED=1 for a local dry run." >&2
   exit 1
 fi
 
 notarize() {  # $1: artifact to submit (.zip or .dmg)
   xcrun notarytool submit "$1" \
-    --apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_APP_PASSWORD" --team-id "$NOTARY_TEAM_ID" --wait
+    --key "$APPLE_NOTARY_KEY_PATH" \
+    --key-id "$APPLE_NOTARY_KEY_ID" \
+    --issuer "$APPLE_NOTARY_ISSUER_ID" \
+    --wait
 }
 
 echo "==> building $APP_NAME $VERSION ($BUILD) — universal (arm64 + x86_64)"
 # Build both arch slices and let SwiftPM lipo-merge them into one universal binary. With multiple
 # --arch, --show-bin-path resolves to the merged products dir (.build/apple/Products/Release), which
 # also holds the *.bundle resources, so the staging loop below is unchanged.
-# `-Xswiftc -g` emits DWARF so `dsymutil` can build a real (line-level) dSYM for crash symbolication.
-# This does NOT grow the shipped binary: Mach-O keeps DWARF in the .o files (referenced by the binary's
-# debug map) and dsymutil extracts it into the .dSYM — the executable only carries the symbol table.
-swift build -c release --arch arm64 --arch x86_64 -Xswiftc -g --product OpenUsage
-swift build -c release --arch arm64 --arch x86_64 -Xswiftc -g --product openusage-cli
-BUILD_DIR="$(swift build -c release --arch arm64 --arch x86_64 -Xswiftc -g --show-bin-path)"
+swift build -c release --arch arm64 --arch x86_64 --product OpenUsage
+swift build -c release --arch arm64 --arch x86_64 --product openusage-cli
+BUILD_DIR="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
 BUILD_BINARY="$BUILD_DIR/$APP_NAME"
 BUILD_CLI_BINARY="$BUILD_DIR/openusage-cli"
 [ -x "$BUILD_BINARY" ] || { echo "missing built binary: $BUILD_BINARY" >&2; exit 1; }
@@ -121,23 +129,6 @@ if vtool -show-build "$APP_BINARY" | grep -q "sdk 15.0"; then
   echo "SDK restamp failed: $APP_BINARY still reports sdk 15.0" >&2
   exit 1
 fi
-
-# Generate the dSYM for crash symbolication AFTER the vtool restamp, from the exact binary we ship, so
-# the dSYM's Mach-O UUID matches the shipped one. (Verified: `vtool -set-build-version` rewrites only
-# the build-version load command and preserves LC_UUID, so the restamp does not break symbol upload.)
-# dsymutil follows the binary's debug map to the .build/*.o files (still present in this same build) to
-# pull DWARF; signing happens later and never touches the UUID, so dSYM↔binary stay matched.
-echo "==> generating dSYM (crash symbolication)"
-rm -rf "$DSYM_DIR"
-mkdir -p "$DSYM_DIR"
-dsymutil "$APP_BINARY" -o "$APP_DSYM"
-# Guard the symbolication contract: every arch UUID in the shipped binary must be present in the dSYM,
-# else uploaded symbols would never match a crash report (a silent miss that looks like "no symbols").
-for uuid in $(dwarfdump --uuid "$APP_BINARY" | awk '{print $2}'); do
-  dwarfdump --uuid "$APP_DSYM" | grep -q "$uuid" \
-    || { echo "dSYM UUID mismatch: $uuid (binary) absent from $APP_DSYM — symbolication would fail." >&2; exit 1; }
-done
-echo "    dSYM: $APP_DSYM"
 
 shopt -s nullglob
 for bundle in "$BUILD_DIR"/*.bundle; do
@@ -186,7 +177,7 @@ cat >"$APP_CONTENTS/Info.plist" <<PLIST
   <key>SUScheduledCheckInterval</key><integer>3600</integer>
   <key>NSUbiquitousContainers</key>
   <dict>
-    <key>iCloud.com.robinebers.openusage</key>
+    <key>iCloud.com.mattstallone.openusage</key>
     <dict>
       <key>NSUbiquitousContainerIsDocumentScopePublic</key><false/>
       <key>NSUbiquitousContainerName</key><string>OpenUsage</string>
@@ -200,7 +191,7 @@ PLIST
 cp "$ICLOUD_PROVISIONING_PROFILE" "$APP_CONTENTS/embedded.provisionprofile"
 "$ROOT_DIR/script/render_icloud_entitlements.sh" \
   "$ENTITLEMENTS_TEMPLATE" "$ICLOUD_PROVISIONING_PROFILE" "$ENTITLEMENTS" \
-  "iCloud.com.robinebers.openusage"
+  "iCloud.com.mattstallone.openusage"
 
 # Embed + sign Sparkle (Developer ID, hardened runtime, secure timestamp).
 "$ROOT_DIR/script/embed_sparkle.sh" "$APP_BUNDLE" "$APP_BINARY" "$CODESIGN_IDENTITY" "--options runtime --timestamp"
@@ -211,7 +202,7 @@ echo "==> signing app (Developer ID, hardened runtime)"
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
   --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
-codesign -d --entitlements :- "$APP_BUNDLE" 2>&1 | grep -q "iCloud.com.robinebers.openusage" \
+codesign -d --entitlements :- "$APP_BUNDLE" 2>&1 | grep -q "iCloud.com.mattstallone.openusage" \
   || { echo "signed app is missing the production iCloud entitlement" >&2; exit 1; }
 
 # Notarize + staple the app itself (not just the DMG) so it launches cleanly even offline after a
@@ -242,7 +233,12 @@ if [ "$NOTARIZE" = "1" ]; then
   echo "==> notarized + stapled"
 fi
 
+(
+  cd "$DIST_DIR"
+  shasum -a 256 "$DMG_NAME" > "$(basename "$DMG_CHECKSUM_PATH")"
+)
+
 echo "==> done"
 echo "    DMG:  $DMG_PATH"
-echo "    dSYM: $APP_DSYM (uploaded to PostHog for crash symbolication by release.yml)."
+echo "    SHA-256: $DMG_CHECKSUM_PATH"
 echo "    The appcast is generated from this DMG by generate_appcast (see release.yml)."

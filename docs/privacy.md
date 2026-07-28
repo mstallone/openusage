@@ -49,7 +49,8 @@ If you explicitly turn on [iCloud Sync](icloud-sync.md), OpenUsage writes normal
 spend, and model totals to its private iCloud container so your own Macs can show one combined summary.
 Credentials, account limits, provider responses, and raw logs are never written there. This is separate
 from anonymous usage sharing: iCloud Sync defaults off and uses your iCloud account, while the analytics
-toggle controls PostHog events.
+toggle controls PostHog events when a NextByte PostHog project is configured. This clean-slate fork
+currently ships without a PostHog project token, so analytics and crash reporting are inert.
 
 ## How it works
 
