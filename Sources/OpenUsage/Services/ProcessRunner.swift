@@ -69,12 +69,13 @@ struct SystemProcessRunner: ProcessRunning {
             cancelDrains(drains, group: drained)
             throw error
         }
+        let rootIdentity = processIdentity(for: process.processIdentifier)
         let deadline = DispatchTime.now() + timeout
 
         if exited.wait(timeout: deadline) == .timedOut {
             // The root is still alive, so capture the process tree while its ownership links are
             // reliable. Identity checks keep delayed cleanup from signaling recycled PIDs.
-            let descendants = descendantProcesses(of: process.processIdentifier)
+            let descendants = rootIdentity.map { descendantProcesses(of: $0) } ?? []
             signalProcesses(descendants, signal: SIGTERM)
             process.terminate()
             _ = exited.wait(timeout: .now() + 0.1)
@@ -99,10 +100,22 @@ struct SystemProcessRunner: ProcessRunning {
         return ProcessResult(exitCode: process.terminationStatus, stdout: output.stdoutString, stderr: output.stderrString)
     }
 
-    private func descendantProcesses(of rootPID: pid_t) -> [ProcessIdentity] {
-        let childIDs = childPIDs(of: rootPID)
-        let children = childIDs.compactMap(processIdentity(for:))
-        return children + childIDs.flatMap(descendantProcesses(of:))
+    private func descendantProcesses(of parent: ProcessIdentity) -> [ProcessIdentity] {
+        guard processIdentity(for: parent.processID) == parent else { return [] }
+        let children = childPIDs(of: parent.processID).compactMap { childID -> ProcessSnapshot? in
+            guard let child = processSnapshot(for: childID),
+                  child.parentProcessID == UInt32(bitPattern: parent.processID)
+            else {
+                return nil
+            }
+            return child
+        }
+        // The parent can exit and its PID can be reused while its child list is being inspected.
+        // Discard the entire snapshot unless the same parent still owns the validated child links.
+        guard processIdentity(for: parent.processID) == parent else { return [] }
+        return children.flatMap { child in
+            [child.identity] + descendantProcesses(of: child.identity)
+        }
     }
 
     private func childPIDs(of parentPID: pid_t) -> [pid_t] {
@@ -124,6 +137,10 @@ struct SystemProcessRunner: ProcessRunning {
     }
 
     private func processIdentity(for processID: pid_t) -> ProcessIdentity? {
+        processSnapshot(for: processID)?.identity
+    }
+
+    private func processSnapshot(for processID: pid_t) -> ProcessSnapshot? {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(processID, PROC_PIDTBSDINFO, 0, &info, size) == size,
@@ -131,10 +148,13 @@ struct SystemProcessRunner: ProcessRunning {
         else {
             return nil
         }
-        return ProcessIdentity(
-            processID: processID,
-            startedAtSeconds: info.pbi_start_tvsec,
-            startedAtMicroseconds: info.pbi_start_tvusec
+        return ProcessSnapshot(
+            identity: ProcessIdentity(
+                processID: processID,
+                startedAtSeconds: info.pbi_start_tvsec,
+                startedAtMicroseconds: info.pbi_start_tvusec
+            ),
+            parentProcessID: info.pbi_ppid
         )
     }
 
@@ -158,6 +178,11 @@ private struct ProcessIdentity: Equatable {
     let processID: pid_t
     let startedAtSeconds: UInt64
     let startedAtMicroseconds: UInt64
+}
+
+private struct ProcessSnapshot {
+    let identity: ProcessIdentity
+    let parentProcessID: UInt32
 }
 
 enum ProcessRunnerError: Error, LocalizedError, Equatable {
