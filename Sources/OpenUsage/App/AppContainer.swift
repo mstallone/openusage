@@ -57,9 +57,9 @@ final class AppContainer {
     /// fingerprint-bound result lets the next launch place them without reading secrets at startup.
     private let codexIdentityWarmTask: Task<Void, Never>?
 
-    /// `isFreshInstall` must be captured by the caller BEFORE `SettingsMigrator.migrate()` runs (the
-    /// migrator's schema stamp makes the defaults domain non-empty). See `AppDelegate`.
-    init(isFreshInstall: Bool = false) async {
+    /// `shouldSeedFirstRun` includes a resumable marker captured before `SettingsMigrator.migrate()`.
+    /// See `AppDelegate`.
+    init(shouldSeedFirstRun: Bool = false) async {
         // Capture the user's login-shell environment off-main so provider keys exported in a shell
         // profile (e.g. OPENROUTER_API_KEY) resolve in a Finder/Dock-launched build, not only when
         // run from a terminal. Account assembly needs identity-relevant home overrides on a genuine
@@ -117,11 +117,14 @@ final class AppContainer {
         // then the detected set once the local credential probe finishes). No-op on every later launch.
         let onboarding = OnboardingStore()
         self.seedTask = FirstRunSeeder.seedIfNeeded(
-            isFreshInstall: isFreshInstall,
+            isFreshInstall: shouldSeedFirstRun,
             providers: providers,
             enablement: enablement,
             onboarding: onboarding
         )
+        if shouldSeedFirstRun {
+            SettingsMigrator.completeFirstRunSeed()
+        }
         // Providers added by an update get the same credential detection on their first launch — enabled
         // only when the user actually has the tool. Runs every launch; a no-op unless the registry has a
         // provider this install has never seen (fresh installs were just baselined by FirstRunSeeder).

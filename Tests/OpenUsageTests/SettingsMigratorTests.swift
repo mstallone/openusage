@@ -19,6 +19,32 @@ final class SettingsMigratorTests: XCTestCase {
         XCTAssertNil(ranVersions(defaults), "a fresh install must not run historical migrations")
     }
 
+    /// An interruption after migration but before `FirstRunSeeder` must not turn the next launch into an
+    /// existing install. The durable marker resumes first-run work and is cleared only after the seed.
+    func testInterruptedFreshInstallKeepsFirstRunSeedPendingUntilCompleted() {
+        let (defaults, domain) = makeDefaults("InterruptedFresh")
+        defer { defaults.removePersistentDomain(forName: domain) }
+
+        XCTAssertTrue(SettingsMigrator.prepareFirstRunSeed(defaults: defaults, domainName: domain))
+        let result = SettingsMigrator.migrate(
+            defaults: defaults, domainName: domain, current: 3, migrations: recording(1, 2, 3)
+        )
+
+        XCTAssertEqual(result, 3)
+        XCTAssertNil(ranVersions(defaults), "the pending marker must not make a fresh install look legacy")
+        XCTAssertTrue(
+            SettingsMigrator.prepareFirstRunSeed(defaults: defaults, domainName: domain),
+            "the next launch must resume first-run seeding"
+        )
+
+        SettingsMigrator.completeFirstRunSeed(defaults: defaults)
+
+        XCTAssertFalse(
+            SettingsMigrator.prepareFirstRunSeed(defaults: defaults, domainName: domain),
+            "a completed seed must not run on later launches"
+        )
+    }
+
     /// An install that predates the schema-version key (settings present, no version) is migrated forward
     /// from v0 — every step runs, in order, and existing settings are kept.
     func testLegacyInstallMigratesFromZeroAndKeepsSettings() {

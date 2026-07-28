@@ -48,9 +48,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // AppContainer stores), so migrated values are in place when the stores load and a genuine fresh
         // install still presents an empty domain — how the migrator tells a first launch from an upgrade.
         // Nothing is wiped now; settings carry across updates. See `SettingsMigrator`.
-        // The fresh-install answer is captured BEFORE migrating (the schema stamp makes the domain
-        // non-empty) and handed to `AppContainer`, whose `FirstRunSeeder` seeds a minimal provider set.
-        let isFreshInstall = SettingsMigrator.isFreshInstall()
+        // Persist first-run work as pending BEFORE migrating (the schema stamp makes the domain
+        // non-empty), so an interruption during asynchronous startup resumes the idempotent seed.
+        let shouldSeedFirstRun = SettingsMigrator.prepareFirstRunSeed()
         SettingsMigrator.migrate()
         // Let only the `SMAppService` login item drive startup: opt out of AppKit's reopen-on-login
         // so a reboot doesn't also restore us and race the login item in the first place. The lock
@@ -70,7 +70,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         AppearanceSetting.applyCurrent()
         launchTask = Task { [weak self] in
             guard let self else { return }
-            let container = await AppContainer(isFreshInstall: isFreshInstall)
+            let container = await AppContainer(shouldSeedFirstRun: shouldSeedFirstRun)
             guard !Task.isCancelled else { return }
             self.statusItemController = StatusItemController(container: container, updater: self.updater)
             // Starts background update checks (release build only; dormant under preview/`swift run`).
