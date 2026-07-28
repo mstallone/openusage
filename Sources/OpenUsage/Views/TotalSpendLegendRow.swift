@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// One ranked legend entry. At rest the amount keeps the rows easy to compare; pointing at a row
@@ -13,6 +12,8 @@ struct TotalSpendLegendRow: View {
     @Environment(\.popoverIsVisible) private var popoverIsVisible
     @State private var isHovered = false
     @State private var textAreaWidth: CGFloat = 0
+    @State private var titleIdealWidth: CGFloat = 0
+    @State private var valueIdealWidth: CGFloat = 0
 
     private let valueSpacing: CGFloat = 8
 
@@ -25,17 +26,29 @@ struct TotalSpendLegendRow: View {
                 reclaimedWidth: allocation.reclaimedWidth,
                 spacing: valueSpacing
             ) {
-                Text(title)
-                    .font(.system(size: fontSize))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(value)
-                    .font(.system(size: fontSize, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                titleLabel
+                    .background {
+                        titleLabel
+                            .fixedSize(horizontal: true, vertical: false)
+                            .hidden()
+                            .onGeometryChange(for: CGFloat.self) { proxy in
+                                proxy.size.width
+                            } action: { width in
+                                titleIdealWidth = ceil(width) + 1
+                            }
+                    }
+                valueLabel
                     .mask(LegendValueFadeMask(hiddenFraction: allocation.hiddenValueFraction))
+                    .background {
+                        valueLabel
+                            .fixedSize(horizontal: true, vertical: false)
+                            .hidden()
+                            .onGeometryChange(for: CGFloat.self) { proxy in
+                                proxy.size.width
+                            } action: { width in
+                                valueIdealWidth = ceil(width)
+                            }
+                    }
             }
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.width
@@ -66,15 +79,26 @@ struct TotalSpendLegendRow: View {
         guard isHovered else { return .none }
         return LegendRowWidthAllocation.resolve(
             availableWidth: textAreaWidth,
-            titleWidth: measuredWidth(of: title, weight: .regular),
-            valueWidth: measuredWidth(of: value, weight: .medium),
+            titleWidth: titleIdealWidth,
+            valueWidth: valueIdealWidth,
             spacing: valueSpacing
         )
     }
 
-    private func measuredWidth(of text: String, weight: NSFont.Weight) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: fontSize, weight: weight)
-        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    private var titleLabel: some View {
+        Text(title)
+            .font(.system(size: fontSize))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+    }
+
+    private var valueLabel: some View {
+        Text(value)
+            .font(.system(size: fontSize, weight: .medium))
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
     }
 }
 
