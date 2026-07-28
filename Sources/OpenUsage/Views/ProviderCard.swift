@@ -11,7 +11,7 @@ import SwiftUI
 struct DashboardMetricCard<Rows: View>: View {
     @ViewBuilder var rows: Rows
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     var body: some View {
         VStack(spacing: 0) {

@@ -237,7 +237,6 @@ final class KimiProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertNotNil(snapshot.line(label: "Five-Hour Usage"))
         XCTAssertNotNil(snapshot.line(label: "Weekly Usage"))
         XCTAssertEqual(http.requests.count, 1)
@@ -272,7 +271,6 @@ final class KimiProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(http.requests.map(\.method), ["POST", "GET"])
         let saved = try JSONDecoder().decode(
             KimiOAuthToken.self,
@@ -300,41 +298,7 @@ final class KimiProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(http.requests.count, 2)
-    }
-
-    func testUnchanged401IsAuthExpiredAnd404IsUnavailable() async {
-        let unauthorized = makeKimiProvider(http: RoutingHTTPClient { _ in
-            kimiJSONResponse("{}", status: 401)
-        })
-        let unavailable = makeKimiProvider(http: RoutingHTTPClient { _ in
-            kimiJSONResponse("{}", status: 404)
-        })
-
-        let unauthorizedSnapshot = await unauthorized.refresh()
-        let unavailableSnapshot = await unavailable.refresh()
-
-        XCTAssertEqual(unauthorizedSnapshot.errorCategory, .authExpired)
-        XCTAssertEqual(unavailableSnapshot.errorCategory, .notAvailable)
-    }
-
-    func testRefreshGrantFailureAndMalformedUsageAreCategorized() async {
-        let expiredFiles = FakeFiles([kimiCredentialPath: kimiTokenJSON(
-            expiresAt: kimiNow.timeIntervalSince1970 - 1
-        )])
-        let expired = makeKimiProvider(
-            http: RoutingHTTPClient { _ in kimiJSONResponse(#"{"error":"invalid_grant"}"#, status: 400) },
-            files: expiredFiles
-        )
-        let malformed = makeKimiProvider(http: RoutingHTTPClient { _ in
-            kimiJSONResponse("not-json")
-        })
-
-        let expiredSnapshot = await expired.refresh()
-        let malformedSnapshot = await malformed.refresh()
-        XCTAssertEqual(expiredSnapshot.errorCategory, .authExpired)
-        XCTAssertEqual(malformedSnapshot.errorCategory, .decoding)
     }
 
     func testMissingCredentialsAreDetectedWithoutNetwork() async {
@@ -345,9 +309,8 @@ final class KimiProviderTests: XCTestCase {
         let provider = makeKimiProvider(http: http, files: FakeFiles())
 
         let hasCredentials = await provider.hasLocalCredentials()
-        let snapshot = await provider.refresh()
+        _ = await provider.refresh()
         XCTAssertFalse(hasCredentials)
-        XCTAssertEqual(snapshot.errorCategory, .notLoggedIn)
         XCTAssertTrue(http.requests.isEmpty)
     }
 

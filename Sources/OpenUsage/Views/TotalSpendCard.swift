@@ -19,7 +19,7 @@ struct TotalSpendCard: View {
     @AppStorage("openusage.totalSpend.period") private var periodRawValue = TotalSpendPeriod.today.rawValue
     /// The selected metric (Cost / Cost/MTok / Tokens) survives the same way.
     @AppStorage("openusage.totalSpend.metric") private var metricRawValue = TotalSpendMetric.cost.rawValue
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     private var period: TotalSpendPeriod {
         TotalSpendPeriod(rawValue: periodRawValue) ?? .today
@@ -231,7 +231,7 @@ struct TotalSpendCard: View {
 struct TotalSpendRingContent: View {
     let projection: TotalSpendProjection
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     private static let ringDiameter: CGFloat = 104
 

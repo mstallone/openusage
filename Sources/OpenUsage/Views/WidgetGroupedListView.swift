@@ -24,11 +24,11 @@ struct WidgetGroupedListView: View {
     /// The card the "Rename…" alert is currently editing; `nil` when the alert is closed.
     @State private var renameCardID: String?
     @State private var renameDraft = ""
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     var body: some View {
         // Provider-section spacing is noticeably wider than the in-card row rhythm (so groups
-        // still read as groups); the exact step comes from the density setting.
+        // still read as groups); the exact step comes from the compact layout definition.
         VStack(alignment: .leading, spacing: density.sectionSpacing) {
             ForEach(groups) { group in
                 section(group)

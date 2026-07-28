@@ -262,7 +262,6 @@ final class OpenRouterProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(snapshot.plan, "Pay as you go")
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertNotNil(snapshot.line(label: "Credits"))
         XCTAssertNotNil(snapshot.line(label: "Balance"))
         XCTAssertNotNil(snapshot.line(label: "Today"))
@@ -299,7 +298,6 @@ final class OpenRouterProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertFalse(snapshot.lines.contains { $0.isError })
         XCTAssertNotNil(snapshot.line(label: "Today"))
         XCTAssertNil(snapshot.line(label: "Balance"))
@@ -317,7 +315,6 @@ final class OpenRouterProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(snapshot.lines.first?.label, "Error")
-        XCTAssertEqual(snapshot.errorCategory, .notLoggedIn)
     }
 
     func testRefreshOnAuthFailureReportsInvalidKey() async {
@@ -331,7 +328,7 @@ final class OpenRouterProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .authInvalid)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testRefreshDoesNotReportInvalidKeyWhenOnlyCreditsForbidden() async {
@@ -350,7 +347,10 @@ final class OpenRouterProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNotEqual(snapshot.errorCategory, .authInvalid)
+        guard case .badge(_, let text, _, _) = snapshot.lines.first else {
+            return XCTFail("expected an error badge")
+        }
+        XCTAssertNotEqual(text, OpenRouterAuthError.invalidKey.localizedDescription)
     }
 
     func testProviderAPIKeyManagingDelegatesToAuthStore() throws {

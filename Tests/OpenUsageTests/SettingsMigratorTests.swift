@@ -209,11 +209,42 @@ final class SettingsMigratorTests: XCTestCase {
         defaults.set(true, forKey: "betaUpdatesEnabled")
         defaults.set("custom", forKey: "openusage.layout.v1")
 
-        let result = SettingsMigrator.migrate(defaults: defaults, domainName: domain)
+        let result = SettingsMigrator.migrate(
+            defaults: defaults,
+            domainName: domain,
+            current: 3,
+            migrations: SettingsSchema.migrations
+        )
 
         XCTAssertEqual(result, 3)
         XCTAssertNil(defaults.object(forKey: "betaUpdatesEnabled"))
         XCTAssertEqual(defaults.string(forKey: "openusage.layout.v1"), "custom")
+    }
+
+    func testV4RemovesRetiredTelemetryDomainWithoutTouchingSettings() {
+        let (defaults, domain) = makeDefaults("V4RetiredTelemetry")
+        let telemetryDomain = "\(domain).telemetry"
+        let telemetryDefaults = UserDefaults(suiteName: telemetryDomain)!
+        defer {
+            defaults.removePersistentDomain(forName: domain)
+            defaults.removePersistentDomain(forName: telemetryDomain)
+        }
+        defaults.set(3, forKey: SettingsMigrator.schemaVersionKey)
+        defaults.set("custom", forKey: "openusage.layout.v1")
+        telemetryDefaults.set("install-uuid", forKey: "installID")
+        telemetryDefaults.set("2026-07-27", forKey: "activeDay")
+        telemetryDefaults.set(Data([0x01, 0x02]), forKey: "providerDays")
+
+        let result = SettingsMigrator.migrate(defaults: defaults, domainName: domain)
+
+        XCTAssertEqual(result, 4)
+        XCTAssertNil(defaults.persistentDomain(forName: telemetryDomain))
+        XCTAssertEqual(defaults.string(forKey: "openusage.layout.v1"), "custom")
+
+        // The cleanup is safe to retry after an interrupted launch.
+        defaults.set(3, forKey: SettingsMigrator.schemaVersionKey)
+        XCTAssertEqual(SettingsMigrator.migrate(defaults: defaults, domainName: domain), 4)
+        XCTAssertNil(defaults.persistentDomain(forName: telemetryDomain))
     }
 
     /// A legacy install with no disabled providers (the all-on default) converts to all-on.

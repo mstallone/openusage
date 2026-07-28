@@ -1,15 +1,27 @@
 import Foundation
 
 /// One ordered step that brings persisted settings from schema version `version - 1` up to `version`.
-/// A step is a pure transform over a `UserDefaults` domain — rename a key, seed a new default, drop a
-/// dead one. Keep it idempotent: an interrupted upgrade may re-run the same step on the next launch.
+/// Most steps transform the app's `UserDefaults` domain — rename a key, seed a new default, drop a dead
+/// one. The domain name is also available for retiring a related suite. Keep every step idempotent: an
+/// interrupted upgrade may re-run the same step on the next launch.
 struct SettingsMigration: Sendable {
     /// The schema version this step produces. Versions are whole numbers counting up (1, 2, 3, …) and
     /// are independent of the app's marketing version — they change only when a *setting's shape* does.
     let version: Int
-    /// Applies the change to `defaults`. Throw to abort the cascade: the engine stops, keeps the version
-    /// at the last success, and retries from there on the next launch.
-    let migrate: @Sendable (UserDefaults) throws -> Void
+    /// Applies the change to `defaults` and, when needed, a related domain derived from `domainName`.
+    /// Throw to abort the cascade: the engine stops, keeps the version at the last success, and retries
+    /// from there on the next launch.
+    let migrate: @Sendable (UserDefaults, String) throws -> Void
+
+    init(version: Int, migrate: @escaping @Sendable (UserDefaults) throws -> Void) {
+        self.version = version
+        self.migrate = { defaults, _ in try migrate(defaults) }
+    }
+
+    init(version: Int, migrate: @escaping @Sendable (UserDefaults, String) throws -> Void) {
+        self.version = version
+        self.migrate = migrate
+    }
 }
 
 /// The settings schema: its current version and the ordered migrations that build up to it. This enum is
@@ -18,7 +30,7 @@ struct SettingsMigration: Sendable {
 enum SettingsSchema {
     /// Current schema version. Keep equal to the highest migration `version` below (or the baseline when
     /// there are none). This is NOT the app version — bump it only alongside a migration you add.
-    static let current = 3
+    static let current = 4
 
     /// The provider IDs that existed when the v2 migration shipped, frozen forever. A migration is a
     /// point-in-time transform: any future build with more providers also contains this migration, so a
@@ -54,6 +66,13 @@ enum SettingsSchema {
         // stable channel, so keeping the old toggle value would be misleading dead state.
         SettingsMigration(version: 3) { defaults in
             defaults.removeObject(forKey: "betaUpdatesEnabled")
+        },
+        // v4 removes the separate suite used by the retired analytics subsystem. Removing its code does
+        // not remove the persisted domain, which contains the old anonymous install ID and daily
+        // provider counters. Delete the whole suite so no analytics bookkeeping survives the upgrade.
+        SettingsMigration(version: 4) { defaults, domainName in
+            guard !domainName.isEmpty else { return }
+            defaults.removePersistentDomain(forName: "\(domainName).telemetry")
         }
     ]
 }
@@ -103,7 +122,7 @@ enum SettingsMigrator {
         for step in migrations.sorted(by: { $0.version < $1.version })
         where step.version > version && step.version <= current {
             do {
-                try step.migrate(defaults)
+                try step.migrate(defaults, domainName)
             } catch {
                 AppLog.warn(.config, "settings migration to v\(step.version) failed: \(error.localizedDescription) — will retry next launch")
                 return version  // keep the last success; resume here next launch

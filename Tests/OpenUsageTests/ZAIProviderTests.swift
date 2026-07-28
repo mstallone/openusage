@@ -381,7 +381,6 @@ final class ZAIProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(snapshot.plan, "GLM Coding Max")
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertNotNil(snapshot.line(label: "Session"))
         XCTAssertNotNil(snapshot.line(label: "Web Searches"))
     }
@@ -401,7 +400,6 @@ final class ZAIProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertFalse(snapshot.lines.contains { $0.isError })
         XCTAssertNotNil(snapshot.line(label: "Session"))
         XCTAssertNil(snapshot.plan)
@@ -419,7 +417,6 @@ final class ZAIProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(snapshot.lines.first?.label, "Error")
-        XCTAssertEqual(snapshot.errorCategory, .notLoggedIn)
     }
 
     func testRefreshOnAuthFailureReportsInvalidKey() async {
@@ -432,7 +429,7 @@ final class ZAIProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .authInvalid)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testRefreshOnNon2xxReportsRequestFailed() async {
@@ -448,7 +445,7 @@ final class ZAIProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .http5xx)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testRefreshOnTransportErrorReportsNetwork() async {
@@ -461,7 +458,7 @@ final class ZAIProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .network)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testRefreshWithoutCodingPlanReportsNotAvailable() async {
@@ -479,7 +476,6 @@ final class ZAIProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .notAvailable)
         XCTAssertEqual(snapshot.lines.first?.label, "Error")
         guard case .badge(_, let text, _, _) = snapshot.lines.first else {
             return XCTFail("expected an error badge")

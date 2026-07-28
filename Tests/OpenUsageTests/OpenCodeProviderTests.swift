@@ -70,7 +70,6 @@ final class OpenCodeProviderTests: XCTestCase {
         )
         let snapshot = await provider.refresh()
         XCTAssertEqual(snapshot.plan, "Go")
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertNotNil(snapshot.line(label: "Session"))
         XCTAssertNotNil(snapshot.line(label: "Weekly"))
         XCTAssertNotNil(snapshot.line(label: "Monthly"))
@@ -86,7 +85,7 @@ final class OpenCodeProviderTests: XCTestCase {
             now: { now }
         )
         let snapshot = await provider.refresh()
-        XCTAssertEqual(snapshot.errorCategory, .notLoggedIn)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testRefreshShowsZeroCapMetersWithGoKeyButNoDatabase() async {
@@ -99,7 +98,6 @@ final class OpenCodeProviderTests: XCTestCase {
             now: { now }
         )
         let snapshot = await provider.refresh()
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(snapshot.plan, "Go")
         guard case .progress(_, let used, let limit, _, _, _, _)? = snapshot.line(label: "Session") else {
             return XCTFail("expected a Session meter")
@@ -122,7 +120,7 @@ final class OpenCodeProviderTests: XCTestCase {
             now: { now }
         )
         let snapshot = await provider.refresh()
-        XCTAssertEqual(snapshot.errorCategory, .credentialAccess)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
         XCTAssertNil(snapshot.line(label: "Session"))
     }
 
@@ -135,7 +133,7 @@ final class OpenCodeProviderTests: XCTestCase {
             now: { now }
         )
         let snapshot = await provider.refresh()
-        XCTAssertEqual(snapshot.errorCategory, .credentialAccess)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testHasLocalCredentialsTrueWhenAuthFileUnreadable() async {

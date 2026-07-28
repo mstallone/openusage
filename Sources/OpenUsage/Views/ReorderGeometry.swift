@@ -41,9 +41,8 @@ struct ReorderLiftPreview: View {
     let lift: ReorderLift
 
     // The previews are deliberately the same views the live screens render (shared row/card
-    // builders); reading the density here lets the header→card spacing track the live sections too,
-    // so a lifted provider block matches its source block in every density.
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    // builders); reading the compact layout here keeps a lifted provider block matched to its source.
+    private let density = DensitySetting.compact
 
     var body: some View {
         preview
@@ -74,7 +73,7 @@ struct ReorderLiftPreview: View {
 
     private func dashboardProviderPreview(provider: Provider, plan: String?, rows: [WidgetData]) -> some View {
         // Same anatomy as the live dashboard section (`WidgetGroupedListView.section` + `container`):
-        // header over the shared metric card, at the density's header→card spacing.
+        // Header over the shared metric card, at the compact layout's header→card spacing.
         VStack(alignment: .leading, spacing: density.headerToCardSpacing) {
             ProviderSectionHeader(provider: provider, plan: plan)
                 .padding(.horizontal, 8)

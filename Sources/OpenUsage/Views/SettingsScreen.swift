@@ -19,7 +19,7 @@ struct SettingsScreen: View {
     @AppStorage(TotalSpendSetting.key) private var showTotalSpend = true
     @AppStorage(AppearanceSetting.key) private var appearance = AppearanceSetting.system
     @AppStorage(TimeFormatSetting.key) private var timeFormat = TimeFormatSetting.auto
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
     @AppStorage(LogLevelSetting.key) private var logLevel = LogLevelSetting.fallback
     /// Surfaced under the Advanced rows when copying the path or revealing the file fails.
     @State private var logActionError: String?
@@ -64,7 +64,7 @@ struct SettingsScreen: View {
         @Bindable var transparency = container.transparency
         @Bindable var privacy = container.privacy
         @Bindable var notifications = container.notificationSettings
-        // Same section rhythm as the dashboard and Customize (all read the density setting).
+        // Same compact section rhythm as the dashboard and Customize.
         return VStack(alignment: .leading, spacing: density.sectionSpacing) {
             section("General") {
                 // The dashboard's cross-provider Total Spend card; at least one enabled spend-capable
@@ -100,9 +100,6 @@ struct SettingsScreen: View {
                         .onChange(of: appearance) {
                             AppearanceSetting.applyCurrent()
                         }
-                }
-                row("Density") {
-                    picker($density, options: DensitySetting.allCases, label: \.label)
                 }
                 row("Time Format") {
                     picker($timeFormat, options: TimeFormatSetting.allCases, label: \.label)
@@ -168,21 +165,6 @@ struct SettingsScreen: View {
                             .settingsSwitchStyle()
                     }
                     Text("While your screen is shared or recorded, the menu bar shows “OpenUsage” instead of your usage.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    row("Share Anonymous Usage") {
-                        Toggle("", isOn: Binding(
-                            get: { container.telemetry.isEnabled },
-                            set: { container.telemetry.setEnabled($0) }
-                        ))
-                        .settingsSwitchStyle()
-                    }
-                    // Plain-language disclosure of exactly what leaves the machine — coarse counts and
-                    // error types only, never account details or usage values.
-                    Text("Shares anonymous usage counts and error types to help improve OpenUsage. No account details, credentials, or usage values are sent.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)

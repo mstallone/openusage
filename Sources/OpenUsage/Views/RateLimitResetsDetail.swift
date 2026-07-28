@@ -30,7 +30,7 @@ struct RateLimitResetsDetail: View {
     /// type doc). `nil` makes the timeline read-only (no "Use" affordance).
     var claim: ((_ expiry: Date, _ redeemRequestID: String) async -> ResetClaimOutcome)?
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     /// Which credits this popover has already claimed (keyed by expiry instant, which is unique per
     /// credit), so a claimed node drops out of the timeline immediately without waiting for a refresh.

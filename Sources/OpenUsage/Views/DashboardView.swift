@@ -58,7 +58,7 @@ struct DashboardView: View {
     /// Footer content starts at the same standard padding as the provider containers.
     private static let footerHorizontalPadding: CGFloat = outerPadding
     private static let reorderSpace = "popoverReorderSpace"
-    /// One width across both densities — switching density shouldn't move the popover's left edge.
+    /// The popover keeps a fixed width while its compact layout auto-fits vertically.
     private static let popoverWidth: CGFloat = 320
     /// Fixed height of the Customize / Settings back nav bar — the bar pins itself to exactly this height.
     private static let topBarHeight: CGFloat = 44

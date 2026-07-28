@@ -21,9 +21,9 @@ enum ProviderRefreshContext {
 /// - `.text` — a string-valued provider notice preserved for the local API. Dashboard widgets do not
 ///   parse display text; use a typed line above for every widget descriptor.
 ///
-/// On failure, return `ProviderSnapshot.error(provider:error:)` with a typed provider error so the error
-/// surfaces loudly in the UI and telemetry can report a stable, non-PII category. Use the message-only
-/// factory only when no typed error exists.
+/// On failure, return `ProviderSnapshot.error(provider:error:)` with a typed provider error so its
+/// user-facing description surfaces loudly in the UI. Use the message-only factory only when no typed
+/// error exists.
 @MainActor
 protocol ProviderRuntime: AnyObject {
     var provider: Provider { get }

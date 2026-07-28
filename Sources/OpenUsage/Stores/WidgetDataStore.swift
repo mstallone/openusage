@@ -84,11 +84,6 @@ final class WidgetDataStore {
     /// just gathers each pass's enabled bounded metrics and delegates.
     @ObservationIgnored private let notificationEvaluator = QuotaNotificationEvaluator()
 
-    /// Telemetry hook wired by `AppContainer`. Invoked once per *real* provider fetch — `.refreshed` or
-    /// `.failed` only, never the cache-hit/skip/backoff outcomes that the 5-minute timer produces in
-    /// bulk — so the recorder can roll daily usage and error counts up into one event per provider per
-    /// day. `nil` (and so a no-op) in tests and previews. Not observable UI state.
-    @ObservationIgnored var onRefreshOutcome: (@MainActor (String, RefreshOutcome, ErrorCategory?, Bool) -> Void)?
     /// Wired by `ICloudUsageSyncStore`; debounced there so a concurrent provider batch produces one file.
     @ObservationIgnored var onLocalHistoryChanged: (@MainActor () -> Void)?
     @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
@@ -319,7 +314,6 @@ final class WidgetDataStore {
             // Negative-cache the failure so a wake burst can't re-probe this provider in a tight loop.
             failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
             AppLog.warn(.refresh, "\(providerID) failed: \(message)")
-            onRefreshOutcome?(providerID, .failed, snapshot.errorCategory, force)
             return .failed
         }
         if providerErrors[providerID] != nil {
@@ -352,7 +346,6 @@ final class WidgetDataStore {
         rebuildRenderedSnapshots()
         if notifyHistoryChange { onLocalHistoryChanged?() }
         AppLog.info(.refresh, "\(providerID) ok (\(durationMs)ms)")
-        onRefreshOutcome?(providerID, .refreshed, nil, force)
         return .refreshed
     }
 
