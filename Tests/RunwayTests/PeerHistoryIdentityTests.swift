@@ -42,7 +42,11 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let localMap = ["claude": maxKey, "claude@f15456b0": teamKey]
 
-        let remapped = PeerHistoryRemapper.remap(documents: [miniDoc], localIdentityByCardID: localMap)
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [miniDoc],
+            localCardIDs: Set(localMap.keys),
+            localIdentityByCardID: localMap
+        )
 
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
         let byCard = Dictionary(grouping: remapped.histories, by: { $0.cardID })
@@ -58,6 +62,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let remapped = PeerHistoryRemapper.remap(
             documents: [doc],
+            localCardIDs: ["claude"],
             localIdentityByCardID: ["claude": maxKey]
         )
         XCTAssertTrue(remapped.histories.isEmpty)
@@ -80,7 +85,11 @@ final class PeerHistoryIdentityTests: XCTestCase {
             providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
             identities: ["claude": teamKey]
         )
-        let remapped = PeerHistoryRemapper.remap(documents: [doc], localIdentityByCardID: [:])
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [doc],
+            localCardIDs: ["claude"],
+            localIdentityByCardID: [:]
+        )
 
         XCTAssertEqual(remapped.histories.first?.cardID, "claude")
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
@@ -95,6 +104,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let remapped = PeerHistoryRemapper.remap(
             documents: [v1],
+            localCardIDs: ["claude"],
             localIdentityByCardID: ["claude": maxKey]
         )
         XCTAssertEqual(remapped.histories.first?.cardID, "claude")
@@ -161,7 +171,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertEqual(total.slices[0].amountUSD, 42, accuracy: 0.001)
     }
 
-    func testRemoteOnlyAccountFeedsTotalSpendWithOnlyAScopedFamilyTemplate() {
+    func testBareRemoteAccountFeedsTotalSpendWithOnlyAScopedFamilyTemplate() {
         let scoped = ClaudeProvider.makeProvider(
             id: "claude@f15456b0",
             displayName: "Claude — Local"
@@ -183,8 +193,8 @@ final class PeerHistoryIdentityTests: XCTestCase {
         let today = dayKey(Date())
         let doc = makeDocument(
             deviceName: "Mac mini",
-            providers: ["claude@ab12cd34": history(day: today, tokens: 1_000, cost: 7)],
-            identities: ["claude@ab12cd34": "uuid-other|org-x"]
+            providers: ["claude": history(day: today, tokens: 1_000, cost: 7)],
+            identities: ["claude": "uuid-other|org-x"]
         )
 
         dataStore.setPeerHistoryDocuments([doc], ownDeviceID: "this-mac")

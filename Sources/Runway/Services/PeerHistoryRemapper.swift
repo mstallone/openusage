@@ -26,10 +26,12 @@ enum PeerHistoryRemapper {
         var histories: [ProviderUsageHistory]
     }
 
-    /// `localIdentityByCardID` is this Mac's card → identity map (the launch account pass's
+    /// `localCardIDs` is the complete set of cards in this Mac's registry.
+    /// `localIdentityByCardID` is the subset with resolved identities (the launch account pass's
     /// `identityKeysByCard`).
     static func remap(
         documents: [UsageHistoryDocument],
+        localCardIDs: Set<String>,
         localIdentityByCardID: [String: String]
     ) -> Remapped {
         // Invert to identity → card, preferring the bare (default) card when an identity appears on
@@ -61,7 +63,9 @@ enum PeerHistoryRemapper {
                 if let identity = document.identities?[peerCardID] {
                     if let localCard = localCardByIdentity[identity] {
                         result.histories.append((localCard, history))
-                    } else if !ProviderAccountID.isAccountCard(peerCardID), localIdentityByCardID[peerCardID] == nil {
+                    } else if !ProviderAccountID.isAccountCard(peerCardID),
+                              localCardIDs.contains(peerCardID),
+                              localIdentityByCardID[peerCardID] == nil {
                         // The peer named its bare card's account, but this Mac's own bare card has
                         // an UNRESOLVED identity this launch — we can't prove a mismatch, so keep
                         // the legacy same-card-id merge rather than splitting what is most likely

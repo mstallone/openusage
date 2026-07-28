@@ -423,6 +423,7 @@ final class WidgetDataStore {
         // becomes a Total Spend-only remote entry below.
         let remapped = PeerHistoryRemapper.remap(
             documents: peerHistoryDocuments,
+            localCardIDs: Set(registry.providers.map(\.id)),
             localIdentityByCardID: providerIdentityKeys
         )
         let merged = UsageHistoryAggregator.merged(
