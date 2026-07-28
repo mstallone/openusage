@@ -59,6 +59,9 @@ a card and choose **Rename…**
 still found on this Mac — log it out or delete the dir and the card disappears, keeping its customization
 and history for if it returns. Turn a card off like any provider in Customize.
 
+An ambient `CLAUDE_CODE_OAUTH_TOKEN` cannot identify its account, but it still keeps default-home local
+spend available under a clearly labeled "Claude — Environment Token" card.
+
 In the [CLI](../cli.md) and [local API](../local-http-api.md), extra cards appear under ids like
 `claude@ab12cd34`; requesting `claude` returns every Claude card.
 

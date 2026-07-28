@@ -205,6 +205,18 @@ struct LegendRowMarqueeMetrics {
     }
 }
 
+/// Reduce Motion replaces the marquee with one immediate state change. At rest the prefix remains
+/// visible; hovering jumps to the ending so both sides of an overlong account title remain reachable.
+struct LegendRowMarqueeOffset {
+    static func immediateTarget(
+        isActive: Bool,
+        reduceMotion: Bool,
+        distance: CGFloat
+    ) -> CGFloat {
+        isActive && reduceMotion ? -distance : 0
+    }
+}
+
 /// One of the two final title/value layouts. `reclaimedWidth` is deliberately not animatable: hover
 /// crossfades between a resting instance and an already-expanded instance instead of changing a
 /// Text proposal frame by frame.
@@ -310,19 +322,24 @@ private struct LegendRowMarqueeTitle: View {
 
     @MainActor
     private func updateOffset() async {
-        guard isActive, !reduceMotion else {
-            if !isActive {
-                do {
-                    try await Task.sleep(for: .milliseconds(140))
-                } catch {
-                    return
-                }
+        guard isActive else {
+            do {
+                try await Task.sleep(for: .milliseconds(140))
+            } catch {
+                return
             }
-            resetOffset()
+            setOffset(0)
             return
         }
 
-        resetOffset()
+        let immediateTarget = LegendRowMarqueeOffset.immediateTarget(
+            isActive: isActive,
+            reduceMotion: reduceMotion,
+            distance: distance
+        )
+        setOffset(immediateTarget)
+        guard !reduceMotion else { return }
+
         do {
             try await Task.sleep(for: .milliseconds(450))
         } catch {
@@ -336,11 +353,11 @@ private struct LegendRowMarqueeTitle: View {
     }
 
     @MainActor
-    private func resetOffset() {
+    private func setOffset(_ target: CGFloat) {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            offset = 0
+            offset = target
         }
     }
 

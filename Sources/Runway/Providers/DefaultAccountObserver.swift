@@ -72,6 +72,13 @@ struct DefaultAccountObserver: Sendable {
         return email.map { "\($0) (\(org))" } ?? org
     }
 
+    /// An ambient inference token has no account metadata, so it cannot participate in identity
+    /// reconciliation. It still keeps the standard Claude runtime useful for default-home spend logs.
+    var hasAmbientClaudeToken: Bool {
+        environment.value(for: "CLAUDE_CODE_OAUTH_TOKEN")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty != nil
+    }
+
     /// The default Claude home, mirroring `ClaudeAuthStore`'s resolution exactly (the observer must
     /// name the account whose credentials the provider actually refreshes with): `CLAUDE_CONFIG_DIR`
     /// when exported, else `~/.claude`. A comma-separated list can't be assigned one identity.
@@ -197,10 +204,9 @@ struct DefaultAccountObserver: Sendable {
             }
         }
 
-        // A service-only legacy item has no trustworthy home address and therefore contributes no
-        // identity here. The catalog still keeps its historical fallback card; importantly, an
-        // unrelated account-scoped item elsewhere under the shared service cannot suppress verified
-        // file-backed homes just because a service-only query happens to find it first.
+        // A service-only item has no trustworthy home address and therefore contributes no identity
+        // here. An unrelated account-scoped item elsewhere under the shared service cannot suppress
+        // verified file-backed homes just because a service-only query happens to find it first.
         return sawFootprint
             ? .unresolved(reason: "credentials present but no account identity")
             : .absent

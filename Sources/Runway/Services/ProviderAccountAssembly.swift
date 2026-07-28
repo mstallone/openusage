@@ -46,8 +46,8 @@ struct ProviderAccountAssembly {
     let identityKeysByCard: [String: String]
     /// Extra Claude account cards found on this computer this launch, in stable id order.
     var claudeCards: [ClaudeAccountCard] = []
-    /// The default Claude card's derived title. It stays "Claude" for one discovered account and
-    /// includes that account's label when Claude has active siblings.
+    /// The standard Claude runtime's title. A resolved default account uses its derived account
+    /// title; an identity-less ambient token gets an explicit source title instead.
     var claudeDefaultDisplayName: String?
     /// Same-account custom config dirs discovered for the DEFAULT card's login: extra spend-log
     /// roots for the default scanner, never extra credentials.
@@ -310,11 +310,18 @@ struct ProviderAccountAssembly {
         }
 
         let records = accountsStore.reconcile(with: observations)
-        let claudeDefaultDisplayName: String? = identityKeys["claude"].flatMap { identityKey in
-            guard accountsStore.record(backingCardID: "claude")?.identityKey == identityKey else {
-                return nil
-            }
-            return accountsStore.derivedDisplayName(cardID: "claude")
+        let claudeDefaultDisplayName: String?
+        if let identityKey = identityKeys["claude"],
+           accountsStore.record(backingCardID: "claude")?.identityKey == identityKey
+        {
+            claudeDefaultDisplayName = accountsStore.derivedDisplayName(cardID: "claude")
+        } else if claudeOutcome == .absent, observer.hasAmbientClaudeToken {
+            // Environment tokens deliberately have no account identity and cannot borrow an email
+            // from a discovered config-dir card. Name the source honestly and keep its local spend
+            // runtime distinct from the one identifiable account.
+            claudeDefaultDisplayName = "Claude — Environment Token"
+        } else {
+            claudeDefaultDisplayName = nil
         }
 
         // The extra-card build plan: one card per distinct account found this launch, under its

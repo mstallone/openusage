@@ -289,6 +289,46 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         XCTAssertEqual(providers.map(\.provider.displayName), ["Claude"])
     }
 
+    func testAmbientClaudeTokenKeepsItsSpendRuntimeBesideAConfigDirAccount() throws {
+        let defaults = makeScratchDefaults()
+        let store = ProviderAccountsStore(defaults: defaults)
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"]),
+            files: FakeFiles([:]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+        let discovery = makeDiscovery(
+            files: [
+                "/Users/dev/.claude-work/.claude.json":
+                    #"{"oauthAccount": {"accountUuid": "ACCT-2", "emailAddress": "work@example.com"}}"#,
+                "/Users/dev/.claude-work/.credentials.json":
+                    #"{"claudeAiOauth": {"accessToken": "at-2"}}"#,
+            ],
+            subdirectories: ["/Users/dev/.claude-work"]
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer, accountsStore: store, claudeDiscovery: discovery
+        )
+        let card = try XCTUnwrap(assembly.claudeCards.first)
+        let providers = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards,
+            claudeDefaultDisplayName: assembly.claudeDefaultDisplayName
+        ).compactMap { $0 as? ClaudeProvider }
+
+        XCTAssertEqual(assembly.claudeDefaultDisplayName, "Claude — Environment Token")
+        XCTAssertEqual(providers.map(\.provider.id), ["claude", card.id])
+        XCTAssertEqual(
+            providers.map(\.provider.displayName),
+            ["Claude — Environment Token", "Claude"]
+        )
+        XCTAssertEqual(providers.map(\.authStore.scope), [.standard, .configDir(
+            path: "/Users/dev/.claude-work",
+            keychainLiteral: "/Users/dev/.claude-work"
+        )])
+    }
+
     func testARenameNeverBakesIntoTheCardOnlyTheResolverCarriesIt() throws {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)

@@ -94,4 +94,31 @@ final class TotalSpendLegendRowTests: XCTestCase {
         XCTAssertEqual(metrics.distance, 400)
         XCTAssertEqual(metrics.duration, 6)
     }
+
+    func testReduceMotionJumpsToTheMarqueeEndingOnHover() {
+        XCTAssertEqual(
+            LegendRowMarqueeOffset.immediateTarget(
+                isActive: true,
+                reduceMotion: true,
+                distance: 64
+            ),
+            -64
+        )
+        XCTAssertEqual(
+            LegendRowMarqueeOffset.immediateTarget(
+                isActive: false,
+                reduceMotion: true,
+                distance: 64
+            ),
+            0
+        )
+        XCTAssertEqual(
+            LegendRowMarqueeOffset.immediateTarget(
+                isActive: true,
+                reduceMotion: false,
+                distance: 64
+            ),
+            0
+        )
+    }
 }

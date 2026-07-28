@@ -17,7 +17,7 @@ When Codex reports your plan name, Runway shows it beside the provider name.
 
 ## Where credentials come from
 
-Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). Tokens refresh automatically and rotate back into that account's original credential store. The legacy single-card path also supports older service-level keychain credentials.
+Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). Tokens refresh automatically and rotate back into that account's original credential store.
 
 ## Multiple accounts
 
@@ -40,8 +40,6 @@ email when available. If the only login lives in a custom home, it is the sole C
 not add an unscoped card beside it.
 
 Additional cards use stable ids such as `codex@ab12cd34`. You can rename any Codex card from its context menu or Customize. CLI and local API queries for `codex` return every active Codex account card; querying the full card id selects one.
-
-Older service-level keychain credentials have no trustworthy home address, so they continue through the legacy single Codex card instead of being assigned to an extra account.
 
 ## The spend tiles
 
