@@ -1,6 +1,6 @@
 # Publishes the pricing supplement to GitHub Pages whenever it changes on main.
 #
-# Installed apps fetch https://mstallone.github.io/openusage/pricing_supplement.json on their daily
+# Installed apps fetch https://mstallone.github.io/runway/pricing_supplement.json on their daily
 # pricing refresh, so merging a change to the supplement updates Cursor-native model pricing (auto,
 # composer-*, github_bugbot), fast multipliers, and model alias rules in the field within ~a day —
 # no tag, no release, no Sparkle involvement.
@@ -13,7 +13,7 @@ on:
   push:
     branches: [main]
     paths:
-      - Sources/OpenUsage/Resources/pricing_supplement.json
+      - Sources/Runway/Resources/pricing_supplement.json
       - .github/workflows/pricing-supplement.yml
   workflow_dispatch:
 
@@ -34,7 +34,7 @@ jobs:
         run: |
           python3 - << 'PY'
           import json, re, sys
-          with open("Sources/OpenUsage/Resources/pricing_supplement.json") as f:
+          with open("Sources/Runway/Resources/pricing_supplement.json") as f:
               supplement = json.load(f)
           problems = []
           for model, entry in supplement["pricing"].items():
@@ -60,7 +60,7 @@ jobs:
       - name: Assemble Pages directory
         run: |
           mkdir -p public
-          cp Sources/OpenUsage/Resources/pricing_supplement.json public/pricing_supplement.json
+          cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0

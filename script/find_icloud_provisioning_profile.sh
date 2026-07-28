@@ -41,7 +41,7 @@ for directory in "${profile_directories[@]}"; do
   [ -d "$directory" ] || continue
 
   while IFS= read -r -d '' candidate; do
-    decoded_profile=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/openusage-profile.XXXXXX")
+    decoded_profile=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/runway-profile.XXXXXX")
     if ! /usr/bin/security cms -D -i "$candidate" >"$decoded_profile" 2>/dev/null; then
       /bin/rm -f "$decoded_profile"
       continue

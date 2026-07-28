@@ -36,7 +36,7 @@ rm -rf "$FRAMEWORKS/Sparkle.framework"
 # ditto preserves the framework's version symlinks and signature layout (cp -R can flatten them).
 ditto "$SPARKLE_FW" "$FRAMEWORKS/Sparkle.framework"
 
-# OpenUsage is not sandboxed, so Sparkle's XPC services are unnecessary. Removing them avoids the
+# Runway is not sandboxed, so Sparkle's XPC services are unnecessary. Removing them avoids the
 # nested-XPC signing/entitlements dance and the "error launching the installer" failure some
 # non-sandboxed apps hit when launchd refuses the XPC services. Glob the version letter (Sparkle has
 # used letters other than "B") so this never silently no-ops and leaves XPC services for --deep to hit.

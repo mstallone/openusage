@@ -1,4 +1,4 @@
-<!-- OpenUsage has a strict, issue-first PR policy. External pull requests are closed
+<!-- Runway has a strict, issue-first PR policy. External pull requests are closed
 automatically unless they link an issue a maintainer has approved with the `approved`
 label, stay under 1,000 changed lines, and include screenshots for visual changes.
 See CONTRIBUTING.md. Maintainers and collaborators may open PRs directly. -->

@@ -3,9 +3,9 @@
 > **Historical / superseded.** This feasibility report is a 2026-07-04 preimplementation snapshot.
 > The model-breakdown data path and spend-row hover panel described as proposed below shipped that
 > day; see [Dashboard rows](../../dashboard.md#rows),
-> [`SpendTileMapper.swift`](../../../Sources/OpenUsage/Providers/SpendTileMapper.swift),
-> [`HoverPopoverState.swift`](../../../Sources/OpenUsage/Views/HoverPopoverState.swift), and
-> [`ModelUsageDetail.swift`](../../../Sources/OpenUsage/Views/ModelUsageDetail.swift) for the current
+> [`SpendTileMapper.swift`](../../../Sources/Runway/Providers/SpendTileMapper.swift),
+> [`HoverPopoverState.swift`](../../../Sources/Runway/Views/HoverPopoverState.swift), and
+> [`ModelUsageDetail.swift`](../../../Sources/Runway/Views/ModelUsageDetail.swift) for the current
 > implementation. The analysis remains a historical record rather than current-state documentation;
 > narrow implementation references may be corrected as the code evolves.
 
@@ -23,7 +23,7 @@ Recommended shape: compute a provider-neutral per-day-per-model aggregate at the
 
 ## Current spend data path
 
-Shared spend tiles are produced in `Sources/OpenUsage/Providers/SpendTileMapper.swift`.
+Shared spend tiles are produced in `Sources/Runway/Providers/SpendTileMapper.swift`.
 
 `SpendTileMapper.appendTokenUsage(_:to:now:estimated:unknownModelsByDay:)` appends three `.values` lines:
 
@@ -31,7 +31,7 @@ Shared spend tiles are produced in `Sources/OpenUsage/Providers/SpendTileMapper.
 - `Yesterday`
 - `Last 30 Days`
 
-It consumes `DailyUsageSeries` from `Sources/OpenUsage/Models/DailyUsageSeries.swift`. That type is intentionally provider-neutral and contains only:
+It consumes `DailyUsageSeries` from `Sources/Runway/Models/DailyUsageSeries.swift`. That type is intentionally provider-neutral and contains only:
 
 - `DailyUsageEntry.date`
 - `DailyUsageEntry.totalTokens`
@@ -44,7 +44,7 @@ It consumes `DailyUsageSeries` from `Sources/OpenUsage/Models/DailyUsageSeries.s
 
 That means current spend rows have enough data to show total cost/tokens and unknown pricing warnings, but not enough to show model-by-model totals.
 
-The shared pricing engine is in `Sources/OpenUsage/Pricing/`:
+The shared pricing engine is in `Sources/Runway/Pricing/`:
 
 - `ModelPricing.resolve(model:)` returns `ModelRates?`.
 - `ModelPricing.estimatedCostDollars(model:tokens:)` prices a `TokenBreakdown`.
@@ -65,7 +65,7 @@ Spend source today:
 
 Per-model data available before collapse:
 
-- `CursorUsageCSVRow` in `Sources/OpenUsage/Providers/Cursor/CursorUsageCSV.swift` carries:
+- `CursorUsageCSVRow` in `Sources/Runway/Providers/Cursor/CursorUsageCSV.swift` carries:
   - `date: Date`
   - `model: String`
   - `maxMode: Bool`
@@ -94,7 +94,7 @@ Spend source today:
 
 Per-model data available before collapse:
 
-- `ClaudeLogUsageScanner.Entry` in `Sources/OpenUsage/Providers/Claude/ClaudeLogUsageScanner.swift` carries:
+- `ClaudeLogUsageScanner.Entry` in `Sources/Runway/Providers/Claude/ClaudeLogUsageScanner.swift` carries:
   - `timestamp: Date`
   - `tokens: TokenBreakdown`
   - `costUSD: Double?`
@@ -125,7 +125,7 @@ Spend source today:
 
 Per-model data available before collapse:
 
-- `CodexLogUsageScanner.Event` in `Sources/OpenUsage/Providers/Codex/CodexLogUsageScanner.swift` carries:
+- `CodexLogUsageScanner.Event` in `Sources/Runway/Providers/Codex/CodexLogUsageScanner.swift` carries:
   - `timestamp: Date`
   - `model: String`
   - `input: Int`
@@ -180,7 +180,7 @@ Verdict: feasible for rows with inferred model ids, but the first implementation
 
 Metric identity:
 
-- `WidgetDescriptor.spendTiles(provider:)` in `Sources/OpenUsage/Models/WidgetDescriptor+Factories.swift` declares the three spend descriptors:
+- `WidgetDescriptor.spendTiles(provider:)` in `Sources/Runway/Models/WidgetDescriptor+Factories.swift` declares the three spend descriptors:
   - `<provider>.today`
   - `<provider>.yesterday`
   - `<provider>.last30`
@@ -224,21 +224,21 @@ Current row structure:
 
 `hoverTooltip`:
 
-- Implemented in `Sources/OpenUsage/Views/HoverTooltip.swift`.
+- Implemented in `Sources/Runway/Views/HoverTooltip.swift`.
 - It is a View modifier that shows text in a separate borderless, non-activating, click-through `NSPanel`.
 - The comments explicitly say a SwiftUI overlay inside the popover would be clipped by the popover window and scroll view, so tooltips use a separate panel.
 - The tooltip panel sits one level above `.popUpMenu`, does not become key/main, and is dismissed from `StatusItemController.hidePanel()` and `DashboardView.resetTransientState()`.
 
 Usage trend hover:
 
-- `UsageSparkline` in `Sources/OpenUsage/Views/UsageSparkline.swift` attaches hover only to the bar strip, not the whole row title.
-- It uses `TrendHoverState` from `Sources/OpenUsage/Views/UsageTrendDetail.swift`:
+- `UsageSparkline` in `Sources/Runway/Views/UsageSparkline.swift` attaches hover only to the bar strip, not the whole row title.
+- It uses `TrendHoverState` from `Sources/Runway/Views/UsageTrendDetail.swift`:
   - 400ms reveal dwell
   - 180ms hide grace while moving from inline row to detail popover
   - dismissal on teardown
 - It presents `UsageTrendDetail` through SwiftUI `.popover(isPresented:arrowEdge:)`.
 - `UsageTrendDetail` has its own internal bar hover state for highlighting the hovered day.
-- Tests in `Tests/OpenUsageTests/UsageTrendTests.swift` cover the open/close/quick-pass behavior.
+- Tests in `Tests/RunwayTests/UsageTrendTests.swift` cover the open/close/quick-pass behavior.
 
 Popover constraints:
 

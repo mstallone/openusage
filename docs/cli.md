@@ -1,14 +1,14 @@
 # Command-Line Interface
 
-OpenUsage ships a one-shot `openusage` command for agents and scripts. It prints the documented
+Runway ships a one-shot `runway` command for agents and scripts. It prints the documented
 [`/v1/limits`](local-http-api.md#get-v1limits) JSON and exits; it never launches or leaves the menu-bar
 app running. The output contains stable scalar limits and balances, not UI rows, colors, subtitles,
 charts, or spend-history tiles.
 
 ```sh
-openusage                 # every enabled provider, refreshing stale cache entries
-openusage codex           # one provider, refreshing when its cache is stale
-openusage codex --force   # refresh through the shared provider engine, cache, print, exit
+runway                 # every enabled provider, refreshing stale cache entries
+runway codex           # one provider, refreshing when its cache is stale
+runway codex --force   # refresh through the shared provider engine, cache, print, exit
 ```
 
 The command and app import the same providers, authentication stores, pricing, refresh coordinator, and
@@ -25,9 +25,9 @@ or account-picking logic.
 
 ## Install on `PATH`
 
-In OpenUsage, open **Settings → Command Line** and click **Install…**. After the standard macOS
-administrator prompt, `openusage` is available globally in new terminal sessions. The installed symlink
-points to the signed helper inside OpenUsage, so in-place app updates also update the command.
+In Runway, open **Settings → Command Line** and click **Install…**. After the standard macOS
+administrator prompt, `runway` is available globally in new terminal sessions. The installed symlink
+points to the signed helper inside Runway, so in-place app updates also update the command.
 
 Exit codes are `0` for success, `2` for invalid arguments or an unknown provider, and `4` when a
 refresh or local read fails.

@@ -2,11 +2,11 @@
 
 ## Reporting a Vulnerability
 
-If you find a security vulnerability in OpenUsage, please report it responsibly. Do not open a public issue.
+If you find a security vulnerability in Runway, please report it responsibly. Do not open a public issue.
 
 ### GitHub Security Advisories
 
-1. Open a [private vulnerability report](https://github.com/mstallone/openusage/security/advisories/new)
+1. Open a [private vulnerability report](https://github.com/mstallone/runway/security/advisories/new)
 2. Fill in the details and submit the report
 
 This keeps the report private until a fix is released.
@@ -28,7 +28,7 @@ This keeps the report private until a fix is released.
 
 The following are in scope:
 
-- The OpenUsage desktop application
+- The Runway desktop application
 - The built-in providers (credential handling, API calls)
 - The local HTTP API
 - Build and release infrastructure

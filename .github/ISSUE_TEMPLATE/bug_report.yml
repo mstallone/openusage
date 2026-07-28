@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in OpenUsage
+description: Report a bug in Runway
 labels: ["bug"]
 body:
   - type: markdown
@@ -20,7 +20,7 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce this?
       placeholder: |
-        1. Open OpenUsage
+        1. Open Runway
         2. Go to ...
         3. Click on ...
         4. See error
@@ -43,7 +43,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: OpenUsage Version
+      label: Runway Version
       description: Which version are you running?
       placeholder: "e.g. 0.7.0"
     validations:
@@ -52,7 +52,7 @@ body:
     id: macos
     attributes:
       label: macOS Version
-      description: OpenUsage requires macOS 15 (Sequoia) or later.
+      description: Runway requires macOS 15 (Sequoia) or later.
       placeholder: "e.g. 15.5"
     validations:
       required: true

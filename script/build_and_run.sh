@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds OpenUsage, stages a signed .app bundle under dist/, and launches it in place — no install
+# Builds Runway, stages a signed .app bundle under dist/, and launches it in place — no install
 # to /Applications. The dev build:
 #   - is signed with a stable Apple Development identity, so keychain/permission grants stick across
 #     rebuilds (macOS keys those to the signing identity + bundle id, not the install location);
-#   - uses its own bundle id (com.mattstallone.openusage.dev), so it never touches the real installed
+#   - uses its own bundle id (com.mattstallone.runway.dev), so it never touches the real installed
 #     app's settings or keychain. To run against the real app's data instead, set BUNDLE_ID to
-#     com.mattstallone.openusage below;
+#     com.mattstallone.runway below;
 #   - ships no Sparkle feed, so it never checks for or installs updates (test updates with a real
 #     signed + notarized release build — that's the only honest way).
 #
@@ -20,10 +20,10 @@ set -euo pipefail
 MODE="${1:-run}"
 CONFIG="${CONFIG:-release}"
 
-TARGET_NAME="OpenUsage"                 # SwiftPM target / binary name
-APP_DISPLAY="OpenUsage"                 # user-facing app name
-BUNDLE_ID="${BUNDLE_ID:-com.mattstallone.openusage.dev}"
-ICLOUD_CONTAINER_ID="iCloud.com.mattstallone.openusage.dev"
+TARGET_NAME="Runway"                 # SwiftPM target / binary name
+APP_DISPLAY="Runway"                 # user-facing app name
+BUNDLE_ID="${BUNDLE_ID:-com.mattstallone.runway.dev}"
+ICLOUD_CONTAINER_ID="iCloud.com.mattstallone.runway.dev"
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-8KZBNZJBAX}"
 export APPLE_TEAM_ID
 MIN_SYSTEM_VERSION="15.0"
@@ -38,11 +38,11 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_HELPERS="$APP_CONTENTS/Helpers"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$TARGET_NAME"
-CLI_BINARY="$APP_HELPERS/openusage"
+CLI_BINARY="$APP_HELPERS/runway"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 RESOURCE_BUNDLE_NAME="${TARGET_NAME}_${TARGET_NAME}.bundle"
-ENTITLEMENTS="$ROOT_DIR/script/OpenUsage.dev.entitlements.plist"
-SIGN_ENTITLEMENTS="$ROOT_DIR/script/OpenUsage.local.entitlements.plist"
+ENTITLEMENTS="$ROOT_DIR/script/Runway.dev.entitlements.plist"
+SIGN_ENTITLEMENTS="$ROOT_DIR/script/Runway.local.entitlements.plist"
 
 pkill -x "$TARGET_NAME" >/dev/null 2>&1 || true
 
@@ -50,7 +50,7 @@ echo "==> swift build ($CONFIG)"
 swift build -c "$CONFIG"
 BUILD_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 BUILD_BINARY="$BUILD_DIR/$TARGET_NAME"
-BUILD_CLI_BINARY="$BUILD_DIR/openusage-cli"
+BUILD_CLI_BINARY="$BUILD_DIR/runway-cli"
 
 if [ ! -x "$BUILD_BINARY" ]; then
   echo "missing built binary: $BUILD_BINARY" >&2
@@ -82,8 +82,8 @@ vtool -set-build-version macos "$MIN_SYSTEM_VERSION" 26.0 -replace -output "$APP
 mv "$APP_BINARY.tmp" "$APP_BINARY"
 chmod +x "$APP_BINARY"
 # Stage every SwiftPM resource bundle produced by the build (the app's own
-# OpenUsage_OpenUsage.bundle, which carries the provider SVGs + model manifest)
-# into Contents/Resources, the standard app layout. Bundle.openUsageResources
+# Runway_Runway.bundle, which carries the provider SVGs + model manifest)
+# into Contents/Resources, the standard app layout. Bundle.runwayResources
 # (see Support/ResourceBundle.swift) loads it from there.
 shopt -s nullglob
 for bundle in "$BUILD_DIR"/*.bundle; do
@@ -150,12 +150,12 @@ cat >"$INFO_PLIST" <<PLIST
   <true/>
   <key>NSUbiquitousContainers</key>
   <dict>
-    <key>iCloud.com.mattstallone.openusage.dev</key>
+    <key>iCloud.com.mattstallone.runway.dev</key>
     <dict>
       <key>NSUbiquitousContainerIsDocumentScopePublic</key>
       <false/>
       <key>NSUbiquitousContainerName</key>
-      <string>OpenUsage</string>
+      <string>Runway</string>
       <key>NSUbiquitousContainerSupportedFolderLevels</key>
       <string>None</string>
     </dict>
@@ -177,7 +177,7 @@ fi
 if [ -n "${ICLOUD_PROVISIONING_PROFILE:-}" ]; then
   echo "==> using iCloud provisioning profile: $ICLOUD_PROVISIONING_PROFILE"
   cp "$ICLOUD_PROVISIONING_PROFILE" "$APP_CONTENTS/embedded.provisionprofile"
-  SIGN_ENTITLEMENTS="$DIST_DIR/OpenUsage.dev.resolved.entitlements.plist"
+  SIGN_ENTITLEMENTS="$DIST_DIR/Runway.dev.resolved.entitlements.plist"
   "$ROOT_DIR/script/render_icloud_entitlements.sh" \
     "$ENTITLEMENTS" "$ICLOUD_PROVISIONING_PROFILE" "$SIGN_ENTITLEMENTS" \
     "$ICLOUD_CONTAINER_ID"

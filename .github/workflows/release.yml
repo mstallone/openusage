@@ -118,8 +118,8 @@ jobs:
           ICLOUD_PROFILE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_ICLOUD_PROFILE }}
         run: |
           set -euo pipefail
-          printf '%s' "$ICLOUD_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/openusage-icloud.provisionprofile"
-          echo "ICLOUD_PROVISIONING_PROFILE=$RUNNER_TEMP/openusage-icloud.provisionprofile" >> "$GITHUB_ENV"
+          printf '%s' "$ICLOUD_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/runway-icloud.provisionprofile"
+          echo "ICLOUD_PROVISIONING_PROFILE=$RUNNER_TEMP/runway-icloud.provisionprofile" >> "$GITHUB_ENV"
 
       - name: Write App Store Connect notarization key
         env:
@@ -197,22 +197,22 @@ jobs:
           SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-          OPENUSAGE_VERSION: ${{ steps.meta.outputs.version }}
+          RUNWAY_VERSION: ${{ steps.meta.outputs.version }}
         run: ./script/release.sh
 
       - name: Publish DMG to GitHub Releases
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.5
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: OpenUsage ${{ steps.meta.outputs.version }}
+          name: Runway ${{ steps.meta.outputs.version }}
           prerelease: false
           files: |
-            dist/OpenUsage-${{ steps.meta.outputs.version }}.dmg
-            dist/OpenUsage-${{ steps.meta.outputs.version }}.dmg.sha256
+            dist/Runway-${{ steps.meta.outputs.version }}.dmg
+            dist/Runway-${{ steps.meta.outputs.version }}.dmg.sha256
 
       - name: Generate appcast with Sparkle
         env:
-          DMG: OpenUsage-${{ steps.meta.outputs.version }}.dmg
+          DMG: Runway-${{ steps.meta.outputs.version }}.dmg
           # Per-tag GitHub release asset base. generate_appcast applies this prefix only to the new DMG
           # in feed/; preserved items keep their own (older-tag) URLs.
           DOWNLOAD_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/
@@ -265,7 +265,7 @@ jobs:
         env:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
         run: |
-          rm -f "$RUNNER_TEMP/openusage-icloud.provisionprofile"
+          rm -f "$RUNNER_TEMP/runway-icloud.provisionprofile"
           rm -f "$RUNNER_TEMP/sparkle_ed_private_key"
           if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
             rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"

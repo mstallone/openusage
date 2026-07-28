@@ -1,5 +1,5 @@
 version = 1
-name = "OpenUsage"
+name = "Runway"
 
 [setup]
 script = '''
@@ -26,7 +26,7 @@ done
 '''
 
 [[actions]]
-name = "OpenUsage Preview"
+name = "Runway Preview"
 icon = "run"
 command = "./script/build_and_run.sh verify"
 
