@@ -76,8 +76,8 @@ short trail in the log file:
   launches, so the previous account's cached snapshot was dropped instead of painting under the new
   login.
 - `account identity read skipped for claude, codex: login shell cold and no shell-environment
-  snapshot exists yet` — a first launch raced a slow login shell, so the named families were left
-  unread this launch; every later launch has a persisted snapshot to fall back on.
+  snapshot exists yet` — the bounded login-shell capture failed on a launch with no persisted
+  snapshot, so the named families were safely left unread rather than assembled from the wrong home.
 
 ## Tips
 

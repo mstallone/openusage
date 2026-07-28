@@ -62,11 +62,17 @@ final class AppContainer {
 
     /// `isFreshInstall` must be captured by the caller BEFORE `SettingsMigrator.migrate()` runs (the
     /// migrator's schema stamp makes the defaults domain non-empty). See `AppDelegate`.
-    init(isFreshInstall: Bool = false) {
+    init(isFreshInstall: Bool = false) async {
         // Capture the user's login-shell environment off-main so provider keys exported in a shell
         // profile (e.g. OPENROUTER_API_KEY) resolve in a Finder/Dock-launched build, not only when
-        // run from a terminal. Warmed here so the first refresh finds the cache ready.
-        LoginShellEnvironment.shared.prewarm()
+        // run from a terminal. Account assembly needs identity-relevant home overrides on a genuine
+        // first launch, so suspend the main actor until the bounded capture finishes. Later launches
+        // already have pinned identity facts and can keep warming the live environment in parallel.
+        if ShellEnvironmentSnapshotStore.launchSnapshot == nil {
+            _ = await LoginShellEnvironment.shared.ensureCapturedAsync()
+        } else {
+            LoginShellEnvironment.shared.prewarm()
+        }
         // Once the capture lands, persist its identity-relevant facts so the NEXT launch has them
         // even if that launch's own capture is slow (see `ShellEnvironmentSnapshot`).
         self.shellEnvironmentSnapshotTask = ShellEnvironmentSnapshotStore(defaults: .standard).startRefreshTask()

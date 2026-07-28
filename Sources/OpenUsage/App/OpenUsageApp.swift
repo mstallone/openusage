@@ -6,6 +6,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
     private var singleInstanceLock: SingleInstanceLock.Token?
     private let updater = UpdaterController()
+    private var launchTask: Task<Void, Never>?
 
     public override init() {
         super.init()
@@ -68,17 +69,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // preferredColorScheme, so the override is applied at the AppKit level once at launch;
         // the Theme picker on the Settings screen re-applies it on change.
         AppearanceSetting.applyCurrent()
-        let container = AppContainer(isFreshInstall: isFreshInstall)
-        self.container = container
-        statusItemController = StatusItemController(container: container, updater: updater)
-        // Starts background update checks (release build only; dormant under preview/`swift run`).
-        updater.start()
+        launchTask = Task { [weak self] in
+            guard let self else { return }
+            let container = await AppContainer(isFreshInstall: isFreshInstall)
+            guard !Task.isCancelled else { return }
+            self.container = container
+            self.statusItemController = StatusItemController(container: container, updater: self.updater)
+            // Starts background update checks (release build only; dormant under preview/`swift run`).
+            self.updater.start()
+        }
     }
 
     /// Flush queued telemetry on quit. The SDK's lifecycle autocapture is off (we emit our own daily
     /// rollups), so it won't auto-flush on termination — this explicit flush keeps low-frequency events
     /// from being stranded across a clean quit.
     public func applicationWillTerminate(_ notification: Notification) {
+        launchTask?.cancel()
         container?.telemetry.flush()
     }
 }
