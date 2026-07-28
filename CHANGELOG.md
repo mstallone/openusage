@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.8.0
+
+### New Features
+- Add the account registry and shared account-detection foundation ([#1027](https://github.com/robinebers/openusage/pull/1027)) by @robinebers
+- Add shell-environment support for account discovery ([#1026](https://github.com/robinebers/openusage/pull/1026)) by @robinebers
+- Add Claude multi-account support using custom configuration directories ([#1030](https://github.com/robinebers/openusage/pull/1030)) by @robinebers
+- Use consistent account names across provider cards ([#1031](https://github.com/robinebers/openusage/pull/1031)) by @robinebers
+- Add multi-home Codex, Kimi, and Sakana support by @mstallone
+
+### Bug Fixes
+- Collapse expanded provider details when the popover closes ([#1](https://github.com/mstallone/openusage/pull/1)) by @mstallone
+- Refine which metrics are visible by default ([#2](https://github.com/mstallone/openusage/pull/2)) by @mstallone
+- Remove the unsupported beta update channel ([#4](https://github.com/mstallone/openusage/pull/4)) by @mstallone
+
+### Chores
+- Cache parsed local usage logs across launches ([#1017](https://github.com/robinebers/openusage/pull/1017)) by @robinebers
+- Move releases to NextByte infrastructure ([#3](https://github.com/mstallone/openusage/pull/3)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.7.6...v0.8.0](https://github.com/mstallone/openusage/compare/v0.7.6...v0.8.0)
+
+- [6a2d74d](https://github.com/mstallone/openusage/commit/6a2d74d2f277287714376d7549ab1a979a4fc3d1) Cache parsed local usage logs across launches (#1017) by @robinebers
+- [d785f7e](https://github.com/mstallone/openusage/commit/d785f7e8b85669e840ecb5363443dfbf1a107806) Account-first Phase 0: shell-environment snapshot + the plan (#1026) by @robinebers
+- [7723025](https://github.com/mstallone/openusage/commit/7723025777716bcc3326cea22c890b3f706deb0a) Account-first Phase 1: account registry, default identity, cache stamp, plain-matching CLI/API (#1027) by @robinebers
+- [29253f4](https://github.com/mstallone/openusage/commit/29253f4f3e0b714a85c206bf5b95e1164e7de299) docs: changelog for v0.7.7-beta.1 by @robinebers
+- [842feae](https://github.com/mstallone/openusage/commit/842feae4e48337749e94946a6c6d714b6cfb97ba) Account-first Phase 2: Claude multi-account from custom config dirs (#1030) by @robinebers
+- [9d2bf09](https://github.com/mstallone/openusage/commit/9d2bf09f10e21f769494a525a9d65c84d7aeb1df) Account-first Phase 2b: one name resolver for card titles (#1031) by @robinebers
+- [7a87280](https://github.com/mstallone/openusage/commit/7a87280ccea2d560f28a702c2b7ad7eb4f42e1ae) Add multi-home Codex, Kimi, and Sakana support by @mstallone
+- [fc07f7a](https://github.com/mstallone/openusage/commit/fc07f7a90e969faefc0ac0b8dafe1dc44d99bf08) Collapse provider details when popover closes by @mstallone
+- [4cef6cc](https://github.com/mstallone/openusage/commit/4cef6ccc71391a5e282a7570702ff4e22a38d859) Merge pull request #1 from mstallone/details-close-on-toggle by @mstallone
+- [856a6c5](https://github.com/mstallone/openusage/commit/856a6c5b61dbf41197492b57902c2c839442f717) Refine default metric visibility (#2) by @mstallone
+- [0d6739d](https://github.com/mstallone/openusage/commit/0d6739de3850f97294fdae8fae562d4ce89fcd17) Move releases to NextByte infrastructure (#3) by @mstallone
+- [375c670](https://github.com/mstallone/openusage/commit/375c670459e5c9c6298e17bf15e6a11311a12329) Remove the beta update channel (#4) by @mstallone
+
 ## v0.7.7-beta.1
 
 ### Bug Fixes
