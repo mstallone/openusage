@@ -247,9 +247,15 @@ final class ProviderAccountsStore {
     /// Card id → resolved title for every record — the map the CLI/API boundary applies to its
     /// snapshots (`LocalUsageAPI.State.resolvingDisplayNames`).
     var resolvedDisplayNamesByCardID: [String: String] {
-        Dictionary(uniqueKeysWithValues: records.compactMap { record in
+        var titles = Dictionary(uniqueKeysWithValues: records.compactMap { record in
             resolvedDisplayName(cardID: record.id).map { (record.id, $0) }
         })
+        // Claude's default-home runtime always uses the bare card id even when the account backing it
+        // first minted an `@`-suffixed record id from a custom config dir.
+        if let defaultClaudeTitle = resolvedDisplayName(cardID: "claude") {
+            titles["claude"] = defaultClaudeTitle
+        }
+        return titles
     }
 
     /// Stores a user rename for a card; `nil` or blank clears it back to the derived name.

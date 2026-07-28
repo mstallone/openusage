@@ -219,6 +219,35 @@ final class ProviderAccountsStoreTests: XCTestCase {
         )
     }
 
+    func testDisplayNameMapAliasesAHashedRecordBackingTheBareClaudeRuntime() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let records = store.reconcile(with: [ProviderAccountsStore.AccountObservation(
+            family: "claude",
+            identityKey: "custom-home-first",
+            label: "work@example.com",
+            sources: [ProviderAccountSource(
+                kind: .configDir,
+                anchor: "/Users/dev/.claude-work",
+                holdsDefaultSource: false
+            )]
+        )])
+        let recordID = try XCTUnwrap(records.first?.id)
+        XCTAssertTrue(ProviderAccountID.isAccountCard(recordID))
+        store.rename(cardID: recordID, to: "Work")
+
+        store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: "custom-home-first",
+                label: "work@example.com"
+            ),
+        ])
+
+        XCTAssertEqual(store.record(backingCardID: "claude")?.id, recordID)
+        XCTAssertEqual(store.resolvedDisplayNamesByCardID["claude"], "Work")
+        XCTAssertEqual(store.resolvedDisplayNamesByCardID[recordID], "Work")
+    }
+
     func testOldInactiveSiblingDoesNotDisambiguateTheOnlyAccountFoundThisLaunch() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         store.reconcile(with: [

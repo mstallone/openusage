@@ -34,6 +34,30 @@ final class WidgetRegistryTests: XCTestCase {
         )
     }
 
+    func testAccountOnlyCardsInheritTheMissingFamilyAnchorPosition() {
+        let registry = WidgetRegistry(
+            providers: [
+                provider("claude@ab12cd34"),
+                provider("codex@ef56ab78"),
+                provider("cursor"),
+                provider("grok"),
+            ],
+            descriptors: []
+        )
+
+        XCTAssertEqual(
+            registry.orderedProviderIDs(savedOrder: ["cursor", "claude", "grok", "codex"]),
+            ["cursor", "claude@ab12cd34", "grok", "codex@ef56ab78"]
+        )
+        XCTAssertEqual(
+            registry.orderedProviderIDs(
+                savedOrder: ["claude", "cursor", "grok", "claude@ab12cd34", "codex"]
+            ),
+            ["cursor", "grok", "claude@ab12cd34", "codex@ef56ab78"],
+            "an exact saved account-card position takes precedence over the missing family anchor"
+        )
+    }
+
     func testLookupsReturnExpectedEntries() {
         let claude = provider("claude")
         let codex = provider("codex")
