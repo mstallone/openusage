@@ -13,18 +13,18 @@ OpenCode's own logs already on your Mac. Nothing is sent anywhere.
 | Today / Yesterday / Last 30 Days | Local cost and tokens across all your OpenCode-hosted usage (Go + Zen) |
 | Usage Trend | A day-by-day sparkline of tokens over the last month |
 
-When you have the Go subscription, OpenUsage shows "Go" beside the provider name.
+When you have the Go subscription, Runway shows "Go" beside the provider name.
 
 The Session / Weekly / Monthly meters show **observed local spend** — the usage recorded on *this* Mac. If
 you also use OpenCode Go on another machine, or OpenCode hasn't finished writing a session locally, the
 local figure can be lower than your true account usage, so treat the caps as a guide rather than the last
-word. (When OpenCode ships an official usage API, OpenUsage can switch to authoritative numbers without any
+word. (When OpenCode ships an official usage API, Runway can switch to authoritative numbers without any
 change on your side.) If you only use the Zen pay-as-you-go gateway (no Go subscription), the cap meters are
 hidden and you'll just see the spend tiles.
 
 ## Where credentials come from
 
-Use OpenCode as usual. OpenUsage reads OpenCode's local data directory
+Use OpenCode as usual. Runway reads OpenCode's local data directory
 (`~/.local/share/opencode`, or `$OPENCODE_DATA_DIR` / `$XDG_DATA_HOME` if you've set them): the
 `auth.json` Go key to detect that you use it, and the local SQLite logs for the numbers. There's no login
 prompt and no token to paste.
@@ -36,13 +36,13 @@ they're OpenCode's own accounting — not an estimate imputed from token counts.
 and tokens together (`$4.08 · 1.2M tokens`), the same as Claude / Codex / Cursor. A period with no recorded
 usage reads "No data" rather than a misleading `$0.00`. No log data leaves your Mac.
 
-The Go caps OpenUsage draws against are the published plan limits: **$12 per rolling 5 hours**, **$30 per
+The Go caps Runway draws against are the published plan limits: **$12 per rolling 5 hours**, **$30 per
 week** (UTC Monday), and **$60 per month** (the monthly cycle is anchored to the day of the month you first
 used Go). Zen usage is pay-as-you-go credits with no cap, so it appears only in the spend tiles.
 
 ## Troubleshooting
 
-- **Everything shows "No data"** — OpenUsage needs OpenCode's local database at
+- **Everything shows "No data"** — Runway needs OpenCode's local database at
   `~/.local/share/opencode/opencode*.db`. Run an OpenCode session, then refresh. (If you're logged into
   Go, the cap meters show at $0 even before your first local message.)
 - **No Session / Weekly / Monthly meters** — those are Go-plan caps; you'll see them when you're logged
@@ -58,7 +58,7 @@ used Go). Zen usage is pay-as-you-go credits with no cap, so it appears only in 
 
 ## Under the hood
 
-OpenUsage reads the assistant-message `cost` and token fields from every `opencode*.db` in the data
+Runway reads the assistant-message `cost` and token fields from every `opencode*.db` in the data
 directory (OpenCode partitions its database by release channel — stable is `opencode.db`, the preview line
 is `opencode-next.db` — so all channels are unioned). The Go caps sum the `opencode-go` messages; the spend
 tiles and trend sum both `opencode-go` (Go) and `opencode` (Zen). Read-only, no network. If OpenCode's

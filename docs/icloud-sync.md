@@ -1,6 +1,6 @@
 # iCloud Sync
 
-**Sync Across Macs** is off by default. When it is on, each Mac writes one versioned OpenUsage history
+**Sync Across Macs** is off by default. When it is on, each Mac writes one versioned Runway history
 file to the app's private iCloud container and reads the files written by other Macs signed into the same
 iCloud account. A random device ID is kept in the login Keychain so the same Mac continues updating its
 existing file after app preferences are reset or the app is reinstalled. There is no folder picker,
@@ -12,7 +12,7 @@ limits, raw logs, or provider responses. Cursor's history is already account-wid
 is never added across Macs. Disabling a provider immediately removes its peer contributions from the
 combined view and omits it from this Mac's next iCloud write, while its local cached snapshot remains.
 
-OpenUsage combines the valid files in memory and rebuilds Today, Yesterday, Last 30 Days, Usage Trend,
+Runway combines the valid files in memory and rebuilds Today, Yesterday, Last 30 Days, Usage Trend,
 unknown-model warnings, and model breakdowns. The same combined spend rows feed the dashboard, Total
 Spend, menu-bar pins, share cards, and the local HTTP API. Both `/v1/usage` and `/v1/limits` read the
 same rendered snapshots; the former is the deprecated UI-oriented format and the latter is the
@@ -38,8 +38,8 @@ same id the account's card carries on any Mac it's signed in on (the synced file
 names to label it with). The moment you log that account in locally, its card appears — under that
 same id — with the full cross-machine history already attached.
 
-Macs running an older OpenUsage read their own format but report this Mac's newer file as "update
-OpenUsage" — update both sides to sync multi-account machines.
+Macs running an older Runway read their own format but report this Mac's newer file as "update
+Runway" — update both sides to sync multi-account machines.
 
 Settings lists each valid device file with the time that Mac generated it. To remove a Mac from the
 combined summary, turn sync off on that Mac; this deletes its file from iCloud. Turning sync off also
@@ -49,10 +49,10 @@ Malformed files are ignored and reported in Settings and the app log.
 ## Development and release setup
 
 Apple requires the iCloud container assignment to be present in the provisioning profile embedded in
-the app. OpenUsage uses separate resources so development builds cannot write production history:
+the app. Runway uses separate resources so development builds cannot write production history:
 
-- `com.mattstallone.openusage.dev` uses `iCloud.com.mattstallone.openusage.dev`.
-- `com.mattstallone.openusage` uses `iCloud.com.mattstallone.openusage`.
+- `com.mattstallone.runway.dev` uses `iCloud.com.mattstallone.runway.dev`.
+- `com.mattstallone.runway` uses `iCloud.com.mattstallone.runway`.
 
 Create a `MAC_APP_DEVELOPMENT` profile that includes every registered development Mac and a
 `MAC_APP_DIRECT` profile for releases. Install the development profile on each included Mac. The
@@ -78,12 +78,12 @@ file exists:
 
 ```bash
 file=$(find "$HOME/Library/Mobile Documents" \
-  -type f -path '*openusage*/OpenUsage/History/v1/*.json' -print -quit)
+  -type f -path '*runway*/Runway/History/v1/*.json' -print -quit)
 
 if [[ -n "$file" ]]; then
   jq . "$file"
 else
-  echo "No OpenUsage iCloud history file found"
+  echo "No Runway iCloud history file found"
 fi
 ```
 

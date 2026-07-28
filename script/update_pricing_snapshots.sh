@@ -1,8 +1,8 @@
 #!/bin/bash
 # Regenerates the bundled pricing snapshots from the live feeds:
 #
-#   Sources/OpenUsage/Resources/pricing_litellm_snapshot.json      (LiteLLM model_prices)
-#   Sources/OpenUsage/Resources/pricing_models_dev_snapshot.json   (models.dev api.json)
+#   Sources/Runway/Resources/pricing_litellm_snapshot.json      (LiteLLM model_prices)
+#   Sources/Runway/Resources/pricing_models_dev_snapshot.json   (models.dev api.json)
 #
 # The snapshots are the offline fallback for first launch / no network; at runtime the app fetches
 # the same feeds daily and its disk cache overrides these. Staleness is therefore harmless, but
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-RESOURCES="Sources/OpenUsage/Resources"
+RESOURCES="Sources/Runway/Resources"
 
 LITELLM_URL="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 MODELS_DEV_URL="https://models.dev/api.json"

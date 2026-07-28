@@ -3,14 +3,14 @@
 > **Historical / superseded.** This 2026-06-25 research preceded the coordinated content-driven panel
 > resize that shipped later that day and was subsequently refined. See the current
 > [AppKit bridge](../architecture.md#the-appkit-bridge),
-> [`DashboardView.swift`](../../Sources/OpenUsage/Views/DashboardView.swift),
-> [`PanelHeightCoordinator.swift`](../../Sources/OpenUsage/Views/PanelHeightCoordinator.swift), and
-> [`PanelHeightController.swift`](../../Sources/OpenUsage/App/PanelHeightController.swift). The rejected
+> [`DashboardView.swift`](../../Sources/Runway/Views/DashboardView.swift),
+> [`PanelHeightCoordinator.swift`](../../Sources/Runway/Views/PanelHeightCoordinator.swift), and
+> [`PanelHeightController.swift`](../../Sources/Runway/App/PanelHeightController.swift). The rejected
 > approaches and proposed file map below are preserved as historical research, not current setup
 > instructions.
 
 **Research report — 2026-06-25**
-**Question:** How do real macOS apps auto-resize a *custom, keyboard-capable* popover to its content smoothly — without (a) resize lag/stutter and (b) the "diagonal" jank when a screen-slide and a window-resize run at the same time — given OpenUsage must keep its custom `NSPanel` for keyboard shortcuts?
+**Question:** How do real macOS apps auto-resize a *custom, keyboard-capable* popover to its content smoothly — without (a) resize lag/stutter and (b) the "diagonal" jank when a screen-slide and a window-resize run at the same time — given Runway must keep its custom `NSPanel` for keyboard shortcuts?
 
 ---
 
@@ -30,9 +30,9 @@ This is genuinely hard and there is **no off-the-shelf API for it** — confirme
 
 There are three viable shapes for a SwiftUI menu-bar surface, and each app picks two of the three properties — *keyboard-key window*, *smooth native content-resize*, *no custom resize code*:
 
-- **`NSPopover`** gives smooth native content-resize for free: "Changes to the content size of the popover will cause the popover to animate while it is shown if the `animates` property is YES" [13][12]. But its window is only key while the whole app is active, and activating an `LSUIElement` app is asynchronous (or denied on macOS 26+), so keystrokes land on the status-item button instead — the documented reason OpenUsage abandoned it. Even apps that accept that tradeoff fight friction: Claude-Usage-Tracker's NSPopover+SwiftUI integration throws layout-recursion warnings caused by creating `NSHostingController` during a layout pass, `withAnimation` mutations mid-layout, `GeometryReader`+`.animation` conflicts, and a fixed `contentSize` conflicting with dynamic SwiftUI content [9].
+- **`NSPopover`** gives smooth native content-resize for free: "Changes to the content size of the popover will cause the popover to animate while it is shown if the `animates` property is YES" [13][12]. But its window is only key while the whole app is active, and activating an `LSUIElement` app is asynchronous (or denied on macOS 26+), so keystrokes land on the status-item button instead — the documented reason Runway abandoned it. Even apps that accept that tradeoff fight friction: Claude-Usage-Tracker's NSPopover+SwiftUI integration throws layout-recursion warnings caused by creating `NSHostingController` during a layout pass, `withAnimation` mutations mid-layout, `GeometryReader`+`.animation` conflicts, and a fixed `contentSize` conflicting with dynamic SwiftUI content [9].
 
-- **Custom `NSPanel` (`canBecomeKey = true`, `.nonactivatingPanel`)** gives a real key window without activating the app — the keyboard works on the first try. This is your panel, and it's the same one FontSwitch uses ("We become key when using the search bar to receive keyboard input" — `FocusablePanel: NSPanel { override var canBecomeKey: Bool { true } }`, then `panel.makeKey()`) [16]. The cost: you lose `NSPopover.animates`. FontSwitch's answer is a **fixed** panel (`panel.setFrame(frame, display: true)` with a stored `panelSize`) [16] — exactly where OpenUsage landed in PR #717.
+- **Custom `NSPanel` (`canBecomeKey = true`, `.nonactivatingPanel`)** gives a real key window without activating the app — the keyboard works on the first try. This is your panel, and it's the same one FontSwitch uses ("We become key when using the search bar to receive keyboard input" — `FocusablePanel: NSPanel { override var canBecomeKey: Bool { true } }`, then `panel.makeKey()`) [16]. The cost: you lose `NSPopover.animates`. FontSwitch's answer is a **fixed** panel (`panel.setFrame(frame, display: true)` with a stored `panelSize`) [16] — exactly where Runway landed in PR #717.
 
 - **SwiftUI `Window` / `MenuBarExtra(.window)` scene** can auto-resize to content for free (bind content size to state, wrap in `withAnimation`, SwiftUI's layout engine resizes the window) [6]. But the `.window` style has the same non-key limitation as `NSPopover`, so it's out for the same reason.
 

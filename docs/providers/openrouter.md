@@ -13,18 +13,18 @@ Tracks your [OpenRouter](https://openrouter.ai) credit balance and spend from yo
 | This Month | Spend so far this month |
 | Key Limit | Spend against this key's cap — shown only when the key has one configured |
 
-OpenUsage shows the reported tier (such as "Pay as you go" or "Free tier") beside the provider name.
+Runway shows the reported tier (such as "Pay as you go" or "Free tier") beside the provider name.
 
 ## Where credentials come from
 
 Unlike the other providers, OpenRouter has no companion app or CLI that leaves a credential on your
 machine, so you supply an API key. Create one at [openrouter.ai/keys](https://openrouter.ai/keys),
 then add it in **Settings → API Keys** (recommended): expand OpenRouter, paste the key, and Save.
-The key is stored at `~/.config/openusage/openrouter.json` and picked up on the next refresh.
+The key is stored at `~/.config/runway/openrouter.json` and picked up on the next refresh.
 
 You can also provide the key directly (checked in this order, first match wins):
 
-1. **Config file:** `~/.config/openusage/openrouter.json` — the file the Settings card writes:
+1. **Config file:** `~/.config/runway/openrouter.json` — the file the Settings card writes:
 
    ```json
    { "apiKey": "sk-or-v1-..." }

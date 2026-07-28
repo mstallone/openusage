@@ -1,7 +1,7 @@
 # Codex Rate-Limit Reset Credits: How Claiming Works
 
 Research + live verification of the Codex "reset credit" claim flow, done 2026-07-12.
-OpenUsage already lists these credits (the "Resets" surface on the Codex provider); this
+Runway already lists these credits (the "Resets" surface on the Codex provider); this
 documents what it would take to *claim* one from the app. No implementation yet — this is
 the protocol reference.
 
@@ -21,15 +21,15 @@ windows together (`windows_reset: 2`); on Free/Go plans the monthly window. Cred
 
 Both live under the ChatGPT backend base URL (`https://chatgpt.com/backend-api`). The CLI
 also has a `PathStyle::CodexApi` variant (`/api/codex/...` instead of `/wham/...`) for
-enterprise/alternative base URLs; OpenUsage uses the ChatGPT style.
+enterprise/alternative base URLs; Runway uses the ChatGPT style.
 
-Headers on every call (identical to what OpenUsage's Codex usage client already sends):
+Headers on every call (identical to what Runway's Codex usage client already sends):
 
 - `Authorization: Bearer <access_token>` (the ChatGPT OAuth access token from `~/.codex/auth.json`)
 - `ChatGPT-Account-Id: <account_id>` (from the same file)
 - `Content-Type: application/json` on the POST
 
-### List (already implemented in OpenUsage)
+### List (already implemented in Runway)
 
 `GET /wham/rate-limit-reset-credits`
 
@@ -123,9 +123,9 @@ soonest-expiring one, only if it expired within 4 h, explicit `credit_id`).
   the `additional_rate_limits` entry (the model-specific limit was already 0%, so this is
   suggestive, not proven).
 
-## Implementation notes for OpenUsage (when we build it)
+## Implementation notes for Runway (when we build it)
 
-- The claim is a single POST on infrastructure OpenUsage already talks to; auth, headers,
+- The claim is a single POST on infrastructure Runway already talks to; auth, headers,
   and account id handling are identical to `CodexUsageClient`'s existing calls.
 - Mint the `redeem_request_id` UUID **when the user is shown the claim affordance** (per
   credit), persist it for the duration of the interaction, and reuse it on retry — that is

@@ -10,14 +10,14 @@ Tracks [Z.ai](https://z.ai) (Zhipu AI) GLM Coding Plan usage quotas for coding s
 | Weekly | 7-day rolling window token usage (percentage) |
 | Web Searches | Monthly web-search / web-reader / Zread calls (used / limit) |
 
-When Z.ai reports your plan name, OpenUsage shows it beside the provider name.
+When Z.ai reports your plan name, Runway shows it beside the provider name.
 
 ## Where credentials come from
 
-Z.ai has no companion CLI/app that OpenUsage can reuse a credential from, so you supply an API key.
-OpenUsage reads it from the first place it finds one, in this order:
+Z.ai has no companion CLI/app that Runway can reuse a credential from, so you supply an API key.
+Runway reads it from the first place it finds one, in this order:
 
-1. `~/.config/openusage/zai.json` — `{"apiKey":"…"}` (the file Settings writes to)
+1. `~/.config/runway/zai.json` — `{"apiKey":"…"}` (the file Settings writes to)
 2. `~/.config/zai/key.json`
 3. The `ZAI_API_KEY` environment variable
 4. The `GLM_API_KEY` environment variable (the legacy Zhipu name, still accepted)
@@ -29,7 +29,7 @@ way, nothing leaves your Mac except the same API calls Z.ai's own subscription U
 
 1. [Subscribe to a GLM Coding plan](https://z.ai/subscribe) and get your API key from the
    [Z.ai console](https://z.ai/manage-apikey/apikey-list).
-2. Add the key to OpenUsage via **Settings → API Keys**, **or** export it:
+2. Add the key to Runway via **Settings → API Keys**, **or** export it:
 
 ```bash
 export ZAI_API_KEY="YOUR_API_KEY"

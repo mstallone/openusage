@@ -3,7 +3,7 @@
 ## Problem
 
 Cursor Enterprise accounts can return no usable `planUsage` from
-`GetCurrentPeriodUsage`. OpenUsage then returns early with only the legacy
+`GetCurrentPeriodUsage`. Runway then returns early with only the legacy
 request-based `Requests` line. That line is optional and disabled by default,
 so the enabled Cursor widgets all render `No data` even when `/api/usage`
 contains a valid included-request allowance.

@@ -1,4 +1,4 @@
-# OpenUsage Documentation
+# Runway Documentation
 
 What the app does and how it behaves. These pages describe **behavior, not visuals**, and they are updated together with any change to that behavior — if the app and a page here disagree, that's a bug.
 
