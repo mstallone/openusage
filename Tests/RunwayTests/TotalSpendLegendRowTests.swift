@@ -61,4 +61,37 @@ final class TotalSpendLegendRowTests: XCTestCase {
         XCTAssertEqual(allocation.reclaimedWidth, 0)
         XCTAssertEqual(allocation.hiddenValueFraction, 0)
     }
+
+    func testTitleWithinTheFullRowDoesNotMarquee() {
+        XCTAssertNil(
+            LegendRowMarqueeMetrics.resolve(
+                availableWidth: 200,
+                titleWidth: 200
+            )
+        )
+    }
+
+    func testTitleWiderThanTheFullRowMarqueesByOnlyItsOverflow() throws {
+        let metrics = try XCTUnwrap(
+            LegendRowMarqueeMetrics.resolve(
+                availableWidth: 200,
+                titleWidth: 264
+            )
+        )
+
+        XCTAssertEqual(metrics.distance, 64)
+        XCTAssertEqual(metrics.duration, 2)
+    }
+
+    func testMarqueeDurationIsCappedForVeryLongTitles() throws {
+        let metrics = try XCTUnwrap(
+            LegendRowMarqueeMetrics.resolve(
+                availableWidth: 200,
+                titleWidth: 600
+            )
+        )
+
+        XCTAssertEqual(metrics.distance, 400)
+        XCTAssertEqual(metrics.duration, 6)
+    }
 }
