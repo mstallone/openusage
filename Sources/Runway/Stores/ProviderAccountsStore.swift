@@ -225,7 +225,7 @@ final class ProviderAccountsStore {
         return record.customLabel?.nilIfEmpty ?? derivedDisplayName(cardID: cardID)
     }
 
-    /// The account record supplying a runtime card this launch. Claude still uses one legacy bare-id
+    /// The account record supplying a runtime card this launch. Claude still uses one unscoped bare-id
     /// runtime for whichever login occupies the default home, so after a login swap that runtime can
     /// be backed by an `@`-suffixed record. Codex already builds scoped runtimes under each stable
     /// record id and therefore keeps the ordinary exact-id lookup.

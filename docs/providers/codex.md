@@ -36,7 +36,8 @@ Runway never treats a directory name as identity. Every card is pinned to one cr
 
 With one discovered account, the default name is simply "Codex." With multiple accounts, every card
 includes its account email, including the first/default card. An organization name appears after the
-email when available.
+email when available. If the only login lives in a custom home, it is the sole Codex card; Runway does
+not add an unscoped card beside it.
 
 Additional cards use stable ids such as `codex@ab12cd34`. You can rename any Codex card from its context menu or Customize. CLI and local API queries for `codex` return every active Codex account card; querying the full card id selects one.
 

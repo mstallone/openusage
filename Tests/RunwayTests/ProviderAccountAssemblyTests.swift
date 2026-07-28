@@ -281,6 +281,12 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             card.id.hasPrefix("claude@"),
             "the bare id stays reserved for a future default-home login even when it is free"
         )
+        let providers = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards,
+            claudeDefaultDisplayName: assembly.claudeDefaultDisplayName
+        ).compactMap { $0 as? ClaudeProvider }
+        XCTAssertEqual(providers.map(\.provider.id), [card.id])
+        XCTAssertEqual(providers.map(\.provider.displayName), ["Claude"])
     }
 
     func testARenameNeverBakesIntoTheCardOnlyTheResolverCarriesIt() throws {
@@ -345,7 +351,6 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             codexDiscovery: discovery
         )
 
-        XCTAssertTrue(assembly.hasResolvedCodexDefault)
         XCTAssertEqual(assembly.codexCards.count, 2)
         let defaultCard = try XCTUnwrap(assembly.codexCards.first { $0.id == "codex" })
         let workCard = try XCTUnwrap(assembly.codexCards.first { $0.id != "codex" })
@@ -427,7 +432,6 @@ final class ProviderAccountAssemblyTests: XCTestCase {
             codexDiscovery: discovery
         )
 
-        XCTAssertFalse(assembly.hasResolvedCodexDefault)
         XCTAssertTrue(assembly.codexCards.isEmpty)
         XCTAssertTrue(store.records.isEmpty)
     }

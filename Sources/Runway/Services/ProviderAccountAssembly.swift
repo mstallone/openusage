@@ -54,9 +54,6 @@ struct ProviderAccountAssembly {
     var defaultClaudeExtraLogRoots: [URL] = []
     /// Codex cards found this launch, including the resolved default-home account when there is one.
     var codexCards: [CodexAccountCard] = []
-    /// True when `codexCards` includes the account at the selected default home, so the catalog must
-    /// replace its unresolved legacy `CodexProvider()` with the scoped cards instead of adding both.
-    var hasResolvedCodexDefault = false
     /// Shared cache used by scoped keyring stores and the post-launch warming task.
     var codexIdentityCache: CodexHomeIdentityCache?
     /// Same accessor discovery probed; retained so warming reads the exact items from that source.
@@ -220,7 +217,7 @@ struct ProviderAccountAssembly {
         var foundCodexAccounts: [
             (identityKey: String, label: String?, credentialHomePath: String, logRoots: [URL])
         ] = []
-        var hasResolvedCodexDefault = false
+        var hasScopedCodexDefault = false
         var unverifiedCodexKeyringHomes: Set<String> = []
         let codexOutcome = outcomes.first { $0.family == "codex" }?.outcome
         if let codexDiscovery, let codexOutcome {
@@ -278,7 +275,7 @@ struct ProviderAccountAssembly {
                         logRoots: [URL(fileURLWithPath: defaultAnchor)]
                             + sameAccountHomes.map { URL(fileURLWithPath: $0.anchorPath) }
                     ))
-                    hasResolvedCodexDefault = true
+                    hasScopedCodexDefault = true
                     if !sameAccountHomes.isEmpty {
                         AppLog.info(
                             .config,
@@ -351,7 +348,7 @@ struct ProviderAccountAssembly {
         // The provisional default identity was keyed by family before reconciliation. Codex can
         // legitimately put that login on an @-suffixed stable record after a swap, so publish only
         // the actual runtime-card ids assembled below.
-        if hasResolvedCodexDefault {
+        if hasScopedCodexDefault {
             identityKeys.removeValue(forKey: "codex")
         }
         var codexCards: [CodexAccountCard] = []
@@ -382,7 +379,6 @@ struct ProviderAccountAssembly {
             claudeDefaultDisplayName: claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
             codexCards: codexCards,
-            hasResolvedCodexDefault: hasResolvedCodexDefault,
             codexIdentityWarmKeychain: codexDiscovery?.keychain,
             unverifiedCodexKeyringHomes: unverifiedCodexKeyringHomes
         )

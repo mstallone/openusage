@@ -86,7 +86,6 @@ final class AppContainer {
             claudeDefaultDisplayName: accountAssembly.claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
             codexCards: accountAssembly.codexCards,
-            hasResolvedCodexDefault: accountAssembly.hasResolvedCodexDefault,
             codexIdentityCache: accountAssembly.codexIdentityCache
         )
         let registry = WidgetRegistry.from(providers)
