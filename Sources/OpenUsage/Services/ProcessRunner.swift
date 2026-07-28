@@ -69,7 +69,10 @@ struct SystemProcessRunner: ProcessRunning {
             cancelDrains(drains, group: drained)
             throw error
         }
-        let processGroupID = isolatedProcessGroupID(for: process.processIdentifier)
+        // Foundation launches Process as a process-group leader, so its PID is also the group ID.
+        // Preserve it directly: an immediately-exiting child can disappear before getpgid() runs,
+        // while descendants can continue holding the inherited pipes open.
+        let processGroupID = process.processIdentifier
         let deadline = DispatchTime.now() + timeout
 
         if exited.wait(timeout: deadline) == .timedOut {
@@ -99,14 +102,7 @@ struct SystemProcessRunner: ProcessRunning {
         return ProcessResult(exitCode: process.terminationStatus, stdout: output.stdoutString, stderr: output.stderrString)
     }
 
-    private func isolatedProcessGroupID(for pid: pid_t) -> pid_t? {
-        // Foundation launches Process instances as process-group leaders on macOS. Verify that
-        // invariant before using a negative PID so a timeout can never signal OpenUsage's group.
-        getpgid(pid) == pid ? pid : nil
-    }
-
-    private func terminateProcessGroup(_ processGroupID: pid_t?, signal: Int32) {
-        guard let processGroupID else { return }
+    private func terminateProcessGroup(_ processGroupID: pid_t, signal: Int32) {
         kill(-processGroupID, signal)
     }
 
