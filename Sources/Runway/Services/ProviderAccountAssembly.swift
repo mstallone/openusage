@@ -310,18 +310,13 @@ struct ProviderAccountAssembly {
         }
 
         let records = accountsStore.reconcile(with: observations)
-        let claudeDefaultDisplayName: String?
+        let resolvedClaudeDefaultDisplayName: String?
         if let identityKey = identityKeys["claude"],
            accountsStore.record(backingCardID: "claude")?.identityKey == identityKey
         {
-            claudeDefaultDisplayName = accountsStore.derivedDisplayName(cardID: "claude")
-        } else if claudeOutcome == .absent, observer.hasAmbientClaudeToken {
-            // Environment tokens deliberately have no account identity and cannot borrow an email
-            // from a discovered config-dir card. Name the source honestly and keep its local spend
-            // runtime distinct from the one identifiable account.
-            claudeDefaultDisplayName = "Claude — Environment Token"
+            resolvedClaudeDefaultDisplayName = accountsStore.derivedDisplayName(cardID: "claude")
         } else {
-            claudeDefaultDisplayName = nil
+            resolvedClaudeDefaultDisplayName = nil
         }
 
         // The extra-card build plan: one card per distinct account found this launch, under its
@@ -351,6 +346,22 @@ struct ProviderAccountAssembly {
             AppLog.info(.config, "accounts: extra claude card \(record.id) from \(account.dirs.count) config dir(s)")
         }
         claudeCards.sort { $0.id < $1.id }
+
+        let claudeDefaultDisplayName: String?
+        if let resolvedClaudeDefaultDisplayName {
+            claudeDefaultDisplayName = resolvedClaudeDefaultDisplayName
+        } else if claudeOutcome == .absent,
+                  observer.hasAmbientClaudeToken,
+                  !claudeCards.isEmpty
+        {
+            // With scoped cards present, Desktop fallback is disabled so an identity-less standard
+            // runtime can only represent the ambient token and its default-home logs. Without a
+            // scoped sibling, keep the neutral title because a higher-priority Desktop login may
+            // actually supply live usage.
+            claudeDefaultDisplayName = "Claude — Environment Token"
+        } else {
+            claudeDefaultDisplayName = nil
+        }
 
         // The provisional default identity was keyed by family before reconciliation. Codex can
         // legitimately put that login on an @-suffixed stable record after a swap, so publish only

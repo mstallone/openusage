@@ -191,6 +191,34 @@ final class ProviderAccountsStoreTests: XCTestCase {
         )
     }
 
+    func testUnlabeledBareAccountUsesAnIdentityHashWhenDisambiguating() {
+        let identityKey = "account-without-email"
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(
+                family: "codex",
+                identityKey: identityKey
+            ),
+            ProviderAccountsStore.AccountObservation(
+                family: "codex",
+                identityKey: "labeled-account",
+                label: "work@example.com",
+                sources: [
+                    ProviderAccountSource(
+                        kind: .codexHome,
+                        anchor: "/Users/dev/.codex-work",
+                        holdsDefaultSource: false
+                    ),
+                ]
+            ),
+        ])
+
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: "codex"),
+            ProviderAccountID.make(family: "codex", identityKey: identityKey)
+        )
+    }
+
     func testOldInactiveSiblingDoesNotDisambiguateTheOnlyAccountFoundThisLaunch() {
         let store = ProviderAccountsStore(defaults: makeScratchDefaults())
         store.reconcile(with: [

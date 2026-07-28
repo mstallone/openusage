@@ -329,6 +329,29 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         )])
     }
 
+    func testAmbientClaudeTokenKeepsANeutralTitleWhenDesktopCouldSupplyUsage() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"]),
+            files: FakeFiles([:]),
+            keychain: FakeKeychain(nil),
+            homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+        )
+
+        let assembly = ProviderAccountAssembly.make(
+            observer: observer,
+            accountsStore: store
+        )
+        let providers = ProviderCatalog.make(
+            claudeCards: assembly.claudeCards,
+            claudeDefaultDisplayName: assembly.claudeDefaultDisplayName
+        ).compactMap { $0 as? ClaudeProvider }
+
+        XCTAssertNil(assembly.claudeDefaultDisplayName)
+        XCTAssertEqual(providers.map(\.provider.displayName), ["Claude"])
+        XCTAssertTrue(providers.first?.authStore.allowsDesktopFallback == true)
+    }
+
     func testARenameNeverBakesIntoTheCardOnlyTheResolverCarriesIt() throws {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)

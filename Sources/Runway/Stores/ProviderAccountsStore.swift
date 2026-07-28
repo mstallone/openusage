@@ -82,14 +82,18 @@ struct ProviderAccountRecord: Codable, Equatable, Sendable {
 
     /// The name a card carries without a rename. One active account keeps the stock family name;
     /// when discovery finds siblings, every account — including the bare-id/default card — carries
-    /// its full account label so none is the ambiguous odd one out. A missing label falls back to
-    /// the record id (owner decision 2: short-hash fallback, one rename away from good).
+    /// its full account label so none is the ambiguous odd one out. A missing label falls back to an
+    /// identity-derived short-hash id (owner decision 2, one rename away from good).
     ///
     /// Never contains `customLabel` — this is what gets baked into the launch `Provider`, and baking
     /// a rename there is how stale-name bugs are born.
     func derivedDisplayName(disambiguating: Bool) -> String {
         guard disambiguating else { return family.capitalized }
-        guard let label = label?.nilIfEmpty else { return id }
+        guard let label = label?.nilIfEmpty else {
+            return ProviderAccountID.isAccountCard(id)
+                ? id
+                : ProviderAccountID.make(family: family, identityKey: identityKey)
+        }
         // Labels are our own "email (Org Name)" format. Keep the whole value: the email is the
         // useful account discriminator, while the org still distinguishes same-email logins.
         return "\(family.capitalized) — \(label)"
