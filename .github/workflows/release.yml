@@ -1,9 +1,8 @@
 name: Release
 
 # Tag a version to ship it: `git tag v0.7.0 && git push origin v0.7.0`.
-# A tag with a pre-release suffix (e.g. v0.7.0-beta.1) publishes to the Early Access channel; a plain
-# tag (v0.7.0) publishes to everyone. The one-time secret/Pages setup is documented in the
-# release-swift skill under .agents/skills/release-swift/.
+# Only stable `vMAJOR.MINOR.PATCH` tags are accepted. The one-time secret/Pages setup is documented
+# in the release-swift skill under .agents/skills/release-swift/.
 on:
   push:
     tags: ["v*"]
@@ -44,18 +43,15 @@ jobs:
         # runner Xcode is fine for the build/sign/notarize steps.
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Resolve tag, version, and channel
+      - name: Resolve tag and version
         id: meta
         run: |
           TAG="${{ inputs.tag }}"
           [ -z "$TAG" ] && TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          if [[ "$TAG" == *-* ]]; then CHANNEL=beta; PRERELEASE=true; else CHANNEL=stable; PRERELEASE=false; fi
+          VERSION="$("$GITHUB_WORKSPACE/script/validate_release_tag.sh" "$TAG")"
           {
             echo "tag=$TAG"
             echo "version=$VERSION"
-            echo "channel=$CHANNEL"
-            echo "prerelease=$PRERELEASE"
           } >> "$GITHUB_OUTPUT"
 
       - name: Validate release tag and required secrets
@@ -71,11 +67,6 @@ jobs:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "::error::Release tags must use the form v1.2.3 or v1.2.3-beta.1."
-            exit 1
-          fi
 
           for name in \
             DEVELOPER_ID_CERTIFICATE_BASE64 \
@@ -150,8 +141,8 @@ jobs:
 
           # generate_appcast works on a folder: it reads the existing appcast.xml there and the new DMG,
           # then writes a merged appcast. "feed/" is that folder. Seed it with the live appcast so prior
-          # versions and the OTHER channel's items are preserved (verified: items whose archive isn't in
-          # the folder keep their original enclosure URLs untouched).
+          # versions are preserved (verified: items whose archive isn't in the folder keep their original
+          # enclosure URLs untouched).
           mkdir -p feed
           # Distinguish "no gh-pages yet" (first release -> fresh feed) from "couldn't read it"
           # (transient failure). Only start fresh when the branch genuinely doesn't exist; otherwise
@@ -214,7 +205,7 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: OpenUsage ${{ steps.meta.outputs.version }}
-          prerelease: ${{ steps.meta.outputs.prerelease }}
+          prerelease: false
           files: |
             dist/OpenUsage-${{ steps.meta.outputs.version }}.dmg
             dist/OpenUsage-${{ steps.meta.outputs.version }}.dmg.sha256
@@ -222,7 +213,6 @@ jobs:
       - name: Generate appcast with Sparkle
         env:
           DMG: OpenUsage-${{ steps.meta.outputs.version }}.dmg
-          CHANNEL: ${{ steps.meta.outputs.channel }}
           # Per-tag GitHub release asset base. generate_appcast applies this prefix only to the new DMG
           # in feed/; preserved items keep their own (older-tag) URLs.
           DOWNLOAD_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/
@@ -232,28 +222,23 @@ jobs:
           [ -x "$GA" ] || { echo "generate_appcast not found under .build/artifacts" >&2; exit 1; }
 
           # How many feed items existed before (to confirm nothing is dropped). 0 on first release.
-          # Sparkle normally keeps only a few versions per branch; this release feed is intentionally
-          # append-only so older installs and the other channel's items remain available.
+          # Sparkle normally keeps only a few versions; this release feed is intentionally append-only
+          # so older installs remain able to traverse the signed update history.
           before=0
           [ -f feed/appcast.xml ] && before=$(grep -c "<item>" feed/appcast.xml || true)
 
           cp "dist/$DMG" "feed/$DMG"
-
-          # Pre-release tags publish to the Early Access (beta) channel; plain tags publish to everyone.
-          channel_arg=()
-          [ "$CHANNEL" = "beta" ] && channel_arg=(--channel beta)
 
           # The key file is base64 (it can contain '/'); pass it via stdin so it's never an argv/glob.
           cat "$SPARKLE_PRIVATE_KEY_FILE" | "$GA" \
             --ed-key-file - \
             --download-url-prefix "$DOWNLOAD_PREFIX" \
             --maximum-versions 0 \
-            "${channel_arg[@]}" \
             feed
 
           # Fail loudly if the merge went wrong. The new DMG's enclosure must exist AND carry an EdDSA
           # signature on the same line (generate_appcast silently omits it if SUPublicEDKey doesn't match
-          # the signing key), and the item count must not shrink (a dropped preserved/other-channel entry).
+          # the signing key), and the item count must not shrink.
           after=$(grep -c "<item>" feed/appcast.xml || true)
           grep -Eq "$DMG\"[^>]*sparkle:edSignature" feed/appcast.xml \
             || { echo "New item for $DMG is missing or unsigned (SUPublicEDKey/private-key mismatch?)." >&2; exit 1; }

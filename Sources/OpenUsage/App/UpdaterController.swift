@@ -13,15 +13,10 @@ import Sparkle
 @MainActor
 @Observable
 final class UpdaterController {
-    /// `UserDefaults` key for the beta-channel opt-in. Read in two places — the SwiftUI
-    /// toggle here and the Sparkle channel delegate's `allowedChannels` — so the stored default is the
-    /// single source of truth rather than a cached property.
-    static let betaChannelDefaultsKey = "betaUpdatesEnabled"
-
     // Two delegates on purpose: SPUUpdaterDelegate is main-actor isolated in Sparkle, while
     // SPUStandardUserDriverDelegate is nonisolated. Conforming to both from one class would infer a
     // single isolation and break one of the two conformances under Swift 6.
-    private let channelDelegate = UpdaterChannelDelegate()
+    private let updaterDelegate = OpenUsageUpdaterDelegate()
     private let userDriverDelegate = UpdaterUserDriverDelegate()
     private let presentationController: UpdaterPresentationController
     private var controller: SPUStandardUpdaterController?
@@ -38,16 +33,6 @@ final class UpdaterController {
     /// routes through `checkForUpdates()` — a user-initiated check, which Sparkle brings to the front.
     private(set) var availableUpdateVersion: String?
 
-    /// Backs the "Beta Updates" toggle. Persisted to `UserDefaults`; flipping it resets Sparkle's update
-    /// cycle so the new channel set takes effect on the next scheduled check instead of a day later.
-    var betaChannelEnabled: Bool {
-        didSet {
-            UserDefaults.standard.set(betaChannelEnabled, forKey: Self.betaChannelDefaultsKey)
-            controller?.updater.resetUpdateCycle()
-            AppLog.info(.updates, "channel set to \(self.betaChannelEnabled ? "early access" : "stable")")
-        }
-    }
-
     /// Backs the "Update Automatically" toggle. Sparkle persists this in `UserDefaults` itself,
     /// so this is a thin pass-through rather than a shadow preference.
     var automaticallyChecksForUpdates: Bool {
@@ -57,7 +42,6 @@ final class UpdaterController {
 
     init(presentationController: UpdaterPresentationController = UpdaterPresentationController()) {
         self.presentationController = presentationController
-        self.betaChannelEnabled = UserDefaults.standard.bool(forKey: Self.betaChannelDefaultsKey)
     }
 
     /// Starts the updater if (and only if) this build ships an appcast feed. Safe to call once at launch.
@@ -84,7 +68,7 @@ final class UpdaterController {
         }
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: channelDelegate,
+            updaterDelegate: updaterDelegate,
             userDriverDelegate: userDriverDelegate
         )
         self.controller = controller
@@ -182,32 +166,23 @@ final class UpdaterPresentationController {
     }
 }
 
-/// Channel selection. `SPUUpdaterDelegate` is `NS_SWIFT_UI_ACTOR` (main-actor) in Sparkle, so this
-/// delegate is too — which lets `allowedChannels` read the main-actor-isolated defaults key directly.
+/// Records each Sparkle update-cycle result. `SPUUpdaterDelegate` is `NS_SWIFT_UI_ACTOR`, so the
+/// delegate remains main-actor isolated under Swift 6.
 @MainActor
-private final class UpdaterChannelDelegate: NSObject, SPUUpdaterDelegate {
-    /// Stable channel is the default (every user). Returning `["beta"]` additionally opts a user into
-    /// pre-release items tagged `<sparkle:channel>beta</sparkle:channel>`; Sparkle always includes the
-    /// default channel regardless, so stable users are never starved of stable releases.
-    func allowedChannels(for updater: SPUUpdater) -> Set<String> {
-        UserDefaults.standard.bool(forKey: UpdaterController.betaChannelDefaultsKey) ? ["beta"] : []
-    }
-
-    /// Records the result of each update cycle (per the issue's "Sparkle check result + channel"
-    /// item). `SUNoUpdateError`/`SUInstallationCanceledError` are normal outcomes, not failures, so
-    /// they log at Info; a genuine error (network, download) logs at Warn. The error is
-    /// framework-sourced (no secrets) but still routed through `AppLog` for one consistent format.
+private final class OpenUsageUpdaterDelegate: NSObject, SPUUpdaterDelegate {
+    /// `SUNoUpdateError`/`SUInstallationCanceledError` are normal outcomes, not failures, so they log
+    /// at Info; a genuine error (network, download) logs at Warn. The error is framework-sourced (no
+    /// secrets) but still routed through `AppLog` for one consistent format.
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
-        let channel = UserDefaults.standard.bool(forKey: UpdaterController.betaChannelDefaultsKey) ? "early access" : "stable"
         guard let error else {
-            AppLog.info(.updates, "check finished (channel=\(channel), no error)")
+            AppLog.info(.updates, "check finished (no error)")
             return
         }
         let code = (error as NSError).code
         if code == Int(SUError.noUpdateError.rawValue) {
-            AppLog.info(.updates, "check finished (channel=\(channel), no update available)")
+            AppLog.info(.updates, "check finished (no update available)")
         } else if code == Int(SUError.installationCanceledError.rawValue) {
-            AppLog.info(.updates, "check finished (channel=\(channel), user canceled)")
+            AppLog.info(.updates, "check finished (user canceled)")
         } else {
             AppLog.warn(.updates, "check/download failed: \(error.localizedDescription)")
         }

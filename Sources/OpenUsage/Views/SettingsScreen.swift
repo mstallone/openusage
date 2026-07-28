@@ -9,7 +9,7 @@ import UserNotifications
 /// time it opened. Sections are Customize-style cards (caption header over a rounded card of rows)
 /// so the popover keeps one visual language; controls sit on each row's trailing edge like
 /// System Settings. The footer already shows the version; the release build adds an "Updates" section
-/// (auto-check, beta channel, and a full-width manual check button).
+/// (automatic checks and a full-width manual check button).
 struct SettingsScreen: View {
     @Environment(AppContainer.self) private var container
     @Environment(UpdaterController.self) private var updater
@@ -178,11 +178,6 @@ struct SettingsScreen: View {
                     row("Update Automatically") {
                         Toggle("", isOn: $updater.automaticallyChecksForUpdates)
                             .settingsSwitchStyle()
-                    }
-                    row("Beta Updates") {
-                        Toggle("", isOn: $updater.betaChannelEnabled)
-                            .settingsSwitchStyle()
-                            .hoverTooltip("Receive pre-release builds before they ship to everyone")
                     }
                     // No version label here — the footer already shows it. The frame goes on the label so
                     // the glass background stretches the full row width instead of hugging the text.

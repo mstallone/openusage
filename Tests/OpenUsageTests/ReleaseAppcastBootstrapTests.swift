@@ -7,20 +7,20 @@ final class ReleaseAppcastBootstrapTests: XCTestCase {
     }
 
     func testCurrentTagAsSoleReleaseAllowsFirstReleaseRetry() throws {
-        XCTAssertEqual(try classify(existingTags: ["v0.8.0-beta.1"]), "retry")
+        XCTAssertEqual(try classify(existingTags: ["v0.8.0"]), "retry")
     }
 
     func testAnyPriorReleaseHistoryFailsClosed() throws {
         XCTAssertEqual(try classify(existingTags: ["v0.7.9"]), "history")
         XCTAssertEqual(
-            try classify(existingTags: ["v0.8.0-beta.1", "v0.7.9"]),
+            try classify(existingTags: ["v0.8.0", "v0.7.9"]),
             "history"
         )
     }
 
     private func classify(
         existingTags: [String],
-        currentTag: String = "v0.8.0-beta.1"
+        currentTag: String = "v0.8.0"
     ) throws -> String {
         let script = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
