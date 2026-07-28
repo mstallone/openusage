@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// One ranked legend entry. At rest the amount keeps the rows easy to compare; pointing at a row
-/// gives its title only the extra width it needs. Short titles keep their full amount; longer titles
-/// first consume the inter-column gap, then progressively fade the amount from its leading edge.
+/// One ranked legend entry. At rest the amount keeps the rows easy to compare. When that leaves too
+/// little room for the title, hovering crossfades to a second, full-width title that was laid out in
+/// advance. Only opacity animates: the title never reflows and the row never changes height.
 struct TotalSpendLegendRow: View {
     let title: String
     let value: String
@@ -22,47 +22,11 @@ struct TotalSpendLegendRow: View {
             Circle()
                 .fill(color)
                 .frame(width: 8, height: 8)
-            LegendRowTextLayout(
-                reclaimedWidth: allocation.reclaimedWidth,
-                spacing: valueSpacing
-            ) {
-                titleLabel
-                    .background {
-                        titleLabel
-                            .fixedSize(horizontal: true, vertical: false)
-                            .hidden()
-                            .onGeometryChange(for: CGFloat.self) { proxy in
-                                proxy.size.width
-                            } action: { width in
-                                titleIdealWidth = ceil(width) + 1
-                            }
-                    }
-                valueLabel
-                    .mask(LegendValueFadeMask(hiddenFraction: allocation.hiddenValueFraction))
-                    .background {
-                        valueLabel
-                            .fixedSize(horizontal: true, vertical: false)
-                            .hidden()
-                            .onGeometryChange(for: CGFloat.self) { proxy in
-                                proxy.size.width
-                            } action: { width in
-                                valueIdealWidth = ceil(width)
-                            }
-                    }
-            }
-            .onGeometryChange(for: CGFloat.self) { proxy in
-                proxy.size.width
-            } action: { width in
-                textAreaWidth = width
-            }
+            textContent
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .onHover { inside in
-            withAnimation(Motion.modeSwitch) {
-                isHovered = inside
-            }
-        }
+        .onHover { isHovered = $0 }
         // `NSPanel.orderOut` retains this SwiftUI tree and may not deliver a hover exit. Clear the
         // transient presentation state at the panel's authoritative close signal so a later open
         // cannot inherit a hidden amount from the previous session.
@@ -75,9 +39,30 @@ struct TotalSpendLegendRow: View {
         .accessibilityLabel("\(title), \(value)")
     }
 
-    private var allocation: LegendRowWidthAllocation {
-        guard isHovered else { return .none }
-        return LegendRowWidthAllocation.resolve(
+    private var textContent: some View {
+        ZStack(alignment: .leading) {
+            LegendRowTextLayout(spacing: valueSpacing) {
+                measuredTitleLabel
+                measuredValueLabel
+            }
+            .opacity(revealsFullWidthTitle ? 0 : 1)
+
+            titleLabel
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(revealsFullWidthTitle ? 1 : 0)
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            textAreaWidth = width
+        }
+        // The two states already have their final geometry. Crossfading them avoids animating a Text
+        // proposal through many truncation points, which made long account labels visibly stutter.
+        .animation(.easeOut(duration: 0.12), value: revealsFullWidthTitle)
+    }
+
+    private var revealsFullWidthTitle: Bool {
+        isHovered && LegendRowPresentation.titleNeedsFullWidth(
             availableWidth: textAreaWidth,
             titleWidth: titleIdealWidth,
             valueWidth: valueIdealWidth,
@@ -85,16 +70,39 @@ struct TotalSpendLegendRow: View {
         )
     }
 
+    private var measuredTitleLabel: some View {
+        titleLabel
+            .background {
+                titleLabel
+                    .fixedSize(horizontal: true, vertical: false)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.width
+                    } action: { width in
+                        titleIdealWidth = ceil(width) + 1
+                    }
+            }
+    }
+
+    private var measuredValueLabel: some View {
+        valueLabel
+            .background {
+                valueLabel
+                    .fixedSize(horizontal: true, vertical: false)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.width
+                    } action: { width in
+                        valueIdealWidth = ceil(width)
+                    }
+            }
+    }
+
     private var titleLabel: some View {
         Text(title)
             .font(.system(size: fontSize))
             .foregroundStyle(.primary)
-            .lineLimit(titleRequiresWrapping ? nil : 1)
-            .fixedSize(horizontal: false, vertical: titleRequiresWrapping)
-    }
-
-    private var titleRequiresWrapping: Bool {
-        isHovered && textAreaWidth > 0 && titleIdealWidth > textAreaWidth
+            .lineLimit(1)
     }
 
     private var valueLabel: some View {
@@ -107,49 +115,27 @@ struct TotalSpendLegendRow: View {
     }
 }
 
-/// The per-row width decision is kept separate from rendering so short labels never pay for the
-/// expansion required by a different row.
-struct LegendRowWidthAllocation {
-    let reclaimedWidth: CGFloat
-    let hiddenValueFraction: CGFloat
-
-    static let none = LegendRowWidthAllocation(reclaimedWidth: 0, hiddenValueFraction: 0)
-
-    static func resolve(
+/// Keeps the hover decision independently testable. A short title stays in the stable title/value
+/// state; only a title truncated by its own amount gets the full-width hover state.
+struct LegendRowPresentation {
+    static func titleNeedsFullWidth(
         availableWidth: CGFloat,
         titleWidth: CGFloat,
         valueWidth: CGFloat,
         spacing: CGFloat
-    ) -> Self {
-        guard availableWidth > 0, valueWidth > 0 else { return .none }
+    ) -> Bool {
+        guard availableWidth > 0, titleWidth > 0, valueWidth > 0 else { return false }
 
         let displayedValueWidth = min(valueWidth, availableWidth)
-        // Keep the signed resting width here. When value + spacing already exceeds the row, its
-        // negative remainder is the overflow that must be reclaimed before the title gains width.
-        let restingTitleWidth = availableWidth - displayedValueWidth - spacing
-        let reclaimedWidth = min(
-            displayedValueWidth + spacing,
-            max(0, titleWidth - restingTitleWidth)
-        )
-        let hiddenValueWidth = min(displayedValueWidth, max(0, reclaimedWidth - spacing))
-
-        return Self(
-            reclaimedWidth: reclaimedWidth,
-            hiddenValueFraction: hiddenValueWidth / displayedValueWidth
-        )
+        let restingTitleWidth = max(0, availableWidth - displayedValueWidth - spacing)
+        return titleWidth > restingTitleWidth
     }
 }
 
-/// Holds the row width steady while reclaiming only the width this title needs. Expanding one title
-/// therefore never changes the proposal received by its sibling legend rows.
+/// The resting title/value layout. Its geometry never changes on hover; the full-width title is a
+/// separate overlay in `TotalSpendLegendRow`.
 private struct LegendRowTextLayout: Layout {
-    var reclaimedWidth: CGFloat
     let spacing: CGFloat
-
-    var animatableData: CGFloat {
-        get { reclaimedWidth }
-        set { reclaimedWidth = newValue }
-    }
 
     func sizeThatFits(
         proposal: ProposedViewSize,
@@ -207,44 +193,6 @@ private struct LegendRowTextLayout: Layout {
     }
 
     private func reservedWidth(for valueWidth: CGFloat) -> CGFloat {
-        max(0, valueWidth + spacing - reclaimedWidth)
-    }
-}
-
-/// Keeps the trailing digits anchored while the portion competing with the title disappears through
-/// a soft leading-edge fade. At zero the mask is fully opaque, so hovering a short row changes
-/// nothing about its amount.
-private struct LegendValueFadeMask: View, @MainActor Animatable {
-    var hiddenFraction: CGFloat
-
-    var animatableData: CGFloat {
-        get { hiddenFraction }
-        set { hiddenFraction = newValue }
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            let clamped = min(1, max(0, hiddenFraction))
-
-            if clamped <= 0.001 {
-                Rectangle()
-                    .fill(.white)
-            } else if clamped >= 0.999 {
-                Rectangle()
-                    .fill(.clear)
-            } else {
-                let fadeFraction = min(1 - clamped, 10 / max(1, proxy.size.width))
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .clear, location: clamped),
-                        .init(color: .white, location: clamped + fadeFraction),
-                        .init(color: .white, location: 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            }
-        }
+        valueWidth + spacing
     }
 }

@@ -37,8 +37,8 @@ struct CopyFeedbackButton: View {
         // being pushed inward by the larger interaction target.
         .padding(-6)
         .opacity(isRevealed || copied ? 1 : 0)
-        // Keep the pointer target stable and reveal the glyph immediately. Animating the hover state
-        // beside a constrained long account name makes the header look like it jitters.
+        .allowsHitTesting(isRevealed || copied)
+        .animation(.easeOut(duration: 0.12), value: isRevealed)
         .accessibilityLabel(accessibilityLabel)
         .onDisappear {
             resetTask?.cancel()
