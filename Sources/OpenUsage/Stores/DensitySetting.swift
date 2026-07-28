@@ -1,94 +1,72 @@
 import AppKit
 
-/// Gmail-style UI density for the popover. Two levels: Default breathes; Compact is a real
-/// information-dense mode — type steps down one size, rows and sections pull together, and the
-/// management rows (Customize / Settings) tighten with them. Padding tweaks alone read as "slightly
-/// cramped Default", so Compact changes type and structure, not just whitespace. This enum is the
-/// single source for every density-dependent dimension — views read these properties instead of
-/// hardcoding sizes, so a third level later is one more case here. The popover width is *not*
-/// density-dependent (deliberate: switching density shouldn't move the popover's left edge).
+/// The popover's single compact layout definition. Type, rows, provider sections, and management
+/// controls all use these values so the app keeps one consistent information-dense rhythm.
 enum DensitySetting: String, Hashable, Sendable, CaseIterable {
-    case regular
     case compact
 
-    static let key = "density"
+    // MARK: - Type
 
-    var label: String {
-        switch self {
-        case .regular: return "Default"
-        case .compact: return "Compact"
-        }
-    }
-
-    // MARK: - Type (the biggest densitizer at menu-bar sizes)
-
-    /// Metric row label. Default matches the system headline; Compact steps one point down —
-    /// semantic `.headline.weight(.regular)` does not match `.headline` on macOS, so the size is
-    /// resolved explicitly and weight stays semibold at the call site.
+    /// Semantic `.headline.weight(.regular)` does not match `.headline` on macOS, so resolve the
+    /// compact size explicitly and keep the weight at the call site.
     var labelPointSize: CGFloat {
-        let base = NSFont.preferredFont(forTextStyle: .headline).pointSize
-        return self == .compact ? base - 1 : base
+        NSFont.preferredFont(forTextStyle: .headline).pointSize - 1
     }
 
-    /// Under-bar / detail text: one step below the label in both densities so it recedes instead
-    /// of reading as a second heavy line.
-    var supportingPointSize: CGFloat { self == .compact ? 11 : 12 }
+    /// Under-bar / detail text recedes instead of reading as a second heavy line.
+    var supportingPointSize: CGFloat { 11 }
 
     /// Provider name in the section header — a touch larger than the metric label below it so the
     /// section title reads as the heaviest thing in the group.
-    var headerPointSize: CGFloat { self == .compact ? 13 : 14 }
+    var headerPointSize: CGFloat { 13 }
 
     /// Provider mark in the section header.
-    var headerIconSize: CGFloat { self == .compact ? 14 : 16 }
+    var headerIconSize: CGFloat { 14 }
 
     /// Plan badge beside the provider name — always one step below the supporting text.
-    var planBadgePointSize: CGFloat { self == .compact ? 10 : 11 }
+    var planBadgePointSize: CGFloat { 10 }
 
     // MARK: - Dimensions (all on the 4pt grid or its 2pt half-steps)
 
-    /// Vertical padding on a bounded (meter) row: 20pt bar-to-bar in Default, 10pt in Compact.
-    var barRowPadding: CGFloat { self == .compact ? 5 : 10 }
+    /// Vertical padding on a bounded (meter) row.
+    var barRowPadding: CGFloat { 5 }
 
-    /// Capsule meter height — a thin hairline like Claude Code's usage bars (a 10pt bar read as a
-    /// chunky slab next to them). Default's bar is one step taller to match its airier rhythm.
-    var meterHeight: CGFloat { self == .compact ? 4 : 5 }
+    /// Capsule meter height — a thin hairline like Claude Code's usage bars.
+    var meterHeight: CGFloat { 4 }
 
-    /// Usage Trend sparkline height. Steps down in Compact so the chart row tightens with the rest of
-    /// the card instead of standing taller than its neighbors.
-    var trendChartHeight: CGFloat { self == .compact ? 14 : 18 }
+    /// Usage Trend sparkline height, kept tight with the rest of the card.
+    var trendChartHeight: CGFloat { 14 }
 
     /// Vertical padding on a text-only row.
-    var textRowPadding: CGFloat { self == .compact ? 4 : 6 }
+    var textRowPadding: CGFloat { 4 }
 
     /// Top padding for a text-only row sitting directly under another text-only row — the
-    /// neighbor-aware rule, active in **both** densities so runs of one-liners (Today / Yesterday /
-    /// Last 30 Days) always read as one cluster; Compact pulls them a step harder.
-    var condensedTextRowTopPadding: CGFloat { self == .compact ? 1 : 2 }
+    /// neighbor-aware rule makes runs of one-liners read as one cluster.
+    var condensedTextRowTopPadding: CGFloat { 1 }
 
     /// Spacing inside a bounded row between the label, the meter, and the reading line.
-    var rowInnerSpacing: CGFloat { self == .compact ? 3 : 4 }
+    var rowInnerSpacing: CGFloat { 3 }
 
-    /// Spacing between provider sections (dashboard and Customize alike). Compact halves the gap
-    /// but stays clearly wider than the in-card rhythm, so groups still read as groups.
-    var sectionSpacing: CGFloat { self == .compact ? 8 : 14 }
+    /// Spacing between provider sections, still clearly wider than the in-card rhythm.
+    var sectionSpacing: CGFloat { 8 }
 
     /// Gap between a provider header and its card.
-    var headerToCardSpacing: CGFloat { self == .compact ? 2 : 4 }
+    var headerToCardSpacing: CGFloat { 2 }
 
     /// Vertical gutter inside a metric card (keeps the first/last row off the card edge).
-    var cardGutter: CGFloat { self == .compact ? 3 : 5 }
+    var cardGutter: CGFloat { 3 }
 
     /// Vertical padding on a Customize / Settings control row (toggles, pickers).
-    var controlRowPadding: CGFloat { self == .compact ? 6 : 9 }
+    var controlRowPadding: CGFloat { 6 }
 
     /// Top padding above the dashboard list.
-    var contentTopPadding: CGFloat { self == .compact ? 10 : 14 }
+    var contentTopPadding: CGFloat { 10 }
 
     /// Estimated Customize control-row height for the pre-measurement height seed
     /// (row content ≈ 24pt + `controlRowPadding` × 2).
-    var estimatedMetricRowHeight: CGFloat { self == .compact ? 36 : 42 }
+    var estimatedMetricRowHeight: CGFloat { 36 }
 
     /// Gap between cells in the provider quick-links grid. Kept tight so two narrow cells still read
     /// as one cluster.
-    var expandedGridSpacing: CGFloat { self == .compact ? 4 : 6 }
+    var expandedGridSpacing: CGFloat { 4 }
 }

@@ -12,7 +12,7 @@ import SwiftUI
 struct APIKeysSection: View {
     let provider: any APIKeyManaging
     @Environment(WidgetDataStore.self) private var dataStore
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     /// Whether the key editor is expanded.
     @State private var isOpen = false

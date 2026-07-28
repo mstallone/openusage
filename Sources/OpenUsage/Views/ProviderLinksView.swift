@@ -10,7 +10,7 @@ struct ProviderLinksView: View {
     /// Matches the metric-row inset so the button row lines up with the rows above/below it.
     private static let horizontalInset: CGFloat = 14
 
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    private let density = DensitySetting.compact
 
     /// Hard ceiling from #596: never more than three buttons across, regardless of how many links a
     /// provider ships. Fewer links use fewer columns so a lone button isn't boxed into a third of the row.
