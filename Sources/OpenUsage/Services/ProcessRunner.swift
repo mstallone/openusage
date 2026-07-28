@@ -96,9 +96,10 @@ struct SystemProcessRunner: ProcessRunning {
 
         process.waitUntilExit()
         guard drained.wait(timeout: deadline) == .success else {
-            // The direct child can exit while a disowned descendant still holds its inherited pipe
-            // descriptors open. Terminate the isolated subprocess group and cancel both nonblocking
-            // readers so neither descendants nor drain workers outlive the operation.
+            // The direct child can exit while a background descendant still holds its inherited pipe
+            // descriptors open. Terminate descendants that remain in the isolated subprocess group
+            // and cancel both nonblocking readers. A process that deliberately creates a new session
+            // is no longer safely attributable to this operation after its parent exits.
             terminateProcessGroup(processGroupID, signal: SIGTERM)
             terminateProcessGroup(processGroupID, signal: SIGKILL)
             cancelDrains(drains, group: drained)
