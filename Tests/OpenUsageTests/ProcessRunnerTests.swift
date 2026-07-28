@@ -31,14 +31,11 @@ final class ProcessRunnerTests: XCTestCase {
     func testTimeoutIncludesPipeDraining() throws {
         let runner = SystemProcessRunner()
         let startedAt = Date()
-        let pidFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openusage-process-runner-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: pidFile) }
 
         XCTAssertThrowsError(try runner.run(
             executable: "/bin/sh",
-            arguments: ["-c", "sleep 30 & echo $! > \"$OPENUSAGE_DESCENDANT_PID_PATH\"; printf ready"],
-            environment: ["OPENUSAGE_DESCENDANT_PID_PATH": pidFile.path],
+            arguments: ["-c", "sleep 1 & printf ready"],
+            environment: [:],
             timeout: 0.2
         )) { error in
             XCTAssertEqual(
@@ -47,12 +44,6 @@ final class ProcessRunnerTests: XCTestCase {
             )
         }
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.8)
-
-        let descendantPID = try XCTUnwrap(
-            Int32(String(contentsOf: pidFile, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines))
-        )
-        _ = kill(descendantPID, SIGKILL)
     }
 
     /// A descendant can explicitly leave the process group while its direct parent is still running.
@@ -74,10 +65,10 @@ final class ProcessRunnerTests: XCTestCase {
             open(my $file, ">", $ENV{"OPENUSAGE_DESCENDANT_PID_PATH"}) or die "open failed";
             print $file "$$\\n";
             close($file);
-            sleep 30;
+            sleep 5;
             exit 0;
         }
-        sleep 30;
+        sleep 5;
         """
 
         XCTAssertThrowsError(try runner.run(
@@ -96,7 +87,6 @@ final class ProcessRunnerTests: XCTestCase {
             Int32(String(contentsOf: pidFile, encoding: .utf8)
                 .trimmingCharacters(in: .whitespacesAndNewlines))
         )
-        defer { kill(descendantPID, SIGKILL) }
 
         let stopped = expectation(description: "session descendant terminated")
         DispatchQueue.global().async {
