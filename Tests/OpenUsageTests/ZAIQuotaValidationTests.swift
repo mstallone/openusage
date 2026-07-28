@@ -73,7 +73,7 @@ final class ZAIQuotaValidationProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .decoding)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
         XCTAssertNil(snapshot.line(label: "Session"))
     }
 }

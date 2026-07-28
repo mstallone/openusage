@@ -171,7 +171,7 @@ final class GrokProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNotNil(snapshot.errorCategory)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
         XCTAssertNil(progress(snapshot.lines, "Weekly limit"))
     }
 
@@ -188,7 +188,7 @@ final class GrokProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNotNil(snapshot.errorCategory)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testNonWeeklyPeriodShowsNoWeeklyLineAndNoWarning() async {
@@ -208,7 +208,6 @@ final class GrokProviderTests: XCTestCase {
         XCTAssertNil(progress(snapshot.lines, "Weekly limit"))
         XCTAssertEqual(badge(snapshot.lines, "Pay as you go")?.text, "Disabled")
         XCTAssertNil(snapshot.warning)
-        XCTAssertNil(snapshot.errorCategory)
     }
 
     func testRefreshAppendsLocalSpendTilesFromLog() async {

@@ -1,7 +1,6 @@
 import Foundation
 
-/// Typed failures for the OpenCode provider, so telemetry groups them by a stable category
-/// (see `ErrorCategory.swift`).
+/// Typed failures for the OpenCode provider, preserving friendly user-facing descriptions.
 enum OpenCodeUsageError: Error, LocalizedError, Equatable {
     case notLoggedIn
     /// `auth.json` exists but could not be read or parsed — broken storage, not logout. `detail`

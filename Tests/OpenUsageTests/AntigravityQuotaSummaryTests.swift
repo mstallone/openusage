@@ -213,7 +213,6 @@ final class AntigravityQuotaSummaryTests: XCTestCase {
         let provider = makeCloudCodeProvider(routing: routing)
 
         let snapshot = await provider.refresh()
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertTrue(snapshot.lines.isEmpty)
         XCTAssertNil(snapshot.plan)
         XCTAssertFalse(routing.requests.contains { $0.url.path.contains("fetchAvailableModels") })
@@ -272,7 +271,6 @@ final class AntigravityQuotaSummaryTests: XCTestCase {
         let provider = makeLSProvider(routing: routing)
 
         let snapshot = await provider.refresh()
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertTrue(snapshot.lines.isEmpty)
         XCTAssertNil(snapshot.plan)
         XCTAssertFalse(routing.requests.contains { $0.url.path.hasSuffix("/GetCommandModelConfigs") })

@@ -99,7 +99,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
         XCTAssertNil(files.files[AntigravityAuthStore.cachePath])
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .notLoggedIn)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
         XCTAssertTrue(http.requests.isEmpty)
         XCTAssertNil(files.files[AntigravityAuthStore.cachePath])
     }
@@ -118,7 +118,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
         XCTAssertTrue(detected)
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .credentialAccess)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
         XCTAssertTrue(http.requests.isEmpty)
         XCTAssertNotNil(files.files[AntigravityAuthStore.cachePath])
     }
@@ -148,7 +148,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
+        XCTAssertFalse(snapshot.lines.contains { $0.isError })
         let authorizations = http.requests.compactMap { $0.headers["Authorization"] }
         XCTAssertTrue(authorizations.contains("Bearer new-access"))
         XCTAssertFalse(authorizations.contains("Bearer old-access"))
@@ -176,7 +176,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
+        XCTAssertFalse(snapshot.lines.contains { $0.isError })
         XCTAssertFalse(http.requests.contains { $0.url.host == "oauth2.googleapis.com" })
         let authorizations = http.requests.compactMap { $0.headers["Authorization"] }
         XCTAssertEqual(Set(authorizations), ["Bearer cached-access"])
@@ -191,7 +191,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .authInvalid)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
         XCTAssertTrue(http.requests.isEmpty)
     }
 
@@ -205,7 +205,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .authInvalid)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
         XCTAssertTrue(http.requests.isEmpty)
     }
 

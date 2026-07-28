@@ -386,7 +386,7 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .notLoggedIn)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testTokenInvalidOn401() async {
@@ -397,7 +397,7 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .authExpired)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     func testMapsLinesAndSendsTokenHeaderOnSuccess() async throws {
@@ -410,7 +410,6 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(snapshot.plan, "Pro")
         XCTAssertEqual(snapshot.line(label: "Credits")?.label, "Credits")
         XCTAssertEqual(http.requests.first?.headers["Authorization"], "token gho_editor")
@@ -429,7 +428,6 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(snapshot.plan, "Business")
         XCTAssertTrue(snapshot.lines.isEmpty)
     }
@@ -445,7 +443,6 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(snapshot.plan, "Business")
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
@@ -468,7 +465,6 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(snapshot.plan, "Business")
         XCTAssertTrue(snapshot.lines.isEmpty)
         XCTAssertNil(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey))
@@ -539,7 +535,6 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertTrue(snapshot.lines.isEmpty)
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
@@ -551,9 +546,8 @@ final class CopilotProviderTests: XCTestCase {
         ])
         let provider = makeOrgProvider(http: http, defaults: freshDefaults())
 
-        let snapshot = await provider.refresh()
+        _ = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(http.requests.count, 1)
     }
 

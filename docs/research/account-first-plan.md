@@ -133,7 +133,6 @@ tests land in-slice (repo policy). Estimated source LOC excludes tests.
 
 - Pi spend attribution routed through the resolver to the badge holder. *(Implemented with 5a so a
   Codex home swap can never leave provider-family usage on the old bare-id account.)*
-- Family-keyed telemetry rollups (`accounts_per_family` gauge).
 - Total Spend family grouping/tinting if still wanted (see `c6a63eb` on the old branch for why
   plain size order won before).
 

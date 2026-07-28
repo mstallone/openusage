@@ -180,7 +180,6 @@ final class SakanaProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertEqual(snapshot.plan, "Pro")
         XCTAssertEqual(progress(snapshot.lines, "Five-Hour Usage")?.used, 10)
         XCTAssertEqual(progress(snapshot.lines, "Weekly Usage")?.used, 80)
@@ -212,7 +211,6 @@ final class SakanaProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertNil(snapshot.warning)
         XCTAssertEqual(progress(snapshot.lines, "Five-Hour Usage")?.used, 0)
         XCTAssertEqual(progress(snapshot.lines, "Weekly Usage")?.used, 0)
@@ -233,7 +231,6 @@ final class SakanaProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(snapshot.errorCategory, .authExpired)
         XCTAssertEqual(http.requests.count, 1)
     }
 
@@ -253,7 +250,6 @@ final class SakanaProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNil(snapshot.errorCategory)
         XCTAssertNotNil(snapshot.warning)
         XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Usage Trend" }))
         XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Today" }))

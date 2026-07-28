@@ -343,13 +343,12 @@ final class AntigravityProviderTests: XCTestCase {
         )
         let snapshot = await provider.refresh()
         XCTAssertTrue(snapshot.lines.contains { $0.isError })
-        XCTAssertEqual(snapshot.errorCategory, .notLoggedIn)
     }
 
     @MainActor
     func testRefreshReportsUnavailableWhenSignedInButCloudCodeDown() async {
         // Valid keychain token, but every Cloud Code endpoint is down. A signed-in user should see a
-        // transient failure (.network), not "not signed in" (.notLoggedIn).
+        // transient failure, not "not signed in."
         let routing = RoutingHTTPClient { _ in HTTPResponse(statusCode: 503, headers: [:], body: Data()) }
         let inner = #"{"token":{"access_token":"ya29.kc","refresh_token":"1//r","expiry":"2099-01-01T00:00:00Z"}}"#
         let wrapped = "go-keyring-base64:" + Data(inner.utf8).base64EncodedString()
@@ -360,13 +359,12 @@ final class AntigravityProviderTests: XCTestCase {
         )
         let snapshot = await provider.refresh()
         XCTAssertTrue(snapshot.lines.contains { $0.isError })
-        XCTAssertEqual(snapshot.errorCategory, .network)
     }
 
     @MainActor
     func testDeadRefreshTokenReportsAuthExpired() async {
         // Access token already expired (skipped); refresh returns 400 invalid_grant. A dead refresh
-        // token is expired auth (.authExpired), not a transient outage.
+        // token should surface as an error, not as an empty successful result.
         let routing = RoutingHTTPClient { request in
             if request.url.host == "oauth2.googleapis.com" {
                 return HTTPResponse(statusCode: 400, headers: [:], body: Data(#"{"error":"invalid_grant"}"#.utf8))
@@ -381,14 +379,13 @@ final class AntigravityProviderTests: XCTestCase {
             discovery: LanguageServerDiscovery(processRunner: EmptyProcessRunner())
         )
         let snapshot = await provider.refresh()
-        XCTAssertEqual(snapshot.errorCategory, .authExpired)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     @MainActor
     func testAuthFailureThenThrottledRefreshReportsUnavailable() async {
         // A usable token 401s (sawAuthFailure), then the OAuth refresh hits 503. An expired access token
-        // is normal and the refresh token may be fine, so this is a transient outage (.network), not
-        // authExpired.
+        // is normal and the refresh token may be fine, so this should still surface as an error.
         let routing = RoutingHTTPClient { request in
             if request.url.host == "oauth2.googleapis.com" {
                 return HTTPResponse(statusCode: 503, headers: [:], body: Data())
@@ -403,13 +400,12 @@ final class AntigravityProviderTests: XCTestCase {
             discovery: LanguageServerDiscovery(processRunner: EmptyProcessRunner())
         )
         let snapshot = await provider.refresh()
-        XCTAssertEqual(snapshot.errorCategory, .network)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     @MainActor
     func testRateLimitedRefreshReportsUnavailable() async {
-        // Access token expired; refresh hits 429 (rate limited). Transient, not a revoked token — so
-        // .network, not .authExpired.
+        // Access token expired; refresh hits 429 (rate limited). It should surface as an error.
         let routing = RoutingHTTPClient { request in
             if request.url.host == "oauth2.googleapis.com" {
                 return HTTPResponse(statusCode: 429, headers: [:], body: Data())
@@ -424,13 +420,13 @@ final class AntigravityProviderTests: XCTestCase {
             discovery: LanguageServerDiscovery(processRunner: EmptyProcessRunner())
         )
         let snapshot = await provider.refresh()
-        XCTAssertEqual(snapshot.errorCategory, .network)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 
     @MainActor
     func testRefreshAfterSuccessfulRefreshTreatsOutageAsUnavailable() async {
         // First fetch 401 -> OAuth refresh succeeds -> retry fetch 503. The refreshed token is valid, so
-        // this is a transient outage (.network), not authExpired.
+        // this should surface as an error.
         let fetchCount = Counter()
         let routing = RoutingHTTPClient { request in
             if request.url.host == "oauth2.googleapis.com" {
@@ -450,7 +446,7 @@ final class AntigravityProviderTests: XCTestCase {
             discovery: LanguageServerDiscovery(processRunner: EmptyProcessRunner())
         )
         let snapshot = await provider.refresh()
-        XCTAssertEqual(snapshot.errorCategory, .network)
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
     }
 }
 
