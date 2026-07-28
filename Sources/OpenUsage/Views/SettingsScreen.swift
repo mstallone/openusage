@@ -29,12 +29,31 @@ struct SettingsScreen: View {
     /// System Settings after re-enabling).
     private enum NotificationsAuthState { case authorized, denied, notDetermined }
     @State private var notificationsAuth: NotificationsAuthState = .authorized
+    /// Settings contains enough native controls to make its first layout one long AppKit transaction.
+    /// Mount the below-the-fold sections in two later runloop batches so the screen becomes responsive
+    /// immediately and no individual layout pass monopolizes the main thread.
+    @State private var mountStage = 0
 
     /// Fills the region the dashboard's pinned footer leaves. Same scroller treatment as Customize:
     /// the overlay scroller stays (the scroll edge effect needs it) but is invisible.
     var body: some View {
         PopoverScrollView {
             content
+        }
+        // Partial stages deliberately do not publish an intrinsic height: DashboardView keeps the
+        // existing panel height during the brief warm-up, then performs one normal auto-fit morph when
+        // the complete Settings content is present.
+        .transformPreference(ScrollContentHeightKey.self) { height in
+            if mountStage < 2 { height = 0 }
+        }
+        .task {
+            guard mountStage == 0 else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            mountStage = 1
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            mountStage = 2
         }
     }
 
@@ -126,83 +145,94 @@ struct SettingsScreen: View {
                     }
                 }
             }
-            section("Usage Display") {
-                row("Show Usage As") {
-                    picker($store.meterStyle, options: WidgetDisplayMode.allCases, label: \.label)
+            if mountStage >= 1 {
+                section("Usage Display") {
+                    row("Show Usage As") {
+                        picker($store.meterStyle, options: WidgetDisplayMode.allCases, label: \.label)
+                    }
+                    row("Reset Times") {
+                        picker($store.resetDisplayMode, options: ResetDisplayMode.allCases, label: \.label)
+                    }
+                    // Off (default) leaves pacing on yellow and red only. On also surfaces projection
+                    // and the even-pace tick on blue rows.
+                    row("Always Show Pacing") {
+                        Toggle("", isOn: $store.alwaysShowPacing)
+                            .settingsSwitchStyle()
+                            .hoverTooltip("Show how you're pacing on every metric, not just ones near their limit")
+                    }
                 }
-                row("Reset Times") {
-                    picker($store.resetDisplayMode, options: ResetDisplayMode.allCases, label: \.label)
-                }
-                // Off (default) leaves pacing on yellow and red only. On also surfaces projection
-                // and the even-pace tick on blue rows.
-                row("Always Show Pacing") {
-                    Toggle("", isOn: $store.alwaysShowPacing)
-                        .settingsSwitchStyle()
-                        .hoverTooltip("Show how you're pacing on every metric, not just ones near their limit")
-                }
-            }
-            notificationsSection
-            section("Privacy") {
-                row("Hide From Screen Share") {
-                    Toggle("", isOn: $privacy.hideUsageWhileScreenSharing)
-                        .settingsSwitchStyle()
-                }
-                Text("While your screen is shared or recorded, the menu bar shows “OpenUsage” instead of your usage.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                row("Share Anonymous Usage") {
-                    Toggle("", isOn: Binding(
-                        get: { container.telemetry.isEnabled },
-                        set: { container.telemetry.setEnabled($0) }
-                    ))
-                    .settingsSwitchStyle()
-                }
-                // Plain-language disclosure of exactly what leaves the machine — coarse counts and
-                // error types only, never account details or usage values.
-                Text("Shares anonymous usage counts and error types to help improve OpenUsage. No account details, credentials, or usage values are sent.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            commandLineSection
-            advancedSection
-            // Visible whenever the updater is active (only the signed release build ships a feed; the
-            // dev build and a bare `swift run`, with no feed, hide this).
-            if updater.isActive {
-                section("Updates") {
-                    row("Update Automatically") {
-                        Toggle("", isOn: $updater.automaticallyChecksForUpdates)
+                notificationsSection
+                section("Privacy") {
+                    row("Hide From Screen Share") {
+                        Toggle("", isOn: $privacy.hideUsageWhileScreenSharing)
                             .settingsSwitchStyle()
                     }
-                    // No version label here — the footer already shows it. The frame goes on the label so
-                    // the glass background stretches the full row width instead of hugging the text.
-                    // (Glass on macOS 26+, bordered fallback on macOS 15.)
-                    Button { updater.checkForUpdates() } label: {
-                        Text("Check for Updates…").frame(maxWidth: .infinity)
+                    Text("While your screen is shared or recorded, the menu bar shows “OpenUsage” instead of your usage.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    row("Share Anonymous Usage") {
+                        Toggle("", isOn: Binding(
+                            get: { container.telemetry.isEnabled },
+                            set: { container.telemetry.setEnabled($0) }
+                        ))
+                        .settingsSwitchStyle()
                     }
-                    .glassButtonStyle()
-                    .controlSize(.regular)
-                    .disabled(!updater.canCheckForUpdates)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, density.controlRowPadding)
+                    // Plain-language disclosure of exactly what leaves the machine — coarse counts and
+                    // error types only, never account details or usage values.
+                    Text("Shares anonymous usage counts and error types to help improve OpenUsage. No account details, credentials, or usage values are sent.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            // Mirror of the Customize cross-link — the layout controls live on the other screen.
-            ScreenCrossLinkRow(
-                systemImage: "slider.horizontal.3",
-                title: "Customize",
-                subtitle: "Choose what's visible and where",
-                destination: .customize
-            )
+            if mountStage >= 2 {
+                commandLineSection
+                advancedSection
+                // Visible whenever the updater is active (only the signed release build ships a feed; the
+                // dev build and a bare `swift run`, with no feed, hide this).
+                if updater.isActive {
+                    section("Updates") {
+                        row("Update Automatically") {
+                            Toggle("", isOn: $updater.automaticallyChecksForUpdates)
+                                .settingsSwitchStyle()
+                        }
+                        // No version label here — the footer already shows it. The frame goes on the label so
+                        // the glass background stretches the full row width instead of hugging the text.
+                        // (Glass on macOS 26+, bordered fallback on macOS 15.)
+                        Button { updater.checkForUpdates() } label: {
+                            Text("Check for Updates…").frame(maxWidth: .infinity)
+                        }
+                        .glassButtonStyle()
+                        .controlSize(.regular)
+                        .disabled(!updater.canCheckForUpdates)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, density.controlRowPadding)
+                    }
+                }
+                // Mirror of the Customize cross-link — the layout controls live on the other screen.
+                ScreenCrossLinkRow(
+                    systemImage: "slider.horizontal.3",
+                    title: "Customize",
+                    subtitle: "Choose what's visible and where",
+                    destination: .customize
+                )
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .task { await refreshNotificationsAuth() }
+        .task {
+            // Native controls are most expensive while this screen is first mounting. Permission state
+            // does not affect the initial layout unless notifications are enabled, so let the screen
+            // transition settle before asking UserNotifications for its current authorization state.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            await refreshNotificationsAuth()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             commandLineTool.refreshStatus()
             Task { await refreshNotificationsAuth() }
