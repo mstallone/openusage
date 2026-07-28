@@ -1,31 +1,27 @@
 ---
 name: release-swift
-description: Cut a release of OpenUsage (Swift menu-bar app): pick a version, generate a categorized changelog, tag from `main`, and publish the GitHub Release with notes. Use to ship an Early Access beta or a stable release.
+description: Cut a stable release of OpenUsage (Swift menu-bar app): pick a version, generate a categorized changelog, tag from `main`, and publish the GitHub Release with notes.
 ---
 
 # Release Swift
 
 Pushing a `v*` tag on `main` runs `.github/workflows/release.yml`, which builds, signs, notarizes, attaches `OpenUsage-<version>.dmg` to the GitHub Release, and updates the Sparkle `appcast.xml` on `gh-pages`. CI creates the release with an EMPTY body, so this skill generates the changelog, records it in `CHANGELOG.md`, and publishes the notes onto the release.
 
-## Channels
-
-- **Beta (Early Access):** suffixed tag like `v0.7.1-beta.1`. Marked a GitHub pre-release and added to Sparkle's `beta` channel. Only users with Early Access enabled get it; GitHub "Latest" is untouched.
-- **Stable:** plain tag like `v0.7.1`. Marked non-prerelease, becomes GitHub "Latest", and ships to everyone.
-
-The tag IS the version: `v0.7.1-beta.1` becomes `CFBundleShortVersionString = 0.7.1-beta.1`, and `CFBundleVersion` is the git commit count. There are no version files to bump.
+OpenUsage has one stable release channel. Tags use `vMAJOR.MINOR.PATCH`; suffixed prerelease tags are
+rejected. The tag is the version (`v0.7.1` becomes `CFBundleShortVersionString = 0.7.1`), and
+`CFBundleVersion` is the git commit count. There are no version files to bump.
 
 ## Cutting a release
 
 ### 1. Choose the version
 
-Next number in the current lane (default bump: patch). Beta builds add a `-beta.N` suffix. Confirm with the owner before proceeding.
+Propose the next stable version (default bump: patch) and confirm it with the owner before proceeding.
 
 ### 2. Generate the changelog
 
-Collect commits since the **previous release in the same channel** and categorize each:
-
-- **Stable cut:** span from the **last stable tag** to this one (e.g. `v0.7.0...v0.7.1`), so the notes roll up the entire beta series plus any post-beta commits. Never start a stable changelog at the last beta — that would omit every beta in the lane.
-- **Beta cut:** span from the previous tag (the prior beta, or the last stable if it's the first beta in a lane) to this one.
+Collect commits since the **previous stable release** and categorize each. The inherited history
+contains old beta tags, so do not use the nearest tag blindly: span from the last plain stable tag
+(e.g. `v0.7.0...v0.7.1`) so all intervening commits are included.
 
 | Commit prefix | Category |
 |---|---|
@@ -103,7 +99,10 @@ curl -s "https://mstallone.github.io/openusage/appcast.xml" | grep -F "OpenUsage
 
 The second check matters: publishing is two hops — Release (or pricing-supplement) pushes `appcast.xml` to the **`gh-pages` branch**, then **`.github/workflows/deploy-pages.yml` on `main`** deploys that branch to the live site (Pages source is "GitHub Actions", not legacy branch deploy). Auto deploy runs on `workflow_run` after Release completes; GitHub sometimes returns **"Deployment failed, try again later"** even though `gh-pages` is already correct. If the branch has the version but the live URL does not after ~10 minutes, check `gh run list --workflow=deploy-pages.yml` and re-run **`gh workflow run deploy-pages.yml --ref main`** (must use `main` — the workflow file is not on `gh-pages`). Sparkle clients only see the live URL.
 
-Require `isDraft=false`, `isPrerelease=true` for beta or `false` for stable, `OpenUsage-<version>.dmg` and `OpenUsage-<version>.dmg.sha256` assets, `bodyLen>0`, and the version present in the appcast. If a draft was left behind, migrate its notes/assets onto the published release, then delete it — but only once a separate PUBLISHED release for the tag already exists:
+Require `isDraft=false`, `isPrerelease=false`, `OpenUsage-<version>.dmg` and
+`OpenUsage-<version>.dmg.sha256` assets, `bodyLen>0`, and the version present in the appcast. If a
+draft was left behind, migrate its notes/assets onto the published release, then delete it — but only
+once a separate PUBLISHED release for the tag already exists:
 
 ```sh
 tag="v{version}"
@@ -143,15 +142,17 @@ Only include category sections that have entries.
 - [{short_hash}](https://github.com/mstallone/openusage/commit/{full_hash}) {commit message} by @{author}
 ~~~
 
-`{prev_tag}` is the previous release **in the same channel**: last stable for a stable cut, last beta (or last stable for the first beta in a lane) for a beta cut.
+`{prev_tag}` is the previous plain stable release tag. Ignore inherited suffixed beta tags when
+selecting it.
 
 ## Rules
 
 - 7-char short commit hashes; tags always prefixed with `v`.
-- Stable changelogs span last-stable → this-stable (roll up the whole beta series); beta changelogs span previous-tag → this-beta.
+- Release tags are plain `vMAJOR.MINOR.PATCH`; never create a suffixed prerelease tag.
+- Changelogs span the previous stable release to the new stable release.
 - Never push or tag automatically — ask the owner first.
 - Always publish notes to the GitHub Release — never blank.
 - The version is the tag; never edit version files.
-- The appcast is append-only: older installs and the other channel's latest build must keep working, so the workflow aborts rather than shrink it.
+- The appcast is append-only so older installs keep working; the workflow aborts rather than shrink it.
 
 Release secrets and one-time setup live in the README under [Release setup](../../../README.md#release-setup-one-time).

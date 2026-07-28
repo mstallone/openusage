@@ -37,11 +37,9 @@ APPLE_TEAM_ID="$EXPECTED_TEAM_ID"
 export APPLE_TEAM_ID
 MIN_SYSTEM_VERSION="15.0"
 VERSION="$OPENUSAGE_VERSION"
-# CFBundleShortVersionString carries the full version, including any pre-release suffix (e.g.
-# "0.7.0-beta.1"). This is the human-readable string Sparkle shows in its update prompt and the app
-# shows in its footer/About, so they always match. Sparkle compares builds by CFBundleVersion (the
-# monotonic commit count below), not this string, and Developer ID notarization does not require it to
-# be numeric. (Sparkle's own docs use a beta short version, e.g. "2.0b1".)
+"$ROOT_DIR/script/validate_release_tag.sh" "v$VERSION" >/dev/null
+# CFBundleShortVersionString is the stable human-readable version Sparkle shows in its update prompt
+# and the app shows in its footer/About. Sparkle compares builds by the monotonic CFBundleVersion.
 BUILD="${OPENUSAGE_BUILD:-$(git rev-list --count HEAD)}"
 FEED_URL="${FEED_URL:-https://mstallone.github.io/openusage/appcast.xml}"
 DMG_NAME="$APP_NAME-$VERSION.dmg"

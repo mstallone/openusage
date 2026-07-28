@@ -139,37 +139,36 @@ final class SettingsMigratorTests: XCTestCase {
         XCTAssertEqual(ranVersions(defaults), [1, 2, 3], "resumes at v2; v1 not replayed")
     }
 
-    // MARK: - Regression (the beta-update bug)
+    // MARK: - Regression (the old domain-wipe bug)
 
-    /// The bug this replaces: the old reset wiped the whole domain on every beta bump, silently clearing
-    /// `betaUpdatesEnabled` (and everything else) and dropping users off the Early Access channel. The
-    /// migrator must NEVER discard settings — an up-to-date install keeps every key untouched.
+    /// The old reset wiped the whole defaults domain on an app update. The migrator must never discard
+    /// unrelated settings — an up-to-date install keeps every key untouched.
     func testMigrateNeverWipesExistingSettings() {
         let (defaults, domain) = makeDefaults("NoWipe")
         defer { defaults.removePersistentDomain(forName: domain) }
-        defaults.set(true, forKey: "betaUpdatesEnabled")
+        defaults.set(true, forKey: "thirdPartyPreference")
         defaults.set("custom", forKey: "openusage.layout.v1")
         defaults.set(720.0, forKey: "openusage.panelHeight")
         defaults.set(SettingsSchema.current, forKey: SettingsMigrator.schemaVersionKey)
 
         SettingsMigrator.migrate(defaults: defaults, domainName: domain)  // real (shipped) schema
 
-        XCTAssertTrue(defaults.bool(forKey: "betaUpdatesEnabled"), "Early Access opt-in must survive updates")
+        XCTAssertTrue(defaults.bool(forKey: "thirdPartyPreference"))
         XCTAssertEqual(defaults.string(forKey: "openusage.layout.v1"), "custom")
         XCTAssertEqual(defaults.double(forKey: "openusage.panelHeight"), 720.0)
     }
 
     /// A legacy install (no schema version) running the real, shipped schema keeps its settings while
-    /// being stamped forward — today's schema ships zero migrations, so nothing is transformed or lost.
+    /// being stamped forward through every migration.
     func testLegacyInstallKeepsSettingsUnderShippedSchema() {
         let (defaults, domain) = makeDefaults("LegacyReal")
         defer { defaults.removePersistentDomain(forName: domain) }
-        defaults.set(true, forKey: "betaUpdatesEnabled")
+        defaults.set(true, forKey: "thirdPartyPreference")
 
         let result = SettingsMigrator.migrate(defaults: defaults, domainName: domain)
 
         XCTAssertEqual(result, SettingsSchema.current)
-        XCTAssertTrue(defaults.bool(forKey: "betaUpdatesEnabled"))
+        XCTAssertTrue(defaults.bool(forKey: "thirdPartyPreference"))
     }
 
     // MARK: - v2: enabled-list unification + known-provider set
@@ -201,6 +200,20 @@ final class SettingsMigratorTests: XCTestCase {
         XCTAssertTrue(store.isEnabled("claude"))
         XCTAssertFalse(store.isEnabled("devin"))
         XCTAssertFalse(store.isEnabled("grok"))
+    }
+
+    func testV3RemovesRetiredBetaUpdatePreferenceWithoutTouchingOtherSettings() {
+        let (defaults, domain) = makeDefaults("V3RetiredBetaPreference")
+        defer { defaults.removePersistentDomain(forName: domain) }
+        defaults.set(2, forKey: SettingsMigrator.schemaVersionKey)
+        defaults.set(true, forKey: "betaUpdatesEnabled")
+        defaults.set("custom", forKey: "openusage.layout.v1")
+
+        let result = SettingsMigrator.migrate(defaults: defaults, domainName: domain)
+
+        XCTAssertEqual(result, 3)
+        XCTAssertNil(defaults.object(forKey: "betaUpdatesEnabled"))
+        XCTAssertEqual(defaults.string(forKey: "openusage.layout.v1"), "custom")
     }
 
     /// A legacy install with no disabled providers (the all-on default) converts to all-on.

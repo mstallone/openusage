@@ -18,7 +18,7 @@ struct SettingsMigration: Sendable {
 enum SettingsSchema {
     /// Current schema version. Keep equal to the highest migration `version` below (or the baseline when
     /// there are none). This is NOT the app version — bump it only alongside a migration you add.
-    static let current = 2
+    static let current = 3
 
     /// The provider IDs that existed when the v2 migration shipped, frozen forever. A migration is a
     /// point-in-time transform: any future build with more providers also contains this migration, so a
@@ -49,6 +49,11 @@ enum SettingsSchema {
             if defaults.stringArray(forKey: "openusage.knownProviders.v1") == nil {
                 defaults.set(v2ProviderIDs, forKey: "openusage.knownProviders.v1")
             }
+        },
+        // v3 retires the beta update channel and its preference. Sparkle now follows only the default
+        // stable channel, so keeping the old toggle value would be misleading dead state.
+        SettingsMigration(version: 3) { defaults in
+            defaults.removeObject(forKey: "betaUpdatesEnabled")
         }
     ]
 }
@@ -65,8 +70,7 @@ enum SettingsSchema {
 ///     defaults right after.
 ///   - **Legacy install (predates this key):** treated as version 0 and migrated forward from there.
 ///
-/// Crucially there is NO wipe: an app-version change never discards settings. (The old reset silently
-/// cleared `betaUpdatesEnabled`, dropping users off the Early Access channel — see `UpdaterController`.)
+/// Crucially there is NO domain wipe: an app-version change never discards unrelated settings.
 enum SettingsMigrator {
     /// Where the applied schema version is recorded, in the same standard domain as the settings it
     /// guards. Integer; absent means "never migrated" — a fresh or legacy install, disambiguated at runtime.
