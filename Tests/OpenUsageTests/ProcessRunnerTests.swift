@@ -25,10 +25,10 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "hello")
     }
 
-    /// A shell can exit after disowning a descendant that inherited its stdout/stderr descriptors.
-    /// Pipe draining must share the process deadline and terminate that descendant instead of leaving
-    /// either it or blocked drain work behind.
-    func testTimeoutIncludesPipeDrainingAndTerminatesDescendant() throws {
+    /// A shell can exit while a descendant retains its stdout/stderr descriptors. Once the shell has
+    /// exited, the runner no longer owns that process; it must stop draining at the shared deadline
+    /// without targeting a stale process or group ID.
+    func testTimeoutIncludesPipeDraining() throws {
         let runner = SystemProcessRunner()
         let startedAt = Date()
         let pidFile = FileManager.default.temporaryDirectory
@@ -52,18 +52,7 @@ final class ProcessRunnerTests: XCTestCase {
             Int32(String(contentsOf: pidFile, encoding: .utf8)
                 .trimmingCharacters(in: .whitespacesAndNewlines))
         )
-        defer { kill(descendantPID, SIGKILL) }
-
-        let stopped = expectation(description: "descendant terminated")
-        DispatchQueue.global().async {
-            for _ in 0 ..< 100 where kill(descendantPID, 0) == 0 {
-                usleep(10_000)
-            }
-            if kill(descendantPID, 0) != 0, errno == ESRCH {
-                stopped.fulfill()
-            }
-        }
-        wait(for: [stopped], timeout: 1.1)
+        _ = kill(descendantPID, SIGKILL)
     }
 
     /// A descendant can explicitly leave the process group while its direct parent is still running.
@@ -119,5 +108,34 @@ final class ProcessRunnerTests: XCTestCase {
             }
         }
         wait(for: [stopped], timeout: 1.1)
+    }
+
+    func testCancellingContinuouslyReadablePipeDrainCompletes() throws {
+        let pipe = Pipe()
+        let writer = Process()
+        writer.executableURL = URL(fileURLWithPath: "/usr/bin/yes")
+        writer.standardOutput = pipe.fileHandleForWriting
+        writer.standardError = Pipe()
+        try writer.run()
+        try pipe.fileHandleForWriting.close()
+        defer {
+            if writer.isRunning {
+                writer.terminate()
+            }
+            writer.waitUntilExit()
+        }
+
+        // Let the writer fill the pipe before draining, then confirm the handler has started reading.
+        usleep(20_000)
+        let output = SubprocessOutput()
+        let drained = DispatchGroup()
+        let drain = PipeDrain(pipe.fileHandleForReading, into: output, isStdout: true, group: drained)
+        for _ in 0 ..< 100 where output.stdoutString.isEmpty {
+            usleep(1_000)
+        }
+        XCTAssertFalse(output.stdoutString.isEmpty)
+
+        drain.cancel()
+        XCTAssertEqual(drained.wait(timeout: .now() + 0.5), .success)
     }
 }

@@ -69,23 +69,16 @@ struct SystemProcessRunner: ProcessRunning {
             cancelDrains(drains, group: drained)
             throw error
         }
-        // Foundation launches Process as a process-group leader, so its PID is also the group ID.
-        // Preserve it directly: an immediately-exiting child can disappear before getpgid() runs,
-        // while descendants can continue holding the inherited pipes open.
-        let processGroupID = process.processIdentifier
         let deadline = DispatchTime.now() + timeout
 
         if exited.wait(timeout: deadline) == .timedOut {
-            // Preserve the previous process-tree cleanup for descendants that explicitly left the
-            // root group with setsid()/setpgid(). The root is still alive here, so its child links
-            // are available; collect them before sending any signal that could reparent them.
+            // The root is still alive, so capture the process tree while its ownership links are
+            // reliable. Identity checks keep delayed cleanup from signaling recycled PIDs.
             let descendants = descendantProcesses(of: process.processIdentifier)
             signalProcesses(descendants, signal: SIGTERM)
-            terminateProcessGroup(processGroupID, signal: SIGTERM)
             process.terminate()
             _ = exited.wait(timeout: .now() + 0.1)
             signalProcesses(descendants, signal: SIGKILL)
-            terminateProcessGroup(processGroupID, signal: SIGKILL)
             if process.isRunning {
                 kill(process.processIdentifier, SIGKILL)
             }
@@ -97,20 +90,13 @@ struct SystemProcessRunner: ProcessRunning {
         process.waitUntilExit()
         guard drained.wait(timeout: deadline) == .success else {
             // The direct child can exit while a background descendant still holds its inherited pipe
-            // descriptors open. Terminate descendants that remain in the isolated subprocess group
-            // and cancel both nonblocking readers. A process that deliberately creates a new session
-            // is no longer safely attributable to this operation after its parent exits.
-            terminateProcessGroup(processGroupID, signal: SIGTERM)
-            terminateProcessGroup(processGroupID, signal: SIGKILL)
+            // descriptors open. Once the parent exits, ancestry is no longer a safe ownership signal;
+            // cancel the bounded readers without targeting a potentially reused process or group ID.
             cancelDrains(drains, group: drained)
             throw ProcessRunnerError.timedOut(executable: executable, timeout: timeout)
         }
         AppLog.debug(.subprocess, "exit \(process.terminationStatus)")
         return ProcessResult(exitCode: process.terminationStatus, stdout: output.stdoutString, stderr: output.stderrString)
-    }
-
-    private func terminateProcessGroup(_ processGroupID: pid_t, signal: Int32) {
-        kill(-processGroupID, signal)
     }
 
     private func descendantProcesses(of rootPID: pid_t) -> [ProcessIdentity] {
@@ -187,7 +173,7 @@ enum ProcessRunnerError: Error, LocalizedError, Equatable {
 
 /// Continuously drains one subprocess pipe without dedicating a blocked worker thread. Cancellation
 /// stops future reads and closes the descriptor after any active event handler has returned.
-private final class PipeDrain: @unchecked Sendable {
+final class PipeDrain: @unchecked Sendable {
     private let handle: FileHandle
     private let descriptor: Int32
     private let output: SubprocessOutput
@@ -229,12 +215,15 @@ private final class PipeDrain: @unchecked Sendable {
 
     private func readAvailableData() {
         var buffer = [UInt8](repeating: 0, count: 16 * 1024)
-        while true {
+        // Read at most one successful chunk per event. Returning to the dispatch source between
+        // chunks lets a pending cancellation handler run even when a writer keeps the pipe readable.
+        while !source.isCancelled {
             let byteCount = buffer.withUnsafeMutableBytes {
                 Darwin.read(descriptor, $0.baseAddress, $0.count)
             }
             if byteCount > 0 {
                 output.append(Data(buffer.prefix(byteCount)), isStdout: isStdout)
+                return
             } else if byteCount == 0 {
                 source.cancel()
                 return
@@ -251,7 +240,7 @@ private final class PipeDrain: @unchecked Sendable {
 }
 
 /// Lock-guarded accumulator for the two concurrently-drained pipes.
-private final class SubprocessOutput: @unchecked Sendable {
+final class SubprocessOutput: @unchecked Sendable {
     private let lock = NSLock()
     private var stdout = Data()
     private var stderr = Data()
