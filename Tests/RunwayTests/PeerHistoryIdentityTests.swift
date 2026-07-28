@@ -232,6 +232,40 @@ final class PeerHistoryIdentityTests: XCTestCase {
         XCTAssertEqual(total.slices.first?.amountUSD ?? 0, 7, accuracy: 0.001)
     }
 
+    func testRemoteOnlySpendIsExcludedWhenEveryLocalFamilyCardIsDisabled() {
+        let scoped = ClaudeProvider.makeProvider(
+            id: "claude@f15456b0",
+            displayName: "Claude — Local"
+        )
+        let registry = WidgetRegistry(
+            providers: [scoped],
+            descriptors: [
+                WidgetDescriptor.usageTrend(provider: scoped)
+                    .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test"),
+            ]
+        )
+        let dataStore = WidgetDataStore(
+            registry: registry,
+            providers: [],
+            cache: scratchCache(),
+            defaults: makeScratchDefaults("DisabledScopedRemoteTotal"),
+            isProviderEnabled: { _ in false },
+            providerIdentityKeys: [scoped.id: maxKey]
+        )
+        let doc = makeDocument(
+            deviceName: "Mac mini",
+            providers: ["claude": history(day: dayKey(Date()), tokens: 1_000, cost: 7)],
+            identities: ["claude": "uuid-other|org-x"]
+        )
+
+        dataStore.setPeerHistoryDocuments([doc], ownDeviceID: "this-mac")
+
+        XCTAssertTrue(
+            dataStore.remoteOnlySpend.isEmpty,
+            "disabling the entire local family also excludes peer-only spend for that family"
+        )
+    }
+
     func testSeveralRemoteOnlyAccountsFromOneDeviceStayTellableApart() {
         // Many accounts on the mini, none on this Mac: each must keep its own slice with its own
         // identity-derived name — never several identical "Claude · Mac mini" legend rows.

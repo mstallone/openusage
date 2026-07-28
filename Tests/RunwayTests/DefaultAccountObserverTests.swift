@@ -136,6 +136,19 @@ final class DefaultAccountObserverTests: XCTestCase {
         )
     }
 
+    func testClaudeUsableKeychainCredentialKeepsStateFileIdentityAheadOfAmbientToken() {
+        let observer = makeObserver(
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+            files: ["/Users/dev/.claude.json": claudeStateJSON()],
+            keychainValue: #"{"claudeAiOauth":{"accessToken":"stored-token"}}"#
+        )
+
+        XCTAssertEqual(
+            observer.observeClaude(),
+            .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude")
+        )
+    }
+
     func testClaudeAmbientTokenDoesNotInheritStateFileFromUnusableCredentialFiles() {
         for credential in [
             "{ malformed",
@@ -152,6 +165,36 @@ final class DefaultAccountObserverTests: XCTestCase {
 
             XCTAssertEqual(observer.observeClaude(), .absent)
         }
+    }
+
+    func testClaudeAmbientTokenDoesNotInheritStateFileFromUnusableKeychainCredentials() {
+        for credential in [
+            "{ malformed",
+            #"{"claudeAiOauth":{}}"#,
+            #"{"claudeAiOauth":{"accessToken":"   "}}"#,
+        ] {
+            let observer = makeObserver(
+                environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+                files: ["/Users/dev/.claude.json": claudeStateJSON()],
+                keychainValue: credential
+            )
+
+            XCTAssertEqual(observer.observeClaude(), .absent)
+        }
+    }
+
+    func testClaudeAmbientTokenDoesNotUseStateIdentityWhenKeychainValidationIsUnavailable() {
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"]),
+            files: FakeFiles(["/Users/dev/.claude.json": claudeStateJSON()]),
+            keychain: ThrowingKeychain(),
+            homeDirectory: { [home] in home }
+        )
+
+        XCTAssertEqual(
+            observer.observeClaude(),
+            .unresolved(reason: "credential presence unverifiable")
+        )
     }
 
     // MARK: - Codex

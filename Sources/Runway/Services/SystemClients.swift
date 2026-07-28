@@ -223,11 +223,21 @@ enum SQLiteError: Error, LocalizedError, Equatable {
     }
 }
 
+enum NonInteractiveKeychainRead: Equatable, Sendable {
+    case value(String)
+    case missing
+    case unavailable
+}
+
 protocol KeychainAccessing: Sendable {
     func readGenericPassword(service: String) throws -> String?
     func writeGenericPassword(service: String, value: String) throws
     func readGenericPasswordForCurrentUser(service: String) throws -> String?
     func writeGenericPasswordForCurrentUser(service: String, value: String) throws
+    /// Reads a service-level item only when access is already authorized. Production forbids UI;
+    /// `.unavailable` means validation would require interaction or the keychain could not be read.
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead
     /// Read a generic password scoped to an explicit account (`-a`). Used when another app stored the
     /// item under a known account name (e.g. Antigravity's `agy` token under service `gemini`,
     /// account `antigravity`) rather than the current user.
@@ -251,6 +261,23 @@ extension KeychainAccessing {
 
     func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
         try writeGenericPassword(service: service, value: value)
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        do {
+            return try readGenericPassword(service: service).map(NonInteractiveKeychainRead.value) ?? .missing
+        } catch {
+            return .unavailable
+        }
+    }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        do {
+            return try readGenericPasswordForCurrentUser(service: service)
+                .map(NonInteractiveKeychainRead.value) ?? .missing
+        } catch {
+            return .unavailable
+        }
     }
 
     /// Default for mocks that don't model accounts: fall back to the service-only lookup. The real
@@ -304,6 +331,41 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func readGenericPassword(service: String) throws -> String? {
         try readPassword(["find-generic-password", "-s", service, "-w"], service: service)
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        readGenericPasswordWithoutUserInteraction(service: service, account: nil)
+    }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        readGenericPasswordWithoutUserInteraction(service: service, account: currentUserAccount())
+    }
+
+    private func readGenericPasswordWithoutUserInteraction(
+        service: String,
+        account: String?
+    ) -> NonInteractiveKeychainRead {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: true,
+            kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
+        ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
+        var item: CFTypeRef?
+        switch SecItemCopyMatching(query as CFDictionary, &item) {
+        case errSecSuccess:
+            guard let data = item as? Data,
+                  let value = String(data: data, encoding: .utf8)
+            else {
+                return .value("")
+            }
+            return .value(value)
+        case errSecItemNotFound:
+            return .missing
+        default:
+            return .unavailable
+        }
     }
 
     /// Attributes-only existence probe used on the launch path: an in-process Security-framework

@@ -111,10 +111,15 @@ struct DefaultAccountObserver: Sendable {
         } catch {
             credentialFileUsable = nil
         }
-        let keychainPresence = ClaudeAuthStore.standardKeychainServiceCandidates(
+        let keychainUsability = ClaudeAuthStore.standardKeychainServiceCandidates(
             environment: environment,
             configDirOverride: configDirOverride
-        ).map { keychain.genericPasswordExists(service: $0) }
+        ).flatMap { service in
+            [
+                keychain.readGenericPasswordForCurrentUserWithoutUserInteraction(service: service),
+                keychain.readGenericPasswordWithoutUserInteraction(service: service),
+            ].map(Self.claudeKeychainCredentialUsability)
+        }
         let text: String?
         do {
             text = try files.readTextIfPresent(identityPath)
@@ -122,12 +127,12 @@ struct DefaultAccountObserver: Sendable {
             return .unresolved(reason: "identity file unreadable: \(error.localizedDescription)")
         }
         guard let text else {
-            // No state file. File or keychain credentials without it can't be attributed. Probe only
-            // keychain attributes on this launch path, never the secret (which could prompt).
-            if credentialFileUsable == true || keychainPresence.contains(true) {
+            // No state file. File or keychain credentials without it can't be attributed. Keychain
+            // validation forbids UI, so this launch path never opens an authorization prompt.
+            if credentialFileUsable == true || keychainUsability.contains(true) {
                 return .unresolved(reason: "credentials present but no identity file")
             }
-            if credentialFileUsable == nil || keychainPresence.contains(where: { $0 == nil }) {
+            if credentialFileUsable == nil || keychainUsability.contains(where: { $0 == nil }) {
                 return .unresolved(reason: "credential presence unverifiable")
             }
             return .absent
@@ -138,13 +143,26 @@ struct DefaultAccountObserver: Sendable {
         else {
             return .unresolved(reason: "identity file present but names no account")
         }
-        if hasAmbientClaudeToken, credentialFileUsable != true, !keychainPresence.contains(true) {
-            if credentialFileUsable == nil || keychainPresence.contains(where: { $0 == nil }) {
+        if hasAmbientClaudeToken, credentialFileUsable != true, !keychainUsability.contains(true) {
+            if credentialFileUsable == nil || keychainUsability.contains(where: { $0 == nil }) {
                 return .unresolved(reason: "credential presence unverifiable")
             }
             return .absent
         }
         return .resolved(identityKey: key, label: Self.claudeIdentityLabel(account), anchor: anchor)
+    }
+
+    private static func claudeKeychainCredentialUsability(
+        _ read: NonInteractiveKeychainRead
+    ) -> Bool? {
+        switch read {
+        case .value(let text):
+            ClaudeAuthStore.parseUsableCredentials(text) != nil
+        case .missing:
+            false
+        case .unavailable:
+            nil
+        }
     }
 
     // MARK: - Codex

@@ -435,6 +435,7 @@ final class WidgetDataStore {
         remoteOnlySpend = Self.renderRemoteOnlySpend(
             remapped.remoteOnly,
             registry: registry,
+            enabledDescriptors: enabledDescriptors,
             now: renderDate
         )
         var rendered = localSnapshots
@@ -464,17 +465,19 @@ final class WidgetDataStore {
     private static func renderRemoteOnlySpend(
         _ remoteOnly: [PeerHistoryRemapper.RemoteOnlyHistory],
         registry: WidgetRegistry,
+        enabledDescriptors: [String: UsageHistoryDescriptor],
         now: Date
     ) -> [(provider: Provider, snapshot: ProviderSnapshot)] {
         remoteOnly.compactMap { entry in
             // Scoped account cards are the complete local family when no default-home login exists,
-            // so the bare provider may be absent. Any live sibling carries the same icon and history
-            // rendering metadata needed for a remote-only Total Spend slice.
-            guard let familyProvider = registry.provider(id: entry.family)
-                    ?? registry.providers.first(where: {
-                        ProviderAccountID.family(of: $0.id) == entry.family
-                    }),
-                  let descriptor = registry.historyDescriptorsByProvider[familyProvider.id]
+            // so the bare provider may be absent. Any ENABLED sibling carries the same icon and
+            // history rendering metadata needed for a remote-only Total Spend slice. If the whole
+            // family is disabled, its peer-only spend stays out of Total Spend too.
+            guard let familyProvider = registry.providers.first(where: {
+                let isFamily = ProviderAccountID.family(of: $0.id) == entry.family
+                return isFamily && enabledDescriptors[$0.id] != nil
+            }),
+                  let descriptor = enabledDescriptors[familyProvider.id]
             else { return nil }
             let history = UsageHistoryAggregator.mergeHistories(entry.histories, now: now)
             guard !history.series.daily.isEmpty else { return nil }
