@@ -91,7 +91,6 @@ final class PanelHeightController {
             PanelGeometry.frame(topLeft: anchorTopLeft, width: Self.panelWidth, height: height),
             display: false
         )
-        panel.invalidateShadow()
         isMorphing = true
         scheduleMorphSettle()
     }
@@ -102,6 +101,10 @@ final class PanelHeightController {
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled, let self, self.panel.isVisible else { return }
             self.isMorphing = false
+            // Rebuilding the window shadow on every interpolated frame adds AppKit work without
+            // changing content layout. Keep the existing shadow during the brief morph and refresh
+            // it once for the settled frame.
+            self.panel.invalidateShadow()
             self.saveHeight(self.panel.frame.height, for: self.currentScreen())
         }
     }

@@ -17,6 +17,7 @@ struct DashboardContentView: View {
     @AppStorage(TotalSpendSetting.key) private var showTotalSpend = true
 
     var body: some View {
+        let displayGroups = layout.displayGroups
         PopoverScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // A pending update found by a scheduled Sparkle check tops everything — it's the
@@ -33,7 +34,7 @@ struct DashboardContentView: View {
                         .padding(.bottom, density.sectionSpacing)
                         .transition(.scale(scale: 0.95).combined(with: .opacity))
                 }
-                widgetContent
+                widgetContent(displayGroups)
             }
             .animation(Motion.spring, value: container.onboarding.isCustomizeHintPending)
             .animation(Motion.spring, value: updater.availableUpdateVersion)
@@ -46,14 +47,14 @@ struct DashboardContentView: View {
     }
 
     @ViewBuilder
-    private var widgetContent: some View {
+    private func widgetContent(_ displayGroups: [ProviderGroup]) -> some View {
         // The cross-provider Total Spend ring stays visible whenever the user allows it and an enabled
         // provider can track spend, even before fresh data arrives or when every metric row is hidden.
         if showTotalSpend, layout.hasSpendCapableProvider {
             TotalSpendCard()
                 .padding(.bottom, density.sectionSpacing)
         }
-        if layout.displayGroups.isEmpty {
+        if displayGroups.isEmpty {
             Text("Turn on Customize to choose what to show.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -63,6 +64,7 @@ struct DashboardContentView: View {
                 .padding(.horizontal, 16)
         } else {
             WidgetGroupedListView(
+                groups: displayGroups,
                 reorderSpaceName: reorderSpaceName,
                 reorderLift: $reorderLift
             )

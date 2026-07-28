@@ -119,14 +119,16 @@ Color.clear
 
 With the window a passive follower, the slide and the resize are no longer two clocks — the question becomes purely *design*: should they move together or in sequence?
 
-**Option A — Coordinated morph (recommended).** Set the height target to the destination screen's ideal height **inside the same `withAnimation` that drives `slideProgress`.** Both pages are already mounted in the slide `HStack`, so both ideal heights are known. The horizontal offset and the window height then animate on one spring; the panel *morphs* (grows/shrinks) as the new screen slides in — one coherent motion. The old "diagonal" was only ugly because the two axes were on different clocks; on one clock it reads as intentional (this is how system surfaces morph). No extra latency.
+**Option A — Coordinated morph (recommended).** Set the height target to the destination screen's ideal height **inside the same `withAnimation` that drives the destination's entrance.** Keep only the destination page mounted during navigation; retaining both complete screen trees in a sliding `HStack` adds substantial layout and rendering work. The directional offset and the window height then animate on one spring, so the panel *morphs* (grows/shrinks) as the new screen enters — one coherent motion. The old "diagonal" was only ugly because the two axes were on different clocks; on one clock it reads as intentional (this is how system surfaces morph). No extra latency.
 
 ```swift
 withAnimation(Motion.spring) {
-    slideProgress = 1
+    screenEntranceOffset = 0
     animatedTarget = idealHeight[destinationScreen] ?? animatedTarget
 }
 ```
+
+The destination height can come from the most recent measurement for that screen, with the current height as the first-visit fallback. Settings mounts its below-the-fold sections in short stages so the navigation frame is not blocked by every native control being constructed at once; its content-height preference is published after the final stage.
 
 **Option B — Sequenced (conservative fallback).** Slide at constant height, then resize — using the native completion API (macOS 14+, within your floor) [14][7][15]:
 
@@ -150,7 +152,8 @@ To avoid clipping mid-slide, grow *before* the slide when the destination is tal
 |---|---|
 | `Support/PopoverDismissReader.swift` | Add `static var applyHeight: ((CGFloat) -> Void)?` to the `MenuBarPopover` bridge (same pattern as `beginResize`/`resizeBy`/`dismissHandler`). |
 | `App/StatusItemController.swift` | Implement `applyHeight` to clamp to `maxPanelHeight()` and call the **existing** synchronous `setFrame(display:false)` path (without forcing `layoutSubtreeIfNeeded` from the callback — see §6). Drop `PanelHeightStore`/drag plumbing once auto-fit ships. |
-| `Views/DashboardView.swift` | Add the `Color.clear.frame(height:).onGeometryChange` probe (or `Animatable` modifier). Measure each screen's ideal height on its scroll content. Set the height target inside the existing slide `withAnimation` (Option A) or sequence it (Option B). Remove `resizeDragger` and the `resizingPanel`/`.frame(maxHeight:.infinity)` fill once auto-fit is proven. |
+| `Views/DashboardView.swift` | Add the `Color.clear.frame(height:).onGeometryChange` probe (or `Animatable` modifier). Measure each screen's ideal height on its scroll content. Keep one destination screen mounted and set the height target inside its entrance `withAnimation` (Option A), or sequence it (Option B). Remove `resizeDragger` and the `resizingPanel`/`.frame(maxHeight:.infinity)` fill once auto-fit is proven. |
+| `Views/SettingsScreen.swift` | Stage below-the-fold native controls across the first few run-loop turns and publish the final content height only after the last stage. |
 | `Stores/LayoutStore.swift` | Hold `idealHeight: [PopoverScreen: CGFloat]` (or two simple `@State`s in `DashboardView`). |
 
 The ~120 lines of dead auto-size machinery already flagged for cleanup (`animatedPopoverHeight`, `ScreenHeightReader`, `contentHeight` bindings) should be deleted, not revived — the new path is smaller and clock-unified.

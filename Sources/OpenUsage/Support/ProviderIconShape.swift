@@ -22,7 +22,7 @@ struct ProviderIcon: View {
 
     var body: some View {
         if let mark = ProviderMarks.mark(for: source.providerID) {
-            ProviderIconShape(pathData: mark.path, inset: inset)
+            ProviderIconShape(mark: mark, inset: inset)
                 .fill(Theme.iconGray)
         } else {
             Image(systemName: ProviderMarks.symbolFallback(for: source.providerID))
@@ -38,28 +38,43 @@ struct ProviderIcon: View {
 /// run edge-to-edge (Devin, Grok). Fitting the real path bounds gives every provider mark the same
 /// optical weight, then a single shared `inset` adds consistent breathing room so none touch the edge.
 struct ProviderIconShape: Shape {
-    let pathData: String
+    let mark: ProviderMark
     /// Fraction of the frame kept as margin on every side, so normalized marks have uniform padding.
     var inset: CGFloat = 0.14
 
     func path(in rect: CGRect) -> Path {
-        let raw = SVGPath.parse(pathData)
-        let bounds = raw.cgPath.boundingBoxOfPath
-        guard bounds.width > 0, bounds.height > 0 else { return raw }
+        guard mark.bounds.width > 0, mark.bounds.height > 0 else { return mark.path }
         let target = rect.insetBy(dx: rect.width * inset, dy: rect.height * inset)
-        let scale = min(target.width / bounds.width, target.height / bounds.height)
-        let dx = target.midX - bounds.midX * scale
-        let dy = target.midY - bounds.midY * scale
-        return raw
+        let scale = min(target.width / mark.bounds.width, target.height / mark.bounds.height)
+        let dx = target.midX - mark.bounds.midX * scale
+        let dy = target.midY - mark.bounds.midY * scale
+        return mark.path
             .applying(CGAffineTransform(scaleX: scale, y: scale))
             .applying(CGAffineTransform(translationX: dx, y: dy))
     }
 }
 
-/// A provider vector mark: the combined SVG path data. `ProviderIconShape` normalizes by the path's
-/// true bounding box, so the source `viewBox` isn't needed.
+/// A provider vector mark parsed once when its resource is loaded. `ProviderIconShape` only applies
+/// the inexpensive frame transform on subsequent renders.
 struct ProviderMark: Hashable {
-    let path: String
+    let pathData: String
+    let path: Path
+    let bounds: CGRect
+
+    init(pathData: String) {
+        self.pathData = pathData
+        let path = SVGPath.parse(pathData)
+        self.path = path
+        bounds = path.cgPath.boundingBoxOfPath
+    }
+
+    static func == (lhs: ProviderMark, rhs: ProviderMark) -> Bool {
+        lhs.pathData == rhs.pathData
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(pathData)
+    }
 }
 
 /// Loads copied provider SVGs from the bundle and extracts their path data (cached).
@@ -79,7 +94,7 @@ enum ProviderMarks {
             missing.insert(id)
             return nil
         }
-        let mark = ProviderMark(path: d)
+        let mark = ProviderMark(pathData: d)
         cache[id] = mark
         return mark
     }
