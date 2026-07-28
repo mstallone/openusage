@@ -36,6 +36,9 @@ final class WidgetDataStore {
     /// producer, and launch loads only paint an entry whose stamp matches. A card absent here has an
     /// unresolved identity this launch (or isn't account-aware) — its cache behaves as it always did.
     private let providerIdentityKeys: [String: String]
+    /// Runtime cards whose current source cannot inherit a snapshot stamped by a prior account.
+    /// Unlike an unresolved login, these must force a refresh before using that cached data.
+    private let providersRejectingAccountStampedCache: Set<String>
     /// The live card title for a card id, `nil` for non-account providers — the account-registry
     /// name resolver, injected by `AppContainer` so notification titles carry renames. `nil`
     /// (tests, the one-shot CLI) falls back to the baked derived name.
@@ -123,6 +126,7 @@ final class WidgetDataStore {
         notificationSettings: (@MainActor () -> NotificationSettingsStore)? = nil,
         postNotification: (@MainActor (String, String, String, String) async -> Bool)? = nil,
         providerIdentityKeys: [String: String] = [:],
+        providersRejectingAccountStampedCache: Set<String> = [],
         resolveDisplayName: (@MainActor (String) -> String?)? = nil
     ) {
         precondition(slowProviderRefreshThreshold >= 0)
@@ -141,6 +145,7 @@ final class WidgetDataStore {
                 await AppNotifications.shared.post(idPrefix: idPrefix, title: title, subtitle: subtitle, body: body)
             }
         self.providerIdentityKeys = providerIdentityKeys
+        self.providersRejectingAccountStampedCache = providersRejectingAccountStampedCache
         self.resolveDisplayName = resolveDisplayName
         self.meterStyle = defaults.enumValue(forKey: Self.meterStyleKey, default: .remaining)
         self.resetDisplayMode = defaults.enumValue(forKey: Self.resetDisplayModeKey, default: .relative)
@@ -157,7 +162,11 @@ final class WidgetDataStore {
         // keeps its cache, exactly as before the guard existed. Non-account providers are unaffected.
         let loaded = cache.loadSnapshots(providerIDs: registry.providers.map(\.id))
             .filter { cardID, _ in
-                guard cache.hasStaleAccountStamp(providerID: cardID, currentIdentityKey: providerIdentityKeys[cardID]) else {
+                guard cache.hasStaleAccountStamp(
+                    providerID: cardID,
+                    currentIdentityKey: providerIdentityKeys[cardID],
+                    rejectsAccountStampedCache: providersRejectingAccountStampedCache.contains(cardID)
+                ) else {
                     return true
                 }
                 AppLog.info(.cache, "stale account cache discarded for \(cardID)")
@@ -260,7 +269,8 @@ final class WidgetDataStore {
         // the previous account's snapshot back in. Treat it as a miss so the fetch overwrites it.
         let staleAccountStamp = cache.hasStaleAccountStamp(
             providerID: providerID,
-            currentIdentityKey: providerIdentityKeys[providerID]
+            currentIdentityKey: providerIdentityKeys[providerID],
+            rejectsAccountStampedCache: providersRejectingAccountStampedCache.contains(providerID)
         )
         if !force, !staleAccountStamp, let cached = cache.snapshot(providerID: providerID) {
             // Skip the no-op write: `@Observable` doesn't compare values, so unconditionally

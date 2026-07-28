@@ -42,8 +42,12 @@ struct CodexAccountCard: Equatable, Sendable {
 @MainActor
 struct ProviderAccountAssembly {
     /// Card id → the account identity signed in there this launch. A card whose identity didn't
-    /// resolve is absent.
+    /// resolve is absent; cards that must reject an old account stamp are tracked separately below.
     let identityKeysByCard: [String: String]
+    /// Cards whose current source cannot inherit a previous account's cache stamp. This is distinct
+    /// from an unresolved identity: an ambient-token launch rejects an old account-stamped snapshot,
+    /// while an unreadable login keeps its last-good cache until its identity can be verified again.
+    var cardsRejectingAccountStampedCache: Set<String> = []
     /// Extra Claude account cards found on this computer this launch, in stable id order.
     var claudeCards: [ClaudeAccountCard] = []
     /// The standard Claude runtime's title. A resolved default account uses its derived account
@@ -348,6 +352,13 @@ struct ProviderAccountAssembly {
         claudeCards.sort { $0.id < $1.id }
 
         let claudeDefaultDisplayName: String?
+        var cardsRejectingAccountStampedCache: Set<String> = []
+        if claudeOutcome == .absent, observer.hasAmbientClaudeToken {
+            // The ambient token cannot prove it belongs to the state file's former account. Even
+            // when Desktop fallback remains possible, force one refresh rather than serving that
+            // account's cached limits under an unverified runtime source.
+            cardsRejectingAccountStampedCache.insert("claude")
+        }
         if let resolvedClaudeDefaultDisplayName {
             claudeDefaultDisplayName = resolvedClaudeDefaultDisplayName
         } else if claudeOutcome == .absent,
@@ -393,6 +404,7 @@ struct ProviderAccountAssembly {
 
         return ProviderAccountAssembly(
             identityKeysByCard: identityKeys,
+            cardsRejectingAccountStampedCache: cardsRejectingAccountStampedCache,
             claudeCards: claudeCards,
             claudeDefaultDisplayName: claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,

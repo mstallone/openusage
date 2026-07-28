@@ -339,6 +339,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         ).compactMap { $0 as? ClaudeProvider }
 
         XCTAssertEqual(assembly.claudeDefaultDisplayName, "Claude — Environment Token")
+        XCTAssertEqual(assembly.cardsRejectingAccountStampedCache, ["claude"])
         XCTAssertEqual(providers.map(\.provider.id), ["claude", card.id])
         XCTAssertEqual(
             providers.map(\.provider.displayName),
@@ -381,6 +382,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         ).compactMap { $0 as? ClaudeProvider }
 
         XCTAssertNil(assembly.claudeDefaultDisplayName)
+        XCTAssertEqual(assembly.cardsRejectingAccountStampedCache, ["claude"])
         XCTAssertEqual(providers.map(\.provider.displayName), ["Claude"])
         XCTAssertTrue(providers.first?.authStore.allowsDesktopFallback == true)
     }

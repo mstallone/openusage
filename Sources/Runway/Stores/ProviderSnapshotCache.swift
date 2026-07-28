@@ -135,18 +135,25 @@ struct ProviderSnapshotCache {
         loadPayload().producedByIdentityKeys[providerID]
     }
 
-    /// Whether this provider's stored entry cannot be attributed to `currentIdentityKey`: the entry
-    /// exists, the card's current identity is known, and the stamp is missing or names another
-    /// account. Every read path must treat such an entry as absent — the launch paint filter
-    /// (`WidgetDataStore.init`), the refresh cache-hit gate (`WidgetDataStore.refresh`), and the
-    /// one-shot CLI's persisted-freshness reads (`UsageReader`) — or a swap at the same home would
-    /// serve the previous account's data. `false` when the identity is unresolved (`nil`): an
-    /// unverifiable entry keeps painting exactly as it did before account stamps existed.
-    func hasStaleAccountStamp(providerID: String, currentIdentityKey: String?) -> Bool {
-        guard let currentIdentityKey else { return false }
+    /// Whether this provider's stored entry cannot be attributed to its current runtime source.
+    /// A resolved identity requires an exact stamp match. A source that cannot inherit a previous
+    /// account rejects any stamp but accepts an unstamped snapshot it produced itself. An unresolved
+    /// identity keeps its cache because temporary keychain/read failures prove no account change.
+    /// Every read path shares this predicate so app launch, refresh, and one-shot CLI reads agree.
+    func hasStaleAccountStamp(
+        providerID: String,
+        currentIdentityKey: String?,
+        rejectsAccountStampedCache: Bool = false
+    ) -> Bool {
         let payload = loadPayload()
         guard payload.snapshots[providerID] != nil else { return false }
-        return payload.producedByIdentityKeys[providerID] != currentIdentityKey
+        if let currentIdentityKey {
+            return payload.producedByIdentityKeys[providerID] != currentIdentityKey
+        }
+        if rejectsAccountStampedCache {
+            return payload.producedByIdentityKeys[providerID] != nil
+        }
+        return false
     }
 
     private func loadPayload() -> Payload {
