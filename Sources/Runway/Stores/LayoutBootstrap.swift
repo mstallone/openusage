@@ -75,7 +75,14 @@ enum LayoutBootstrap {
             }
             pinnedMetricIDs = nextPins
         } else {
-            pinnedMetricIDs = Set(defaults.pinnedMetricIDs.filter { registry.descriptor(id: $0) != nil })
+            let knownDefaultPins = defaults.pinnedMetricIDs.filter { registry.descriptor(id: $0) != nil }
+            pinnedMetricIDs = Set(knownDefaultPins)
+            // Persist the full set when account-card defaults are present. Their ids then survive as
+            // tombstones if a card is temporarily absent during a later, unrelated pin edit.
+            shouldPersistPins = knownDefaultPins.contains { id in
+                guard let providerID = registry.descriptor(id: id)?.providerID else { return false }
+                return ProviderAccountID.isAccountCard(providerID)
+            }
         }
 
         // Expanded membership is a fresh-install default only. Existing layouts that predate the feature
