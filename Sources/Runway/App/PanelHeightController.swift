@@ -11,9 +11,11 @@ import QuartzCore
 /// opens **once per session at the screen-clamped maximum height** and stays there; the *visual*
 /// panel — the AppKit backdrop via `onVisualHeightChange`, and SwiftUI's own height-framed,
 /// corner-clipped content — grows and shrinks inside it on SwiftUI's clock. The window's uncovered
-/// region renders fully transparent (and passes clicks through to whatever is beneath), so nothing is
-/// visible there. Outside-click dismissal therefore hit-tests the visual panel rect, not the window
-/// frame (`PanelOutsideClickMonitor`).
+/// region renders fully transparent, and the window server routes mouse events in fully transparent
+/// regions of a borderless non-opaque panel to the window beneath (verified empirically with
+/// `NSWindow.windowNumber(at:)` against this exact panel configuration), so the region neither shows
+/// nor blocks anything. Outside-click dismissal still hit-tests the visual panel rect, not the window
+/// frame (`PanelOutsideClickMonitor`), so a click there closes the popover like any outside click.
 @MainActor
 final class PanelHeightController: NSObject {
     static let panelWidth: CGFloat = 320
@@ -119,8 +121,15 @@ final class PanelHeightController: NSObject {
         guard displayLink == nil, let view = panel.contentView else { return }
         let link = view.displayLink(target: self, selector: #selector(displayLinkFired))
         // Without a floor the link downclocks when morph frames run long, and the panel edge visibly
-        // notches; ask for the display's full rate and let the idle pause handle the quiet stretches.
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        // notches; ask for the anchored display's full rate — SwiftUI animates the panel at that
+        // cadence, and the backdrop should keep step — and let the idle pause handle quiet stretches.
+        // The link is recreated per open, so a screen change between opens picks up the new rate.
+        let maxRate = Float((anchorScreen ?? NSScreen.main)?.maximumFramesPerSecond ?? 120)
+        link.preferredFrameRateRange = CAFrameRateRange(
+            minimum: min(60, maxRate),
+            maximum: maxRate,
+            preferred: maxRate
+        )
         link.add(to: .main, forMode: .common)
         displayLink = link
         idleTicks = 0
