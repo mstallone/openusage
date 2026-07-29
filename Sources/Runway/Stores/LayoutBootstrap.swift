@@ -20,6 +20,7 @@ struct LayoutInitialState {
     let menuBarStyle: MenuBarStyle
 
     let shouldPersistPlaced: Bool
+    let shouldPersistPins: Bool
     let shouldPersistExpanded: Bool
     let shouldPersistExpandOnEnable: Bool
     let seededDefaultsToPersist: Set<String>?
@@ -56,13 +57,32 @@ enum LayoutBootstrap {
             LayoutOrdering.normalizedMetricOrder($0, registry: registry)
         } ?? LayoutOrdering.defaultMetricOrder(registry: registry)
 
-        // An existing value — including an empty array from a user who unpinned everything — wins.
-        // Unknown saved ids are retained as invisible tombstones for temporarily absent account cards.
+        // An existing value — including an empty array from a user who unpinned everything — wins for
+        // known cards. A genuinely new account card receives its family's pins once; its seeded-default
+        // marker prevents later launches from restoring pins the user removed. Unknown saved ids remain
+        // invisible tombstones for temporarily absent account cards.
+        var shouldPersistPins = false
         let pinnedMetricIDs: Set<String>
         if let savedPins = persistence.loadPins() {
-            pinnedMetricIDs = Set(savedPins)
+            var nextPins = Set(savedPins)
+            let newAccountPins = defaults.pinnedMetricIDs.filter { id in
+                guard let providerID = registry.descriptor(id: id)?.providerID else { return false }
+                return seededResult.newAccountProviderIDs.contains(providerID)
+            }
+            if !newAccountPins.allSatisfy(nextPins.contains) {
+                nextPins.formUnion(newAccountPins)
+                shouldPersistPins = true
+            }
+            pinnedMetricIDs = nextPins
         } else {
-            pinnedMetricIDs = Set(defaults.pinnedMetricIDs.filter { registry.descriptor(id: $0) != nil })
+            let knownDefaultPins = defaults.pinnedMetricIDs.filter { registry.descriptor(id: $0) != nil }
+            pinnedMetricIDs = Set(knownDefaultPins)
+            // Persist the full set when account-card defaults are present. Their ids then survive as
+            // tombstones if a card is temporarily absent during a later, unrelated pin edit.
+            shouldPersistPins = knownDefaultPins.contains { id in
+                guard let providerID = registry.descriptor(id: id)?.providerID else { return false }
+                return ProviderAccountID.isAccountCard(providerID)
+            }
         }
 
         // Expanded membership is a fresh-install default only. Existing layouts that predate the feature
@@ -116,6 +136,7 @@ enum LayoutBootstrap {
             defaultExpandedOnEnableIDs: defaultExpandedOnEnableIDs,
             menuBarStyle: persistence.loadMenuBarStyle(),
             shouldPersistPlaced: seededResult.shouldPersistPlaced,
+            shouldPersistPins: shouldPersistPins,
             shouldPersistExpanded: shouldPersistExpanded,
             shouldPersistExpandOnEnable: savedOnEnable == nil,
             seededDefaultsToPersist: seededResult.shouldPersistSeededDefaults
@@ -130,6 +151,7 @@ enum LayoutBootstrap {
         let shouldPersistPlaced: Bool
         let shouldPersistSeededDefaults: Bool
         let newlyPlaced: [String]
+        let newAccountProviderIDs: Set<String>
     }
 
     private static func seedNewDefaultMetrics(
@@ -162,6 +184,13 @@ enum LayoutBootstrap {
 
         let placedIDs = Set(placed.map(\.descriptorID))
         let toAdd = knownDefaults.filter { !seededDefaults.contains($0) && !placedIDs.contains($0) }
+        let previouslySeededProviderIDs = Set(seededDefaults.compactMap {
+            registry.descriptor(id: $0)?.providerID
+        })
+        let newAccountProviderIDs = Set(knownDefaults.compactMap {
+            registry.descriptor(id: $0)?.providerID
+        }).subtracting(previouslySeededProviderIDs)
+            .filter(ProviderAccountID.isAccountCard)
         let nextSeededDefaults = seededDefaults.union(knownDefaultSet)
         shouldPersistSeededDefaults = shouldPersistSeededDefaults
             || !hasStoredSeededDefaults
@@ -172,7 +201,8 @@ enum LayoutBootstrap {
             seededDefaults: nextSeededDefaults,
             shouldPersistPlaced: !toAdd.isEmpty,
             shouldPersistSeededDefaults: shouldPersistSeededDefaults,
-            newlyPlaced: toAdd
+            newlyPlaced: toAdd,
+            newAccountProviderIDs: newAccountProviderIDs
         )
     }
 }

@@ -10,24 +10,24 @@ import Observation
 @MainActor
 final class StatusItemImageUpdater {
     private let container: AppContainer
-    private let apply: (NSImage) -> Void
+    private let apply: (MenuBarStripPresentation) -> Void
 
-    /// - Parameter apply: sets the rendered image onto the status-item button.
-    init(container: AppContainer, apply: @escaping (NSImage) -> Void) {
+    /// - Parameter apply: sets the rendered image and native tooltip regions onto the status item.
+    init(container: AppContainer, apply: @escaping (MenuBarStripPresentation) -> Void) {
         self.container = container
         self.apply = apply
     }
 
     /// Render now and re-arm on the next observable change.
     func update() {
-        let image = withObservationTracking {
-            renderButtonImage()
+        let presentation = withObservationTracking {
+            renderButtonPresentation()
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.scheduleDelayedUpdate()
             }
         }
-        apply(image)
+        apply(presentation)
     }
 
     /// The observation callback fires only once until `update()` reads and re-arms it. Waiting here lets
@@ -41,22 +41,28 @@ final class StatusItemImageUpdater {
     }
 
     /// The pinned-metrics strip in the chosen style, or the app icon when nothing is pinned.
-    private func renderButtonImage() -> NSImage {
+    private func renderButtonPresentation() -> MenuBarStripPresentation {
         // Screen-share privacy: while a capture is active (and the setting is on), the strip is
         // replaced with the wordmark so a shared screen never carries usage numbers. Read inside the
         // observation closure so the render re-arms on capture-state changes too.
         if container.privacy.concealUsage {
-            return MenuBarStripRenderer.privacyImage
+            let image = MenuBarStripRenderer.privacyImage
                 ?? MenuBarIcon.image
                 ?? MenuBarStripRenderer.fallbackIcon
+            return MenuBarStripPresentation(image: image, toolTipRegions: [])
         }
         let content = MenuBarContentBuilder.build(
             groups: container.layout.pinnedGroups,
             data: { container.dataStore.data(for: $0) },
             title: { container.displayName(for: $0) }
         )
-        return MenuBarStripRenderer.image(for: content, style: container.layout.menuBarStyle)
-            ?? MenuBarIcon.image
-            ?? MenuBarStripRenderer.fallbackIcon
+        if let presentation = MenuBarStripRenderer.presentation(
+            for: content,
+            style: container.layout.menuBarStyle
+        ) {
+            return presentation
+        }
+        let image = MenuBarIcon.image ?? MenuBarStripRenderer.fallbackIcon
+        return MenuBarStripPresentation(image: image, toolTipRegions: [])
     }
 }

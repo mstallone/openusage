@@ -819,6 +819,79 @@ final class LayoutStoreTests: XCTestCase {
         assertWeeklyOnlyPins()
     }
 
+    func testFreshAccountCardsCopyFamilyDefaultPins() {
+        let claudeWork = ClaudeProvider(
+            provider: ClaudeProvider.makeProvider(id: "claude@work", displayName: "Claude — Work")
+        )
+        let codexWork = CodexProvider(
+            provider: CodexProvider.makeProvider(id: "codex@work", displayName: "Codex — Work")
+        )
+        let registry = WidgetRegistry.from([
+            ClaudeProvider(), claudeWork, CodexProvider(), codexWork,
+        ])
+        let store = LayoutStore(
+            registry: registry,
+            defaults: makeDefaults("FreshAccountPins"),
+            storageKey: "layout"
+        )
+
+        XCTAssertEqual(store.pinnedMetricIDs, [
+            "claude.session", "claude.weekly",
+            "claude@work.session", "claude@work.weekly",
+            "codex.weekly", "codex@work.weekly",
+        ])
+    }
+
+    func testFreshAccountPinsSurviveTemporaryAbsenceAndUnrelatedPinEdit() {
+        let defaults = makeDefaults("FreshAccountPinTombstones")
+        let work = ClaudeProvider(
+            provider: ClaudeProvider.makeProvider(id: "claude@work", displayName: "Claude — Work")
+        )
+        let accountRegistry = WidgetRegistry.from([ClaudeProvider(), work])
+        let initial = LayoutStore(registry: accountRegistry, defaults: defaults, storageKey: "layout")
+        XCTAssertEqual(initial.pinnedMetricIDs, [
+            "claude.session", "claude.weekly",
+            "claude@work.session", "claude@work.weekly",
+        ])
+
+        let absent = LayoutStore(
+            registry: .from([ClaudeProvider()]),
+            defaults: defaults,
+            storageKey: "layout"
+        )
+        absent.setPinned(false, for: "claude.session")
+
+        let returned = LayoutStore(registry: accountRegistry, defaults: defaults, storageKey: "layout")
+        XCTAssertEqual(returned.pinnedMetricIDs, [
+            "claude.weekly",
+            "claude@work.session", "claude@work.weekly",
+        ])
+    }
+
+    func testNewAccountCardCopiesFamilyPinsOnceWithoutRestoringUserOptOuts() {
+        let defaults = makeDefaults("NewAccountPins")
+        let baseRegistry = WidgetRegistry.from([ClaudeProvider()])
+        let baseStore = LayoutStore(registry: baseRegistry, defaults: defaults, storageKey: "layout")
+        baseStore.setPinned(false, for: "claude.session")
+        baseStore.setPinned(false, for: "claude.weekly")
+        XCTAssertTrue(baseStore.pinnedMetricIDs.isEmpty)
+
+        let work = ClaudeProvider(
+            provider: ClaudeProvider.makeProvider(id: "claude@work", displayName: "Claude — Work")
+        )
+        let accountRegistry = WidgetRegistry.from([ClaudeProvider(), work])
+        let withAccount = LayoutStore(registry: accountRegistry, defaults: defaults, storageKey: "layout")
+
+        XCTAssertEqual(withAccount.pinnedMetricIDs, [
+            "claude@work.session", "claude@work.weekly",
+        ])
+
+        withAccount.setPinned(false, for: "claude@work.session")
+        withAccount.setPinned(false, for: "claude@work.weekly")
+        let reloaded = LayoutStore(registry: accountRegistry, defaults: defaults, storageKey: "layout")
+        XCTAssertTrue(reloaded.pinnedMetricIDs.isEmpty)
+    }
+
     func testProviderReorderPreservesAnAbsentAccountCardSlot() {
         let defaults = makeDefaults("ReorderAbsentAccountCard")
         let storageKey = "layout"
