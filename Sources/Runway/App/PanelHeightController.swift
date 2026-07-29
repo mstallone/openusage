@@ -179,10 +179,15 @@ final class PanelHeightController: NSObject {
     private func applyVisualHeight(_ rawHeight: CGFloat) {
         guard rawHeight > 1, panel.isVisible else { return }
         resumePacingIfNeeded()
-        let height = clampedHeight(rawHeight)
-        guard abs(visualHeight - height) > 0.5 else { return }
-        visualHeight = height
-        onVisualHeightChange?(height)
+        // Deliberately NOT clamped: every target (and the opening guess) is already clamped before it
+        // animates, so per-frame values only leave the range during spring overshoot — and SwiftUI
+        // renders those raw values. Re-clamping here would pin the backdrop at the boundary while the
+        // panel dips past it (visible at a target sitting exactly on the 200pt minimum), splitting the
+        // two bottom edges. Past the maximum both sides clip at the window bounds — the backdrop via
+        // its below-required height constraint, the panel via the host layer mask — so they agree there.
+        guard abs(visualHeight - rawHeight) > 0.5 else { return }
+        visualHeight = rawHeight
+        onVisualHeightChange?(rawHeight)
         // The shadow follows the window's rendered alpha shape — the visual panel, not the fixed
         // window frame — so refresh it as the shape animates. This is the only per-frame AppKit work
         // a morph does; the window itself never moves.
