@@ -51,9 +51,30 @@ struct WidgetRegistry: Sendable {
     func orderedProviderIDs(savedOrder: [String]) -> [String] {
         let defaults = providers.map(\.id)
         let known = Set(defaults)
-        let saved = savedOrder.filter { known.contains($0) }
-        let savedIDs = Set(saved)
-        var result = saved
+        let exactSavedFamilies = Set(
+            savedOrder.lazy
+                .filter { known.contains($0) }
+                .map { ProviderAccountID.family(of: $0) }
+        )
+        let accountCardsByFamily = Dictionary(
+            grouping: defaults.filter(ProviderAccountID.isAccountCard),
+            by: { ProviderAccountID.family(of: $0) }
+        )
+        var result: [String] = []
+        for id in savedOrder {
+            if known.contains(id) {
+                result.append(id)
+            } else if ProviderAccountID.families.contains(id),
+                      !exactSavedFamilies.contains(id),
+                      let replacements = accountCardsByFamily[id]
+            {
+                // The bare runtime is absent because scoped account cards are the complete family.
+                // Let those cards inherit its saved slot, unless an exact account card already has a
+                // user-chosen position elsewhere in the saved order.
+                result.append(contentsOf: replacements.filter { !result.contains($0) })
+            }
+        }
+        let savedIDs = Set(result)
         for id in defaults where !savedIDs.contains(id) {
             let family = ProviderAccountID.family(of: id)
             if ProviderAccountID.isAccountCard(id),

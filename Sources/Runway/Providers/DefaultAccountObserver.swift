@@ -72,13 +72,21 @@ struct DefaultAccountObserver: Sendable {
         return email.map { "\($0) (\(org))" } ?? org
     }
 
+    /// An ambient inference token has no account metadata, so it cannot participate in identity
+    /// reconciliation. It still keeps the standard Claude runtime useful for default-home spend logs.
+    var hasAmbientClaudeToken: Bool {
+        environment.value(for: "CLAUDE_CODE_OAUTH_TOKEN")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty != nil
+    }
+
     /// The default Claude home, mirroring `ClaudeAuthStore`'s resolution exactly (the observer must
     /// name the account whose credentials the provider actually refreshes with): `CLAUDE_CONFIG_DIR`
     /// when exported, else `~/.claude`. A comma-separated list can't be assigned one identity.
     func observeClaude() -> Outcome {
         var configDir = "~/.claude"
-        if let raw = environment.value(for: "CLAUDE_CONFIG_DIR")?
-            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+        let configDirOverride = environment.value(for: "CLAUDE_CONFIG_DIR")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if let raw = configDirOverride {
             guard !raw.contains(",") else {
                 return .unresolved(reason: "CLAUDE_CONFIG_DIR is a comma-separated list")
             }
@@ -90,6 +98,28 @@ struct DefaultAccountObserver: Sendable {
         let identityPath = anchor == expandTilde("~/.claude")
             ? expandTilde("~/.claude.json")
             : anchor + "/.claude.json"
+        // Attribute the state-file identity only when an account-bound credential footprint backs
+        // it. An ambient token carries no identity and can outlive an old state file, so the state
+        // file alone must never lend that token a stale account name.
+        let credentialFileUsable: Bool?
+        do {
+            if let text = try files.readTextIfPresent(anchor + "/.credentials.json") {
+                credentialFileUsable = ClaudeAuthStore.parseUsableCredentials(text) != nil
+            } else {
+                credentialFileUsable = false
+            }
+        } catch {
+            credentialFileUsable = nil
+        }
+        let keychainUsability = ClaudeAuthStore.standardKeychainServiceCandidates(
+            environment: environment,
+            configDirOverride: configDirOverride
+        ).flatMap { service in
+            [
+                keychain.readGenericPasswordForCurrentUserWithoutUserInteraction(service: service),
+                keychain.readGenericPasswordWithoutUserInteraction(service: service),
+            ].map(Self.claudeKeychainCredentialUsability)
+        }
         let text: String?
         do {
             text = try files.readTextIfPresent(identityPath)
@@ -97,10 +127,15 @@ struct DefaultAccountObserver: Sendable {
             return .unresolved(reason: "identity file unreadable: \(error.localizedDescription)")
         }
         guard let text else {
-            // No state file. A credential file without it can't be attributed; no footprint = absent.
-            return files.exists(anchor + "/.credentials.json")
-                ? .unresolved(reason: "credentials present but no identity file")
-                : .absent
+            // No state file. File or keychain credentials without it can't be attributed. Keychain
+            // validation forbids UI, so this launch path never opens an authorization prompt.
+            if credentialFileUsable == true || keychainUsability.contains(true) {
+                return .unresolved(reason: "credentials present but no identity file")
+            }
+            if credentialFileUsable == nil || keychainUsability.contains(where: { $0 == nil }) {
+                return .unresolved(reason: "credential presence unverifiable")
+            }
+            return .absent
         }
         guard let parsed = try? JSONDecoder().decode(ClaudeStateFile.self, from: Data(text.utf8)),
               let account = parsed.oauthAccount,
@@ -108,7 +143,26 @@ struct DefaultAccountObserver: Sendable {
         else {
             return .unresolved(reason: "identity file present but names no account")
         }
+        if hasAmbientClaudeToken, credentialFileUsable != true, !keychainUsability.contains(true) {
+            if credentialFileUsable == nil || keychainUsability.contains(where: { $0 == nil }) {
+                return .unresolved(reason: "credential presence unverifiable")
+            }
+            return .absent
+        }
         return .resolved(identityKey: key, label: Self.claudeIdentityLabel(account), anchor: anchor)
+    }
+
+    private static func claudeKeychainCredentialUsability(
+        _ read: NonInteractiveKeychainRead
+    ) -> Bool? {
+        switch read {
+        case .value(let text):
+            ClaudeAuthStore.parseUsableCredentials(text) != nil
+        case .missing:
+            false
+        case .unavailable:
+            nil
+        }
     }
 
     // MARK: - Codex
@@ -197,10 +251,9 @@ struct DefaultAccountObserver: Sendable {
             }
         }
 
-        // A service-only legacy item has no trustworthy home address and therefore contributes no
-        // identity here. The catalog still keeps its historical fallback card; importantly, an
-        // unrelated account-scoped item elsewhere under the shared service cannot suppress verified
-        // file-backed homes just because a service-only query happens to find it first.
+        // A service-only item has no trustworthy home address and therefore contributes no identity
+        // here. An unrelated account-scoped item elsewhere under the shared service cannot suppress
+        // verified file-backed homes just because a service-only query happens to find it first.
         return sawFootprint
             ? .unresolved(reason: "credentials present but no account identity")
             : .absent

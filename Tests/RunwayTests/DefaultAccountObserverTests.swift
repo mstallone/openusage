@@ -85,8 +85,17 @@ final class DefaultAccountObserverTests: XCTestCase {
 
     func testClaudeCredentialsWithoutStateFileAreUnresolvedNotAbsent() {
         let observer = makeObserver(files: [
-            "/Users/dev/.claude/.credentials.json": "{}",
+            "/Users/dev/.claude/.credentials.json":
+                #"{"claudeAiOauth":{"accessToken":"file-token"}}"#,
         ])
+
+        XCTAssertEqual(observer.observeClaude(), .unresolved(reason: "credentials present but no identity file"))
+    }
+
+    func testClaudeKeychainCredentialsWithoutStateFileAreUnresolvedNotAbsent() {
+        let observer = makeObserver(
+            keychainValue: #"{"claudeAiOauth":{"accessToken":"keychain-token"}}"#
+        )
 
         XCTAssertEqual(observer.observeClaude(), .unresolved(reason: "credentials present but no identity file"))
     }
@@ -101,6 +110,91 @@ final class DefaultAccountObserverTests: XCTestCase {
         ])
 
         XCTAssertEqual(observer.observeClaude(), .unresolved(reason: "identity file present but names no account"))
+    }
+
+    func testClaudeAmbientTokenDoesNotInheritAStateFileWithoutStoredCredentials() {
+        let observer = makeObserver(
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+            files: ["/Users/dev/.claude.json": claudeStateJSON()]
+        )
+
+        XCTAssertEqual(observer.observeClaude(), .absent)
+    }
+
+    func testClaudeStoredCredentialKeepsStateFileIdentityAheadOfAmbientToken() {
+        let observer = makeObserver(
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+            files: [
+                "/Users/dev/.claude.json": claudeStateJSON(),
+                "/Users/dev/.claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stored-token"}}"#,
+            ]
+        )
+
+        XCTAssertEqual(
+            observer.observeClaude(),
+            .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude")
+        )
+    }
+
+    func testClaudeUsableKeychainCredentialKeepsStateFileIdentityAheadOfAmbientToken() {
+        let observer = makeObserver(
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+            files: ["/Users/dev/.claude.json": claudeStateJSON()],
+            keychainValue: #"{"claudeAiOauth":{"accessToken":"stored-token"}}"#
+        )
+
+        XCTAssertEqual(
+            observer.observeClaude(),
+            .resolved(identityKey: "acct-uuid-1", label: "dev@example.com", anchor: "/Users/dev/.claude")
+        )
+    }
+
+    func testClaudeAmbientTokenDoesNotInheritStateFileFromUnusableCredentialFiles() {
+        for credential in [
+            "{ malformed",
+            #"{"claudeAiOauth":{}}"#,
+            #"{"claudeAiOauth":{"accessToken":"   "}}"#,
+        ] {
+            let observer = makeObserver(
+                environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+                files: [
+                    "/Users/dev/.claude.json": claudeStateJSON(),
+                    "/Users/dev/.claude/.credentials.json": credential,
+                ]
+            )
+
+            XCTAssertEqual(observer.observeClaude(), .absent)
+        }
+    }
+
+    func testClaudeAmbientTokenDoesNotInheritStateFileFromUnusableKeychainCredentials() {
+        for credential in [
+            "{ malformed",
+            #"{"claudeAiOauth":{}}"#,
+            #"{"claudeAiOauth":{"accessToken":"   "}}"#,
+        ] {
+            let observer = makeObserver(
+                environment: ["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"],
+                files: ["/Users/dev/.claude.json": claudeStateJSON()],
+                keychainValue: credential
+            )
+
+            XCTAssertEqual(observer.observeClaude(), .absent)
+        }
+    }
+
+    func testClaudeAmbientTokenDoesNotUseStateIdentityWhenKeychainValidationIsUnavailable() {
+        let observer = DefaultAccountObserver(
+            environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "ambient-token"]),
+            files: FakeFiles(["/Users/dev/.claude.json": claudeStateJSON()]),
+            keychain: ThrowingKeychain(),
+            homeDirectory: { [home] in home }
+        )
+
+        XCTAssertEqual(
+            observer.observeClaude(),
+            .unresolved(reason: "credential presence unverifiable")
+        )
     }
 
     // MARK: - Codex

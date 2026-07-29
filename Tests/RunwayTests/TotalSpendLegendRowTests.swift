@@ -2,7 +2,7 @@ import XCTest
 @testable import Runway
 
 final class TotalSpendLegendRowTests: XCTestCase {
-    func testShortTitleKeepsTheEntireValueOnHover() {
+    func testShortTitleKeepsTheTitleAndValueStateOnHover() {
         let allocation = LegendRowWidthAllocation.resolve(
             availableWidth: 200,
             titleWidth: 80,
@@ -14,7 +14,7 @@ final class TotalSpendLegendRowTests: XCTestCase {
         XCTAssertEqual(allocation.hiddenValueFraction, 0)
     }
 
-    func testTitleConsumesSpacingBeforeFadingValue() {
+    func testTitleConsumesSpacingBeforeFadingTheValue() {
         let allocation = LegendRowWidthAllocation.resolve(
             availableWidth: 200,
             titleWidth: 156,
@@ -38,7 +38,7 @@ final class TotalSpendLegendRowTests: XCTestCase {
         XCTAssertEqual(allocation.hiddenValueFraction, 0.25)
     }
 
-    func testVeryLongTitleCanFullyReclaimItsOwnValue() {
+    func testVeryLongTitleCanConsumeTheEntireValue() {
         let allocation = LegendRowWidthAllocation.resolve(
             availableWidth: 200,
             titleWidth: 240,
@@ -50,19 +50,75 @@ final class TotalSpendLegendRowTests: XCTestCase {
         XCTAssertEqual(allocation.hiddenValueFraction, 1)
     }
 
-    func testValueWiderThanRowUsesTheDisplayedWidthForAllocation() {
+    func testMissingGeometryKeepsTheRestingState() {
         let allocation = LegendRowWidthAllocation.resolve(
-            availableWidth: 100,
+            availableWidth: 0,
             titleWidth: 50,
-            valueWidth: 300,
+            valueWidth: 40,
             spacing: 8
         )
 
-        XCTAssertEqual(allocation.reclaimedWidth, 58)
-        XCTAssertEqual(allocation.hiddenValueFraction, 0.5)
+        XCTAssertEqual(allocation.reclaimedWidth, 0)
+        XCTAssertEqual(allocation.hiddenValueFraction, 0)
+    }
 
-        let displayedValueWidth: CGFloat = 100
-        let reservedWidth = max(0, displayedValueWidth + 8 - allocation.reclaimedWidth)
-        XCTAssertEqual(100 - reservedWidth, 50, "the title receives its full requested width")
+    func testTitleWithinTheFullRowDoesNotMarquee() {
+        XCTAssertNil(
+            LegendRowMarqueeMetrics.resolve(
+                availableWidth: 200,
+                titleWidth: 200
+            )
+        )
+    }
+
+    func testTitleWiderThanTheFullRowMarqueesByOnlyItsOverflow() throws {
+        let metrics = try XCTUnwrap(
+            LegendRowMarqueeMetrics.resolve(
+                availableWidth: 200,
+                titleWidth: 264
+            )
+        )
+
+        XCTAssertEqual(metrics.distance, 64)
+        XCTAssertEqual(metrics.duration, 2)
+    }
+
+    func testMarqueeDurationIsCappedForVeryLongTitles() throws {
+        let metrics = try XCTUnwrap(
+            LegendRowMarqueeMetrics.resolve(
+                availableWidth: 200,
+                titleWidth: 600
+            )
+        )
+
+        XCTAssertEqual(metrics.distance, 400)
+        XCTAssertEqual(metrics.duration, 6)
+    }
+
+    func testReduceMotionJumpsToTheMarqueeEndingOnHover() {
+        XCTAssertEqual(
+            LegendRowMarqueeOffset.immediateTarget(
+                isActive: true,
+                reduceMotion: true,
+                distance: 64
+            ),
+            -64
+        )
+        XCTAssertEqual(
+            LegendRowMarqueeOffset.immediateTarget(
+                isActive: false,
+                reduceMotion: true,
+                distance: 64
+            ),
+            0
+        )
+        XCTAssertEqual(
+            LegendRowMarqueeOffset.immediateTarget(
+                isActive: true,
+                reduceMotion: false,
+                distance: 64
+            ),
+            0
+        )
     }
 }

@@ -34,14 +34,16 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
         providers: [Provider],
         cache: ProviderSnapshotCache,
         defaults: UserDefaults,
-        identityKeys: [String: String]
+        identityKeys: [String: String],
+        providersRejectingAccountStampedCache: Set<String> = []
     ) -> WidgetDataStore {
         WidgetDataStore(
             registry: WidgetRegistry(providers: providers, descriptors: []),
             providers: [],
             cache: cache,
             defaults: defaults,
-            providerIdentityKeys: identityKeys
+            providerIdentityKeys: identityKeys,
+            providersRejectingAccountStampedCache: providersRejectingAccountStampedCache
         )
     }
 
@@ -113,6 +115,29 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
         XCTAssertNotNil(store.snapshots["codex"])
     }
 
+    /// An explicit identity-less source is different from an unreadable identity: an old account's
+    /// stamp proves the cache belongs to the wrong runtime and must not paint.
+    func testUnattributedSourceDropsAccountStampedEntry() {
+        let defaults = makeUserDefaults("identityless")
+        let cache = ProviderSnapshotCache(
+            userDefaults: defaults,
+            storageKey: "snapshots",
+            ttl: 600,
+            now: { Date() }
+        )
+        cache.store(snapshot("claude", used: 40), producedByIdentityKey: "acct-A")
+
+        let store = makeStore(
+            providers: [provider("claude")],
+            cache: cache,
+            defaults: defaults,
+            identityKeys: [:],
+            providersRejectingAccountStampedCache: ["claude"]
+        )
+
+        XCTAssertNil(store.snapshots["claude"])
+    }
+
     /// Non-account providers are untouched by the guard: their entries load with or without a stamp
     /// (they never carry one in production, but even a stray stamp must not gate them).
     func testNonAccountProviderLoadsRegardlessOfStamp() {
@@ -150,6 +175,20 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
         let gated = await swapped.refresh(providerID: "claude")
         XCTAssertEqual(gated, .skipped, "a mismatched stamp must fall through to a real fetch")
 
+        let unattributed = makeStore(
+            providers: [provider("claude")],
+            cache: cache,
+            defaults: defaults,
+            identityKeys: [:],
+            providersRejectingAccountStampedCache: ["claude"]
+        )
+        let unattributedGate = await unattributed.refresh(providerID: "claude")
+        XCTAssertEqual(
+            unattributedGate,
+            .skipped,
+            "an ambient-token runtime must refresh instead of cache-hitting the previous account"
+        )
+
         let sameAccount = makeStore(
             providers: [provider("claude")],
             cache: cache,
@@ -160,8 +199,8 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
         XCTAssertEqual(honored, .cacheHit)
     }
 
-    /// The single predicate every read path shares (`hasStaleAccountStamp`): true only when an entry
-    /// exists, the current identity is known, and the stamp fails to name it.
+    /// The single predicate every read path shares (`hasStaleAccountStamp`): a known account requires
+    /// its exact stamp, an identity-less source requires no stamp, and an unresolved source is kept.
     func testHasStaleAccountStampSemantics() {
         let defaults = makeUserDefaults("predicate")
         let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots", ttl: 600, now: { Date() })
@@ -171,10 +210,20 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
         cache.store(snapshot("claude", used: 40), producedByIdentityKey: "acct-A")
         XCTAssertFalse(cache.hasStaleAccountStamp(providerID: "claude", currentIdentityKey: "acct-A"))
         XCTAssertFalse(cache.hasStaleAccountStamp(providerID: "claude", currentIdentityKey: nil), "unresolved identity can't prove staleness")
+        XCTAssertTrue(cache.hasStaleAccountStamp(
+            providerID: "claude",
+            currentIdentityKey: nil,
+            rejectsAccountStampedCache: true
+        ))
         XCTAssertTrue(cache.hasStaleAccountStamp(providerID: "claude", currentIdentityKey: "acct-B"))
 
         cache.store(snapshot("claude", used: 41))
         XCTAssertTrue(cache.hasStaleAccountStamp(providerID: "claude", currentIdentityKey: "acct-A"), "an unstamped entry is unattributable")
+        XCTAssertFalse(cache.hasStaleAccountStamp(
+            providerID: "claude",
+            currentIdentityKey: nil,
+            rejectsAccountStampedCache: true
+        ))
     }
 
     /// A refresh writes the card's launch-resolved identity as the stamp, and a nil identity CLEARS

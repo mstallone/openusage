@@ -7,9 +7,9 @@ struct ClaudeAccountCard: Equatable, Sendable {
     /// The account's stable record id (`claude@ab12cd34`) — the card id everywhere: layout, cache,
     /// CLI/API matching.
     var id: String
-    /// The DERIVED card name (`ProviderAccountRecord.derivedDisplayName`) baked into the launch
-    /// `Provider`. Never a rename: renames live only in the account registry and are resolved at
-    /// render time, so a baked name can never be a stale copy of one.
+    /// The derived card name from `ProviderAccountsStore`, baked into the launch `Provider`. Never
+    /// a rename: renames live only in the account registry and are resolved at render time, so a
+    /// baked name can never be a stale copy of one.
     var displayName: String
     /// The config dir the card's credentials and spend logs are pinned to.
     var configDirPath: String
@@ -42,18 +42,22 @@ struct CodexAccountCard: Equatable, Sendable {
 @MainActor
 struct ProviderAccountAssembly {
     /// Card id → the account identity signed in there this launch. A card whose identity didn't
-    /// resolve is absent.
+    /// resolve is absent; cards that must reject an old account stamp are tracked separately below.
     let identityKeysByCard: [String: String]
+    /// Cards whose current source cannot inherit a previous account's cache stamp. This is distinct
+    /// from an unresolved identity: an ambient-token launch rejects an old account-stamped snapshot,
+    /// while an unreadable login keeps its last-good cache until its identity can be verified again.
+    var cardsRejectingAccountStampedCache: Set<String> = []
     /// Extra Claude account cards found on this computer this launch, in stable id order.
     var claudeCards: [ClaudeAccountCard] = []
+    /// The standard Claude runtime's title. A resolved default account uses its derived account
+    /// title; an identity-less ambient token gets an explicit source title instead.
+    var claudeDefaultDisplayName: String?
     /// Same-account custom config dirs discovered for the DEFAULT card's login: extra spend-log
     /// roots for the default scanner, never extra credentials.
     var defaultClaudeExtraLogRoots: [URL] = []
     /// Codex cards found this launch, including the resolved default-home account when there is one.
     var codexCards: [CodexAccountCard] = []
-    /// True when `codexCards` includes the account at the selected default home, so the catalog must
-    /// replace its unresolved legacy `CodexProvider()` with the scoped cards instead of adding both.
-    var hasResolvedCodexDefault = false
     /// Shared cache used by scoped keyring stores and the post-launch warming task.
     var codexIdentityCache: CodexHomeIdentityCache?
     /// Same accessor discovery probed; retained so warming reads the exact items from that source.
@@ -217,7 +221,7 @@ struct ProviderAccountAssembly {
         var foundCodexAccounts: [
             (identityKey: String, label: String?, credentialHomePath: String, logRoots: [URL])
         ] = []
-        var hasResolvedCodexDefault = false
+        var hasScopedCodexDefault = false
         var unverifiedCodexKeyringHomes: Set<String> = []
         let codexOutcome = outcomes.first { $0.family == "codex" }?.outcome
         if let codexDiscovery, let codexOutcome {
@@ -275,7 +279,7 @@ struct ProviderAccountAssembly {
                         logRoots: [URL(fileURLWithPath: defaultAnchor)]
                             + sameAccountHomes.map { URL(fileURLWithPath: $0.anchorPath) }
                     ))
-                    hasResolvedCodexDefault = true
+                    hasScopedCodexDefault = true
                     if !sameAccountHomes.isEmpty {
                         AppLog.info(
                             .config,
@@ -310,6 +314,14 @@ struct ProviderAccountAssembly {
         }
 
         let records = accountsStore.reconcile(with: observations)
+        let resolvedClaudeDefaultDisplayName: String?
+        if let identityKey = identityKeys["claude"],
+           accountsStore.record(backingCardID: "claude")?.identityKey == identityKey
+        {
+            resolvedClaudeDefaultDisplayName = accountsStore.derivedDisplayName(cardID: "claude")
+        } else {
+            resolvedClaudeDefaultDisplayName = nil
+        }
 
         // The extra-card build plan: one card per distinct account found this launch, under its
         // reconciled record id.
@@ -329,7 +341,7 @@ struct ProviderAccountAssembly {
             guard let primary = account.dirs.first else { continue }
             claudeCards.append(ClaudeAccountCard(
                 id: record.id,
-                displayName: record.derivedDisplayName,
+                displayName: accountsStore.derivedDisplayName(cardID: record.id) ?? record.family.capitalized,
                 configDirPath: primary.anchorPath,
                 keychainLiteral: primary.keychainLiteral,
                 extraLogRoots: account.dirs.dropFirst().map { URL(fileURLWithPath: $0.anchorPath) }
@@ -339,10 +351,33 @@ struct ProviderAccountAssembly {
         }
         claudeCards.sort { $0.id < $1.id }
 
+        let claudeDefaultDisplayName: String?
+        var cardsRejectingAccountStampedCache: Set<String> = []
+        if claudeOutcome == .absent, observer.hasAmbientClaudeToken {
+            // The ambient token cannot prove it belongs to the state file's former account. Even
+            // when Desktop fallback remains possible, force one refresh rather than serving that
+            // account's cached limits under an unverified runtime source.
+            cardsRejectingAccountStampedCache.insert("claude")
+        }
+        if let resolvedClaudeDefaultDisplayName {
+            claudeDefaultDisplayName = resolvedClaudeDefaultDisplayName
+        } else if claudeOutcome == .absent,
+                  observer.hasAmbientClaudeToken,
+                  !claudeCards.isEmpty
+        {
+            // With scoped cards present, Desktop fallback is disabled so an identity-less standard
+            // runtime can only represent the ambient token and its default-home logs. Without a
+            // scoped sibling, keep the neutral title because a higher-priority Desktop login may
+            // actually supply live usage.
+            claudeDefaultDisplayName = "Claude — Environment Token"
+        } else {
+            claudeDefaultDisplayName = nil
+        }
+
         // The provisional default identity was keyed by family before reconciliation. Codex can
         // legitimately put that login on an @-suffixed stable record after a swap, so publish only
         // the actual runtime-card ids assembled below.
-        if hasResolvedCodexDefault {
+        if hasScopedCodexDefault {
             identityKeys.removeValue(forKey: "codex")
         }
         var codexCards: [CodexAccountCard] = []
@@ -354,7 +389,7 @@ struct ProviderAccountAssembly {
             }
             codexCards.append(CodexAccountCard(
                 id: record.id,
-                displayName: record.derivedDisplayName,
+                displayName: accountsStore.derivedDisplayName(cardID: record.id) ?? record.family.capitalized,
                 credentialHomePath: account.credentialHomePath,
                 logRoots: account.logRoots,
                 receivesPiUsage: record.sources.contains(where: \.holdsDefaultSource)
@@ -369,10 +404,11 @@ struct ProviderAccountAssembly {
 
         return ProviderAccountAssembly(
             identityKeysByCard: identityKeys,
+            cardsRejectingAccountStampedCache: cardsRejectingAccountStampedCache,
             claudeCards: claudeCards,
+            claudeDefaultDisplayName: claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
             codexCards: codexCards,
-            hasResolvedCodexDefault: hasResolvedCodexDefault,
             codexIdentityWarmKeychain: codexDiscovery?.keychain,
             unverifiedCodexKeyringHomes: unverifiedCodexKeyringHomes
         )

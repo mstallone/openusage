@@ -54,16 +54,21 @@ public struct UsageReader {
                 _ = LoginShellEnvironment.shared.ensureCaptured()
             }.value
         }
+        let accountsStore = ProviderAccountsStore(defaults: defaults)
         let accountAssembly = providersOverride == nil
-            ? ProviderAccountAssembly.make(defaults: defaults, waitsForLoginShell: false)
+            ? ProviderAccountAssembly.make(
+                defaults: defaults,
+                accountsStore: accountsStore,
+                waitsForLoginShell: false
+            )
             : ProviderAccountAssembly(identityKeysByCard: [:])
         let codexIdentityWarmTask = accountAssembly.startCodexIdentityWarmTask()
         let providers = providersOverride ?? ProviderCatalog.make(
             defaults: defaults,
             claudeCards: accountAssembly.claudeCards,
+            claudeDefaultDisplayName: accountAssembly.claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: accountAssembly.defaultClaudeExtraLogRoots,
             codexCards: accountAssembly.codexCards,
-            hasResolvedCodexDefault: accountAssembly.hasResolvedCodexDefault,
             codexIdentityCache: accountAssembly.codexIdentityCache
         )
         let registry = WidgetRegistry.from(providers)
@@ -90,7 +95,11 @@ public struct UsageReader {
         // account (swap since it was written) is never served, and its provider counts as needing a
         // refresh even while the stale entry is TTL-fresh.
         let staleAccountStampIDs = Set(allProviderIDs.filter {
-            cache.hasStaleAccountStamp(providerID: $0, currentIdentityKey: accountAssembly.identityKeysByCard[$0])
+            cache.hasStaleAccountStamp(
+                providerID: $0,
+                currentIdentityKey: accountAssembly.identityKeysByCard[$0],
+                rejectsAccountStampedCache: accountAssembly.cardsRejectingAccountStampedCache.contains($0)
+            )
         })
         let cachedSnapshots = cache.loadSnapshots(providerIDs: allProviderIDs)
             .filter { providerID, _ in !staleAccountStampIDs.contains(providerID) }
@@ -117,7 +126,8 @@ public struct UsageReader {
                 isProviderEnabled: includesProvider,
                 // The CLI shares the app's snapshot cache, so its writes must carry the same account
                 // stamp — an unstamped claude/codex entry would be discarded at the app's next launch.
-                providerIdentityKeys: accountAssembly.identityKeysByCard
+                providerIdentityKeys: accountAssembly.identityKeysByCard,
+                providersRejectingAccountStampedCache: accountAssembly.cardsRejectingAccountStampedCache
             )
             if let matchedIDs {
                 for providerID in orderedIDs.filter(matchedIDs.contains) {
@@ -138,7 +148,7 @@ public struct UsageReader {
         // CLI output is human-read: resolve card titles against the persisted account registry so
         // renames show, matching the app's UI and HTTP API. Injected-provider tests use their own
         // defaults suite, so this is a no-op there.
-        let accountTitles = ProviderAccountsStore(defaults: defaults).resolvedDisplayNamesByCardID
+        let accountTitles = accountsStore.resolvedDisplayNamesByCardID
         let state = LocalUsageAPI.State(
             enabledOrderedIDs: enabledOrderedIDs,
             knownIDs: knownIDs,

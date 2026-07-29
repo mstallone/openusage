@@ -42,7 +42,11 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let localMap = ["claude": maxKey, "claude@f15456b0": teamKey]
 
-        let remapped = PeerHistoryRemapper.remap(documents: [miniDoc], localIdentityByCardID: localMap)
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [miniDoc],
+            localCardIDs: Set(localMap.keys),
+            localIdentityByCardID: localMap
+        )
 
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
         let byCard = Dictionary(grouping: remapped.histories, by: { $0.cardID })
@@ -58,6 +62,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let remapped = PeerHistoryRemapper.remap(
             documents: [doc],
+            localCardIDs: ["claude"],
             localIdentityByCardID: ["claude": maxKey]
         )
         XCTAssertTrue(remapped.histories.isEmpty)
@@ -80,10 +85,32 @@ final class PeerHistoryIdentityTests: XCTestCase {
             providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
             identities: ["claude": teamKey]
         )
-        let remapped = PeerHistoryRemapper.remap(documents: [doc], localIdentityByCardID: [:])
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [doc],
+            localCardIDs: ["claude"],
+            localIdentityByCardID: [:]
+        )
 
         XCTAssertEqual(remapped.histories.first?.cardID, "claude")
         XCTAssertTrue(remapped.remoteOnly.isEmpty)
+    }
+
+    func testIdentitylessBarePeerBecomesRemoteOnlyWhenNoBareLocalCardExists() {
+        let doc = makeDocument(
+            deviceName: "Mac mini",
+            providers: ["claude": history(day: "2026-07-16", tokens: 10, cost: 1)],
+            identities: nil
+        )
+        let remapped = PeerHistoryRemapper.remap(
+            documents: [doc],
+            localCardIDs: ["claude@f15456b0"],
+            localIdentityByCardID: ["claude@f15456b0": maxKey]
+        )
+
+        XCTAssertTrue(remapped.histories.isEmpty)
+        XCTAssertEqual(remapped.remoteOnly.count, 1)
+        XCTAssertEqual(remapped.remoteOnly.first?.family, "claude")
+        XCTAssertEqual(remapped.remoteOnly.first?.cardID, "claude")
     }
 
     func testRemapLegacyV1DocumentKeepsSameCardMerge() {
@@ -95,6 +122,7 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         let remapped = PeerHistoryRemapper.remap(
             documents: [v1],
+            localCardIDs: ["claude"],
             localIdentityByCardID: ["claude": maxKey]
         )
         XCTAssertEqual(remapped.histories.first?.cardID, "claude")
@@ -159,6 +187,83 @@ final class PeerHistoryIdentityTests: XCTestCase {
         )
         XCTAssertEqual(total.slices.count, 1)
         XCTAssertEqual(total.slices[0].amountUSD, 42, accuracy: 0.001)
+    }
+
+    func testBareRemoteAccountFeedsTotalSpendWithOnlyAScopedFamilyTemplate() {
+        let scoped = ClaudeProvider.makeProvider(
+            id: "claude@f15456b0",
+            displayName: "Claude — Local"
+        )
+        let registry = WidgetRegistry(
+            providers: [scoped],
+            descriptors: [
+                WidgetDescriptor.usageTrend(provider: scoped)
+                    .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test"),
+            ]
+        )
+        let dataStore = WidgetDataStore(
+            registry: registry,
+            providers: [],
+            cache: scratchCache(),
+            defaults: makeScratchDefaults("ScopedRemoteTotal"),
+            providerIdentityKeys: [scoped.id: maxKey]
+        )
+        let today = dayKey(Date())
+        let doc = makeDocument(
+            deviceName: "Mac mini",
+            providers: ["claude": history(day: today, tokens: 1_000, cost: 7)],
+            identities: ["claude": "uuid-other|org-x"]
+        )
+
+        dataStore.setPeerHistoryDocuments([doc], ownDeviceID: "this-mac")
+
+        XCTAssertEqual(dataStore.remoteOnlySpend.count, 1)
+        XCTAssertEqual(
+            dataStore.remoteOnlySpend[0].provider.icon,
+            scoped.icon,
+            "a scoped sibling supplies the family icon and spend descriptor"
+        )
+        let entry = dataStore.remoteOnlySpend[0]
+        let total = TotalSpendAggregator.total(
+            for: .today,
+            providers: [entry.provider],
+            snapshots: [entry.provider.id: entry.snapshot]
+        )
+        XCTAssertEqual(total.slices.first?.amountUSD ?? 0, 7, accuracy: 0.001)
+    }
+
+    func testRemoteOnlySpendIsExcludedWhenEveryLocalFamilyCardIsDisabled() {
+        let scoped = ClaudeProvider.makeProvider(
+            id: "claude@f15456b0",
+            displayName: "Claude — Local"
+        )
+        let registry = WidgetRegistry(
+            providers: [scoped],
+            descriptors: [
+                WidgetDescriptor.usageTrend(provider: scoped)
+                    .exportingHistory(scope: .machineLocal, estimatedCost: true, sourceNote: "test"),
+            ]
+        )
+        let dataStore = WidgetDataStore(
+            registry: registry,
+            providers: [],
+            cache: scratchCache(),
+            defaults: makeScratchDefaults("DisabledScopedRemoteTotal"),
+            isProviderEnabled: { _ in false },
+            providerIdentityKeys: [scoped.id: maxKey]
+        )
+        let doc = makeDocument(
+            deviceName: "Mac mini",
+            providers: ["claude": history(day: dayKey(Date()), tokens: 1_000, cost: 7)],
+            identities: ["claude": "uuid-other|org-x"]
+        )
+
+        dataStore.setPeerHistoryDocuments([doc], ownDeviceID: "this-mac")
+
+        XCTAssertTrue(
+            dataStore.remoteOnlySpend.isEmpty,
+            "disabling the entire local family also excludes peer-only spend for that family"
+        )
     }
 
     func testSeveralRemoteOnlyAccountsFromOneDeviceStayTellableApart() {

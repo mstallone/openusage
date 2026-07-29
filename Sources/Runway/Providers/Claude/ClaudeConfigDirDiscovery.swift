@@ -120,8 +120,7 @@ struct ClaudeConfigDirDiscovery {
         // this path is probed (attributes only — no secret, no prompt).
         let fileBacked = (try? files.readTextIfPresent(url.path + "/.credentials.json"))
             .flatMap { $0 }
-            .flatMap { ClaudeAuthStore.parseCredentials($0) }?
-            .claudeAiOauth?.accessToken?.nilIfEmpty != nil
+            .flatMap { ClaudeAuthStore.parseUsableCredentials($0) } != nil
 
         var matchedLiteral: String?
         let literals = keychainLiterals(for: url)

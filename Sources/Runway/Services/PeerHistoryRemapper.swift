@@ -26,10 +26,12 @@ enum PeerHistoryRemapper {
         var histories: [ProviderUsageHistory]
     }
 
-    /// `localIdentityByCardID` is this Mac's card → identity map (the launch account pass's
+    /// `localCardIDs` is the complete set of cards in this Mac's registry.
+    /// `localIdentityByCardID` is the subset with resolved identities (the launch account pass's
     /// `identityKeysByCard`).
     static func remap(
         documents: [UsageHistoryDocument],
+        localCardIDs: Set<String>,
         localIdentityByCardID: [String: String]
     ) -> Remapped {
         // Invert to identity → card, preferring the bare (default) card when an identity appears on
@@ -61,7 +63,9 @@ enum PeerHistoryRemapper {
                 if let identity = document.identities?[peerCardID] {
                     if let localCard = localCardByIdentity[identity] {
                         result.histories.append((localCard, history))
-                    } else if !ProviderAccountID.isAccountCard(peerCardID), localIdentityByCardID[peerCardID] == nil {
+                    } else if !ProviderAccountID.isAccountCard(peerCardID),
+                              localCardIDs.contains(peerCardID),
+                              localIdentityByCardID[peerCardID] == nil {
                         // The peer named its bare card's account, but this Mac's own bare card has
                         // an UNRESOLVED identity this launch — we can't prove a mismatch, so keep
                         // the legacy same-card-id merge rather than splitting what is most likely
@@ -78,13 +82,21 @@ enum PeerHistoryRemapper {
                     }
                     continue
                 }
-                // No identity recorded (v1 document, or a card this peer couldn't identify): bare
-                // ids keep the legacy same-card-id merge; account-card ids still match when this Mac
-                // has the same identity-derived card id, else they're remote-only. The peer's card
-                // id doubles as both the grouping key and the display id — it IS the account's
-                // identity-derived id, just minted on the peer.
-                if !ProviderAccountID.isAccountCard(peerCardID) || localIdentityByCardID[peerCardID] != nil {
+                // No identity recorded (v1 document, or a card this peer couldn't identify): a bare
+                // id keeps the same-card merge only when that local card actually exists. A
+                // scoped-only family has nowhere to merge it, so retain the spend as one explicitly
+                // unresolved remote family slice instead of silently dropping it. Account-card ids
+                // still match when this Mac has the same identity-derived card id, else they're
+                // remote-only; the peer's account-card id is already identity-derived.
+                if localCardIDs.contains(peerCardID) {
                     result.histories.append((peerCardID, history))
+                } else if !ProviderAccountID.isAccountCard(peerCardID) {
+                    collectRemoteOnly(
+                        identity: "unresolved-bare:\(peerCardID)",
+                        family: family,
+                        cardID: peerCardID,
+                        history: history
+                    )
                 } else {
                     collectRemoteOnly(identity: peerCardID, family: family, cardID: peerCardID, history: history)
                 }

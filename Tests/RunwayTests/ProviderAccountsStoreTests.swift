@@ -126,12 +126,12 @@ final class ProviderAccountsStoreTests: XCTestCase {
 
         store.rename(cardID: "claude", to: "  Work  ")
         XCTAssertEqual(store.records[0].customLabel, "Work", "renames are trimmed")
-        XCTAssertEqual(store.records[0].resolvedDisplayName, "Work", "the resolver surfaces the rename")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "Work", "the resolver surfaces the rename")
         XCTAssertEqual(ProviderAccountsStore(defaults: defaults).records[0].customLabel, "Work", "renames persist")
 
         store.rename(cardID: "claude", to: "   ")
         XCTAssertNil(store.records[0].customLabel, "a blank rename clears back to the derived name")
-        XCTAssertEqual(store.records[0].resolvedDisplayName, "Claude", "the bare card derives the stock family name")
+        XCTAssertEqual(store.resolvedDisplayName(cardID: "claude"), "Claude", "one account derives the stock family name")
 
         store.rename(cardID: "missing", to: "X")
         XCTAssertEqual(store.records.count, 1, "renaming an unknown card is a no-op")
@@ -148,6 +148,151 @@ final class ProviderAccountsStoreTests: XCTestCase {
 
         XCTAssertEqual(records[0].label, "new")
         XCTAssertEqual(records[0].customLabel, "Work", "rescans update the label but never the rename")
+    }
+
+    func testEveryAccountIncludesItsLabelOnlyWhenMultipleAreActive() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: "acct-a",
+                label: "a@example.com"
+            ),
+        ])
+
+        XCTAssertEqual(store.derivedDisplayName(cardID: "claude"), "Claude")
+
+        let records = store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: "acct-a",
+                label: "a@example.com"
+            ),
+            ProviderAccountsStore.AccountObservation(
+                family: "claude",
+                identityKey: "acct-b",
+                label: "b@example.com (Acme)",
+                sources: [
+                    ProviderAccountSource(
+                        kind: .configDir,
+                        anchor: "/Users/dev/.claude-work",
+                        holdsDefaultSource: false
+                    ),
+                ]
+            ),
+        ])
+        let secondID = try XCTUnwrap(records.first { $0.identityKey == "acct-b" }?.id)
+
+        XCTAssertEqual(store.derivedDisplayName(cardID: "claude"), "Claude — a@example.com")
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: secondID),
+            "Claude — b@example.com (Acme)",
+            "the email remains in the default name even when an organization is known"
+        )
+    }
+
+    func testDuplicateActiveLabelsGainStableIdentitySuffixes() throws {
+        let firstIdentity = "acct-a"
+        let secondIdentity = "acct-b"
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let records = store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: firstIdentity,
+                label: "shared@example.com"
+            ),
+            ProviderAccountsStore.AccountObservation(
+                family: "claude",
+                identityKey: secondIdentity,
+                label: "shared@example.com",
+                sources: [ProviderAccountSource(
+                    kind: .configDir,
+                    anchor: "/Users/dev/.claude-work",
+                    holdsDefaultSource: false
+                )]
+            ),
+        ])
+        let secondID = try XCTUnwrap(records.first { $0.identityKey == secondIdentity }?.id)
+
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: "claude"),
+            "Claude — shared@example.com · \(ProviderAccountID.hash8(firstIdentity))"
+        )
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: secondID),
+            "Claude — shared@example.com · \(ProviderAccountID.hash8(secondIdentity))"
+        )
+    }
+
+    func testUnlabeledBareAccountUsesAnIdentityHashWhenDisambiguating() {
+        let identityKey = "account-without-email"
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(
+                family: "codex",
+                identityKey: identityKey
+            ),
+            ProviderAccountsStore.AccountObservation(
+                family: "codex",
+                identityKey: "labeled-account",
+                label: "work@example.com",
+                sources: [
+                    ProviderAccountSource(
+                        kind: .codexHome,
+                        anchor: "/Users/dev/.codex-work",
+                        holdsDefaultSource: false
+                    ),
+                ]
+            ),
+        ])
+
+        XCTAssertEqual(
+            store.derivedDisplayName(cardID: "codex"),
+            ProviderAccountID.make(family: "codex", identityKey: identityKey)
+        )
+    }
+
+    func testDisplayNameMapAliasesAHashedRecordBackingTheBareClaudeRuntime() throws {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        let records = store.reconcile(with: [ProviderAccountsStore.AccountObservation(
+            family: "claude",
+            identityKey: "custom-home-first",
+            label: "work@example.com",
+            sources: [ProviderAccountSource(
+                kind: .configDir,
+                anchor: "/Users/dev/.claude-work",
+                holdsDefaultSource: false
+            )]
+        )])
+        let recordID = try XCTUnwrap(records.first?.id)
+        XCTAssertTrue(ProviderAccountID.isAccountCard(recordID))
+        store.rename(cardID: recordID, to: "Work")
+
+        store.reconcile(with: [
+            defaultHomeObservation(
+                family: "claude",
+                identityKey: "custom-home-first",
+                label: "work@example.com"
+            ),
+        ])
+
+        XCTAssertEqual(store.record(backingCardID: "claude")?.id, recordID)
+        XCTAssertEqual(store.resolvedDisplayNamesByCardID["claude"], "Work")
+        XCTAssertEqual(store.resolvedDisplayNamesByCardID[recordID], "Work")
+    }
+
+    func testOldInactiveSiblingDoesNotDisambiguateTheOnlyAccountFoundThisLaunch() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(family: "codex", identityKey: "personal", label: "personal@example.com"),
+            defaultHomeObservation(family: "codex", identityKey: "work", label: "work@example.com"),
+        ])
+
+        store.reconcile(with: [
+            defaultHomeObservation(family: "codex", identityKey: "personal", label: "personal@example.com"),
+        ])
+
+        XCTAssertEqual(store.derivedDisplayName(cardID: "codex"), "Codex")
     }
 
     func testFamilyHelperSplitsCardIDs() {

@@ -17,7 +17,7 @@ final class CodexAccountIsolationTests: XCTestCase {
         })
     }
 
-    func testCatalogReplacesTheLegacyCodexRuntimeWithScopedCards() {
+    func testCatalogUsesScopedCardsAsTheCompleteRuntimeSet() {
         let cards = [
             CodexAccountCard(
                 id: "codex",
@@ -34,10 +34,8 @@ final class CodexAccountIsolationTests: XCTestCase {
             ),
         ]
 
-        let providers = ProviderCatalog.make(
-            codexCards: cards,
-            hasResolvedCodexDefault: true
-        ).compactMap { $0 as? CodexProvider }
+        let providers = ProviderCatalog.make(codexCards: cards)
+            .compactMap { $0 as? CodexProvider }
 
         XCTAssertEqual(providers.map(\.provider.id), ["codex", "codex@abcd1234"])
         XCTAssertEqual(providers.map(\.authStore.scope), [
@@ -47,20 +45,19 @@ final class CodexAccountIsolationTests: XCTestCase {
         XCTAssertEqual(providers.map(\.piUsageCardID), ["codex", nil])
     }
 
-    func testScopedBareCardReplacesLegacyRuntimeEvenWithoutDefaultBadge() {
+    func testSoleScopedExtraCardDoesNotKeepAnUnscopedRuntime() {
         let card = CodexAccountCard(
-            id: "codex",
+            id: "codex@abcd1234",
             displayName: "Codex",
             credentialHomePath: "/tmp/codex-moved",
             logRoots: [URL(fileURLWithPath: "/tmp/codex-moved")]
         )
 
-        let providers = ProviderCatalog.make(
-            codexCards: [card],
-            hasResolvedCodexDefault: false
-        ).compactMap { $0 as? CodexProvider }
+        let providers = ProviderCatalog.make(codexCards: [card])
+            .compactMap { $0 as? CodexProvider }
 
-        XCTAssertEqual(providers.map(\.provider.id), ["codex"])
+        XCTAssertEqual(providers.map(\.provider.id), ["codex@abcd1234"])
+        XCTAssertEqual(providers.map(\.provider.displayName), ["Codex"])
         XCTAssertEqual(providers.first?.authStore.scope, .home(path: "/tmp/codex-moved"))
         XCTAssertNil(providers.first?.piUsageCardID)
     }

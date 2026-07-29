@@ -425,6 +425,23 @@ struct ClaudeAuthStore: Sendable {
         "\(baseKeychainServiceName(environment: environment))-\(hashSuffix(literal))"
     }
 
+    /// The exact keychain services a standard-scope store probes, shared with default-account
+    /// observation so a keychain-only login is never mistaken for an absent default source.
+    static func standardKeychainServiceCandidates(
+        environment: EnvironmentReading,
+        configDirOverride: String?
+    ) -> [String] {
+        let base = baseKeychainServiceName(environment: environment)
+        guard let configDirOverride else { return [base] }
+        return [
+            scopedKeychainServiceName(
+                forConfigDirLiteral: configDirOverride,
+                environment: environment
+            ),
+            base,
+        ]
+    }
+
     // baseAPI/refreshURL can derive from user-set env vars (CLAUDE_CODE_CUSTOM_OAUTH_URL,
     // CLAUDE_LOCAL_OAUTH_API_BASE). A malformed value is a system-boundary input that must fail
     // loudly — never force-unwrap (crashes the app) and never silently fall back to prod (that hides
@@ -455,15 +472,26 @@ struct ClaudeAuthStore: Sendable {
             // login.
             return ["\(base)-\(hashSuffix(keychainLiteral))"]
         case .standard:
-            if let configDir = claudeHomeOverride() {
-                return ["\(base)-\(hashSuffix(configDir))", base]
-            }
-            return [base]
+            return Self.standardKeychainServiceCandidates(
+                environment: environment,
+                configDirOverride: claudeHomeOverride()
+            )
         }
     }
 
     static func parseCredentials(_ text: String) -> ClaudeCredentialsFile? {
         ProviderParse.decodeJSONWithHexFallback(text, as: ClaudeCredentialsFile.self)
+    }
+
+    /// The single file/keychain usability rule: the payload must parse and carry a nonblank access
+    /// token. Discovery and identity attribution use this too, so an unusable leftover credential
+    /// can never name an ambient-token runtime that refresh itself would reject.
+    static func parseUsableCredentials(_ text: String) -> ClaudeCredentialsFile? {
+        guard let parsed = parseCredentials(text),
+              let token = parsed.claudeAiOauth?.accessToken,
+              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return parsed
     }
 
     /// Keychain and file credentials in fixed keychain-before-file order. The keychain is Claude Code's
@@ -492,9 +520,8 @@ struct ClaudeAuthStore: Sendable {
         let path = credentialsPath()
         guard files.exists(path),
               let text = try? files.readText(path),
-              let parsed = Self.parseCredentials(text),
-              let oauth = parsed.claudeAiOauth,
-              oauth.accessToken?.isEmpty == false
+              let parsed = Self.parseUsableCredentials(text),
+              let oauth = parsed.claudeAiOauth
         else {
             return nil
         }
@@ -530,9 +557,8 @@ struct ClaudeAuthStore: Sendable {
         source: ClaudeCredentialState.Source
     ) -> ClaudeCredentialState? {
         guard let value,
-              let parsed = Self.parseCredentials(value),
-              let oauth = parsed.claudeAiOauth,
-              oauth.accessToken?.isEmpty == false
+              let parsed = Self.parseUsableCredentials(value),
+              let oauth = parsed.claudeAiOauth
         else {
             return nil
         }

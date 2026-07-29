@@ -4,15 +4,15 @@ import Foundation
 /// their runtimes here so credentials, refresh behavior, pricing, and normalization can never drift.
 @MainActor
 enum ProviderCatalog {
-    /// The launch account pass supplies scoped Claude and Codex cards. An unresolved Codex default
-    /// keeps the historical single runtime; a resolved default is replaced by the scoped card set so
-    /// every account's credentials, logs, and reset claims stay isolated.
+    /// The launch account pass supplies scoped Claude and Codex cards. A bare Claude runtime still
+    /// represents a resolved default-home account beside scoped extras; otherwise, scoped cards are
+    /// the complete family set and no empty unscoped runtime is added beside them.
     static func make(
         defaults: UserDefaults = .standard,
         claudeCards: [ClaudeAccountCard] = [],
+        claudeDefaultDisplayName: String? = nil,
         defaultClaudeExtraLogRoots: [URL] = [],
         codexCards: [CodexAccountCard] = [],
-        hasResolvedCodexDefault: Bool = false,
         codexIdentityCache: CodexHomeIdentityCache? = nil
     ) -> [ProviderRuntime] {
         // Default provider order (see AGENTS.md "## Providers"): the three established providers first,
@@ -20,24 +20,23 @@ enum ProviderCatalog {
         // their family's default card.
         //
         // Every baked `Provider.displayName` here is the DERIVED default — renames live only in the
-        // account registry and are resolved at render time (`ProviderAccountRecord.resolvedDisplayName`),
+        // account registry and are resolved at render time (`ProviderAccountsStore.resolvedDisplayName`),
         // so a baked name can never be a stale copy of one.
         var runtimes: [ProviderRuntime] = []
-        runtimes.append(ClaudeProvider(
-            // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
-            // belongs to one of them — fetching that account's usage onto the default card. Desktop
-            // returns as its own properly-pinned source kind in Phase 3.
-            authStore: ClaudeAuthStore(allowsDesktopFallback: claudeCards.isEmpty),
-            logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots)
-        ))
+        if claudeCards.isEmpty || claudeDefaultDisplayName != nil {
+            runtimes.append(ClaudeProvider(
+                provider: ClaudeProvider.makeProvider(displayName: claudeDefaultDisplayName ?? "Claude"),
+                // Once extra Claude cards exist, an unpinned Desktop fallback could borrow a login that
+                // belongs to one of them — fetching that account's usage onto the default card. Desktop
+                // returns as its own properly-pinned source kind in Phase 3.
+                authStore: ClaudeAuthStore(allowsDesktopFallback: claudeCards.isEmpty),
+                logUsageScanner: ClaudeLogUsageScanner(additionalRoots: defaultClaudeExtraLogRoots)
+            ))
+        }
         for card in claudeCards {
             runtimes.append(claudeAccountRuntime(card: card))
         }
-        // A previously bare-id account can move out of the default home and be rediscovered there.
-        // Its scoped card still replaces the legacy runtime even though no source holds the default
-        // badge this launch; otherwise two runtimes would publish the same `codex` id.
-        let hasScopedBareCodex = codexCards.contains { $0.id == "codex" }
-        if !hasResolvedCodexDefault && !hasScopedBareCodex {
+        if codexCards.isEmpty {
             runtimes.append(CodexProvider(
                 authStore: CodexAuthStore(identityCache: codexIdentityCache)
             ))
