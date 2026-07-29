@@ -104,8 +104,15 @@ final class PanelHeightController {
         PanelHeightBridge.invalidate()
     }
 
+    /// Applies whether or not the panel is on screen. Closing collapses every expanded card
+    /// (`collapseExpandedProviders`), and the collapsed re-measure lands while the panel is hidden —
+    /// that apply is what brings the backdrop and the remembered height back down so the next open
+    /// doesn't show the previous session's expanded height. Applying to a hidden panel is just
+    /// backdrop bookkeeping; the window itself never resizes. (Guarding on visibility here also
+    /// poisoned the bridge's duplicate filter: the skipped height was recorded as pushed, so the
+    /// same value was dropped forever after.)
     private func applyVisualHeight(_ rawHeight: CGFloat) {
-        guard rawHeight > 1, panel.isVisible else { return }
+        guard rawHeight > 1 else { return }
         // Deliberately NOT clamped: every target (and the opening guess) is already clamped before it
         // animates, so per-frame values only leave the range during spring overshoot — and SwiftUI
         // renders those raw values. Re-clamping here would pin the backdrop at the boundary while the
@@ -126,9 +133,11 @@ final class PanelHeightController {
         morphSettleTask?.cancel()
         morphSettleTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled, let self, self.panel.isVisible else { return }
+            guard !Task.isCancelled, let self else { return }
             self.isMorphing = false
             self.panel.invalidateShadow()
+            // Saves for hidden settles too: the collapse-on-close re-measure settles after the panel
+            // is ordered out, and its save is what makes the next open remember the collapsed height.
             self.saveHeight(self.visualHeight, for: self.currentScreen())
         }
     }
