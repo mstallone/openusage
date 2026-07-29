@@ -423,10 +423,13 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
                     let result: (Int, [Item]?, Bool)
                     if Task.isCancelled || !FileManager.default.fileExists(atPath: file.path) {
                         result = (index, nil, false)
-                    } else if let data = FileManager.default.contents(atPath: file.path) {
-                        result = (index, parse(data), false)
                     } else {
-                        result = (index, nil, true)
+                        result = autoreleasepool {
+                            guard let data = FileManager.default.contents(atPath: file.path) else {
+                                return (index, nil, true)
+                            }
+                            return (index, parse(data), false)
+                        }
                     }
                     await permitPool.release()
                     return result
