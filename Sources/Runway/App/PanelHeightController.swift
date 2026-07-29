@@ -189,8 +189,7 @@ final class PanelHeightController: NSObject {
         visualHeight = rawHeight
         onVisualHeightChange?(rawHeight)
         // The shadow follows the window's rendered alpha shape — the visual panel, not the fixed
-        // window frame — so refresh it as the shape animates. This is the only per-frame AppKit work
-        // a morph does; the window itself never moves.
+        // window frame — so refresh it as the shape animates (measured: no effect on morph cadence).
         panel.invalidateShadow()
         isMorphing = true
         scheduleMorphSettle()

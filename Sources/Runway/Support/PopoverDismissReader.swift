@@ -172,6 +172,13 @@ enum MenuBarPopover {
     /// (see `PanelHeightController`), so without this the pre-measurement panel would fill it whole.
     static var openingHeight: (() -> CGFloat)?
 
+    /// Installed by `DashboardView`: retargets the panel height for a provider card's expand/collapse
+    /// caret. Call it INSIDE the same `withAnimation` as the `setProviderExpanded` change — the whole
+    /// point is that rows, panel edge, and footer then ride one spring clock. Waiting for the content
+    /// measurement instead starts a second spring ~2 frames later, which makes SwiftUI sample the
+    /// overlapping animations off-vsync and the footer visibly jitters behind the unfolding rows.
+    static var coAnimateExpansion: ((_ providerID: String, _ expanding: Bool) -> Void)?
+
     /// Closes the popover. Falls back to ordering the given window out if no owner has installed
     /// a handler (which would be a wiring bug, so it's logged loudly by the caller's absence of
     /// effect rather than silently swallowed here).

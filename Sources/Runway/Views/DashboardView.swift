@@ -49,6 +49,14 @@ struct DashboardView: View {
     @State private var animatedSlideID = 0
     /// Reset to the top whenever the popover closes, so it never reopens mid-scroll.
     @State private var dashboardScrollPosition = ScrollPosition(edge: .top)
+    /// Measured expanded-section height per provider, learned from the first expand's measurement.
+    /// Lets later caret toggles co-animate the panel height in the SAME transaction as the row change
+    /// (one spring clock — no footer catch-up); a provider's first toggle uses a row-count estimate
+    /// and the measurement that follows issues a small same-spring correction.
+    @State private var expansionDeltas: [String: CGFloat] = [:]
+    /// The provider whose caret toggle is awaiting its measurement, with the pre-toggle target the
+    /// actual delta is derived from. Cleared when the next dashboard measurement lands.
+    @State private var pendingExpansion: (providerID: String, fromTarget: CGFloat)?
     /// Drives the macOS-native confirmation sheet for the Customize "reset all" button. The alert
     /// attaches to this panel as a sheet (see `StatusItemController`'s attached-sheet guard), so a
     /// click on its buttons can't be misread as an outside click that dismisses the popover.
@@ -221,6 +229,13 @@ struct DashboardView: View {
             // fight yet); the animated *re-target* defers to the switch path while a slide is in flight.
             .onChange(of: heightCoordinator.measuredIdeal[layout.screen]) { _, _ in
                 guard let target = heightCoordinator.target(for: layout.screen) else { return }
+                // A caret toggle's measurement just landed: learn the provider's exact expanded-section
+                // height so the NEXT toggle co-animates with zero correction.
+                if let pending = pendingExpansion, layout.screen == .dashboard,
+                   let ideal = heightCoordinator.measuredIdeal[.dashboard] {
+                    expansionDeltas[pending.providerID] = abs(ideal - pending.fromTarget)
+                    pendingExpansion = nil
+                }
                 if !didEstablishHeight {
                     didEstablishHeight = true
                     animatedHeight = target
@@ -232,6 +247,21 @@ struct DashboardView: View {
             // sibling of `PopoverKeyReader` that only observes (never consumes), so it can't disturb
             // navigation or typing.
             .background(TooMuchTransparencyKeyReader { transparency.toggleSecretCode() })
+            // Installed for the provider cards' expand carets: retargets the panel height inside the
+            // caret's own `withAnimation`, so rows, panel edge, and footer share one spring clock.
+            .onAppear {
+                MenuBarPopover.coAnimateExpansion = { providerID, expanding in
+                    guard didEstablishHeight, animatedHeight > 0, layout.screen == .dashboard else { return }
+                    let fromIdeal = heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight
+                    let delta = expansionDeltas[providerID] ?? estimatedExpansionDelta(for: providerID)
+                    pendingExpansion = (providerID, fromIdeal)
+                    let ideal = fromIdeal + (expanding ? delta : -delta)
+                    // Plain assignment: this runs inside the caret's `withAnimation(Motion.spring)`, so
+                    // the change rides that same transaction. The measurement that follows only issues
+                    // a correction when the delta was off (a provider's first-ever toggle).
+                    animatedHeight = MenuBarPopover.clampHeight?(ideal) ?? ideal
+                }
+            }
             // Reaches `modeBody`, the `PopoverSurface` background, the `.tooMuchTransparency` egg layers
             // (applied on the visual panel above), and every card: drives whether surfaces paint their
             // opaque base or clear to the behind-window vibrancy backdrop.
@@ -243,6 +273,18 @@ struct DashboardView: View {
             // Sourced from the controller's show/hide chokepoints (`popoverShown`), not occlusion — a
             // `.canJoinAllSpaces` panel is briefly occluded mid Space-switch while still on-screen.
             .environment(\.popoverIsVisible, transparency.popoverShown)
+    }
+
+    /// First-toggle guess for a provider's expanded-section height: its On Demand rows at the compact
+    /// row estimate, plus a quick-links row when present. The real measurement replaces this within a
+    /// couple of frames (with a small same-spring correction) and is remembered exactly afterwards.
+    private func estimatedExpansionDelta(for providerID: String) -> CGFloat {
+        guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
+            return 0
+        }
+        let rows = CGFloat(group.expandedWidgets.count) * DensitySetting.compact.estimatedMetricRowHeight
+        let links: CGFloat = group.provider.visibleLinks.isEmpty ? 0 : 40
+        return rows + links
     }
 
     private func resetTransientState() {

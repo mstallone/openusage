@@ -224,6 +224,9 @@ struct WidgetGroupedListView: View {
     private func expandToggle(providerID: String, isExpanded: Bool) -> some View {
         Button {
             withAnimation(Motion.spring) {
+                // Same transaction as the row change, so the panel height (and the footer riding it)
+                // animates on the same spring clock as the unfolding rows — see `coAnimateExpansion`.
+                MenuBarPopover.coAnimateExpansion?(providerID, !isExpanded)
                 _ = layout.setProviderExpanded(!isExpanded, for: providerID)
             }
         } label: {
