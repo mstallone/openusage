@@ -74,34 +74,43 @@ enum PanelHeightBridge {
         }
     }
 
+    /// What a `push` decided under the lock. One enum so the whole decision — duplicate check, the
+    /// sync-apply supersede of any queued height, and off-main queueing — happens in a SINGLE critical
+    /// section: with two separate locks, a preempted off-main push could queue its (older) height
+    /// after a newer main-thread push had already applied and cleared the slot.
+    private enum PushAction {
+        case drop
+        case applyNow
+        case schedule(generation: Int)
+    }
+
     nonisolated static func push(_ height: CGFloat) {
         guard height > 0 else { return }
         let isMain = Thread.isMainThread
-        let isNew = state.withLock { state -> Bool in
-            guard height != state.lastPushed else { return false }
+        let action = state.withLock { state -> PushAction in
+            guard height != state.lastPushed else { return .drop }
             state.lastPushed = height
-            // A synchronous apply supersedes any height still queued by the off-main safety net —
-            // its hop drains this slot when it runs, so clearing it here keeps a stale older height
-            // from being applied after the newer one.
-            if isMain { state.pendingHeight = nil }
-            return true
+            if isMain {
+                // A synchronous apply supersedes any height still queued by the off-main safety net —
+                // its hop drains this slot when it runs, so clearing it here keeps a stale older
+                // height from being applied after the newer one.
+                state.pendingHeight = nil
+                return .applyNow
+            }
+            state.pendingHeight = height
+            guard !state.isScheduled else { return .drop }
+            state.isScheduled = true
+            return .schedule(generation: state.generation)
         }
-        guard isNew else { return }
         // Normal path: same thread, same transaction — the backdrop commits with this exact frame.
-        if isMain {
-            MainActor.assumeIsolated {
-                MenuBarPopover.applyHeight?(height)
+        guard case .schedule(let scheduled) = action else {
+            if case .applyNow = action {
+                MainActor.assumeIsolated {
+                    MenuBarPopover.applyHeight?(height)
+                }
             }
             return
         }
-        let (scheduled, shouldSchedule) = state.withLock { state -> (Int, Bool) in
-            state.pendingHeight = height
-            let scheduled = state.generation
-            guard !state.isScheduled else { return (scheduled, false) }
-            state.isScheduled = true
-            return (scheduled, true)
-        }
-        guard shouldSchedule else { return }
         DispatchQueue.main.async {
             let height = state.withLock { state -> CGFloat? in
                 guard state.generation == scheduled else { return nil }
