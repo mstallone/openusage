@@ -48,6 +48,18 @@ struct CopilotAuthStore: Sendable {
         loadFromEditorConfig() ?? loadFromGhConfig() ?? loadFromGhKeychain()
     }
 
+    /// Tokens suitable for public GitHub billing APIs, with the GitHub CLI credential first.
+    /// Editor OAuth tokens remain useful fallbacks, but commonly have only the private Copilot
+    /// endpoint's permissions. Blocking (Keychain) — call off the main actor.
+    func loadBillingTokenCandidates(usageToken: CopilotToken) -> [CopilotToken] {
+        let ghToken = loadFromGhConfig() ?? loadFromGhKeychain()
+        var seen: Set<CopilotToken> = []
+        return [ghToken, usageToken].compactMap { token in
+            guard let token, seen.insert(token).inserted else { return nil }
+            return token
+        }
+    }
+
     // MARK: - Sources
 
     func loadFromEditorConfig() -> CopilotToken? {

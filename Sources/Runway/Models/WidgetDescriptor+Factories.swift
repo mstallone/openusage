@@ -66,6 +66,7 @@ extension WidgetDescriptor {
         title: String,
         metricLabel: String? = nil,
         selection: ValueSelection = .all,
+        subtitleValueLabels: [String] = [],
         valueWord: String? = nil,
         isUsagePeriod: Bool = false,
         traySuffix: String? = nil,
@@ -77,6 +78,7 @@ extension WidgetDescriptor {
         var sample = WidgetData(title: title, icon: provider.icon, kind: kind, used: 0, limit: nil,
                                 unboundedValueWord: valueWord)
         sample.selection = selection
+        sample.subtitleValueLabels = subtitleValueLabels
         sample.isUsagePeriod = isUsagePeriod
         sample.traySuffix = traySuffix
         sample.showsResetExpiries = showsResetExpiries
@@ -142,11 +144,13 @@ extension WidgetDescriptor {
         id: String,
         provider: Provider,
         title: String,
-        metricLabel: String? = nil
+        metricLabel: String? = nil,
+        pinnable: Bool = true
     ) -> WidgetDescriptor {
         make(id: id, provider: provider, metricLabel: metricLabel ?? title,
              sample: WidgetData(title: title, icon: provider.icon,
-                                kind: .count, used: 0, limit: nil))
+                                kind: .count, used: 0, limit: nil),
+             pinnable: pinnable)
     }
 
     /// The Usage Trend row: a day-by-day token sparkline backed by a provider `.chart` line. Not

@@ -29,15 +29,17 @@ final class MenuBarContentTests: XCTestCase {
         // A bounded dollar metric has a fill, so it belongs in Bars. An unbounded value (raw spend,
         // no limit) has no fill and is dropped.
         let content = MenuBarContentBuilder.build(
-            groups: [group("a",
-                percent("a.pct", "Pct", 40),
-                boundedDollars("a.credits", "Credits", used: 12000, limit: 18000),
-                unbounded("a.spend", "Spend"))],
+            groups: [
+                group("a",
+                    percent("a.pct", "Pct", 40),
+                    boundedDollars("a.credits", "Credits", used: 12000, limit: 18000)),
+                group("b", unbounded("b.spend", "Spend"))
+            ],
             data: { $0.sample }
         )
 
-        XCTAssertEqual(content.groups[0].metrics.map(\.id), ["a.pct", "a.credits", "a.spend"])  // Text: all
-        XCTAssertEqual(content.bars.map(\.id), ["a.pct", "a.credits"])                          // Bars: bounded only
+        XCTAssertEqual(content.groups.flatMap(\.metrics).map(\.id), ["a.pct", "a.credits", "b.spend"]) // Text: all
+        XCTAssertEqual(content.bars.map(\.id), ["a.pct", "a.credits"])                                 // Bars: bounded only
     }
 
     func testBarsCappedToFourInOrder() {
@@ -69,6 +71,34 @@ final class MenuBarContentTests: XCTestCase {
         XCTAssertEqual(content.groups.map(\.providerID), ["a"])
         XCTAssertEqual(content.groups[0].metrics.map(\.id), ["a.live"])
         XCTAssertEqual(content.bars.map(\.id), ["a.live"])
+    }
+
+    func testTextGroupReappliesTwoMetricCapAfterDormantPinsBecomeLive() {
+        let content = MenuBarContentBuilder.build(
+            groups: [group(
+                "a",
+                percent("a.m1", "M1", 10),
+                percent("a.m2", "M2", 20),
+                percent("a.m3", "M3", 30)
+            )],
+            data: { $0.sample }
+        )
+
+        XCTAssertEqual(content.groups[0].metrics.map(\.id), ["a.m1", "a.m2"])
+    }
+
+    func testNoDataPinDoesNotConsumeReappliedTextCap() {
+        let content = MenuBarContentBuilder.build(
+            groups: [group(
+                "a",
+                noDataPercent("a.dormant", "Dormant"),
+                percent("a.m2", "M2", 20),
+                percent("a.m3", "M3", 30)
+            )],
+            data: { $0.sample }
+        )
+
+        XCTAssertEqual(content.groups[0].metrics.map(\.id), ["a.m2", "a.m3"])
     }
 
     func testAllPinsWithoutDataFallBackToAppIcon() {
@@ -111,11 +141,14 @@ final class MenuBarContentTests: XCTestCase {
         // unit in the strip instead of collapsing to "used / limit" percentages.
         let usage = percent("a.usage", "Usage", 67)
         let credits = boundedDollars("a.credits", "Credits", used: 12000, limit: 18000)
-        let requests = boundedCount("a.requests", "Requests", used: 412, limit: 500)
-        let spend = unbounded("a.spend", "Spend")   // unbounded $42
-        let content = MenuBarContentBuilder.build(groups: [group("a", usage, credits, requests, spend)], data: { $0.sample })
+        let requests = boundedCount("b.requests", "Requests", used: 412, limit: 500)
+        let spend = unbounded("b.spend", "Spend")   // unbounded $42
+        let content = MenuBarContentBuilder.build(
+            groups: [group("a", usage, credits), group("b", requests, spend)],
+            data: { $0.sample }
+        )
 
-        XCTAssertEqual(content.groups[0].metrics.map(\.value), ["67%", "$12K", "412", "$42"])
+        XCTAssertEqual(content.groups.flatMap(\.metrics).map(\.value), ["67%", "$12K", "412", "$42"])
     }
 
     func testUnboundedNumbersAreCompacted() {

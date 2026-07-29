@@ -1260,6 +1260,45 @@ final class LayoutStoreTests: XCTestCase {
         XCTAssertTrue(group?.expandedWidgets.isEmpty ?? false)
     }
 
+    func testApplicabilityProjectionPromotesTheSameRowsOnDashboardAndCustomize() {
+        let store = LayoutStore(
+            registry: .mock,
+            defaults: makeDefaults("ApplicablePromotion"),
+            storageKey: "layout",
+            defaultMetricIDs: ["claude.session", "claude.weekly"],
+            defaultExpandedMetricIDs: ["claude.weekly"]
+        )
+        let isApplicable: (WidgetDescriptor) -> Bool = { $0.id == "claude.weekly" }
+
+        let dashboard = store.displayGroups(matching: isApplicable)
+            .first { $0.provider.id == "claude" }
+        let customize = store.customizeDetail(for: "claude", matching: isApplicable)
+
+        XCTAssertEqual(
+            dashboard?.alwaysShownWidgets.compactMap { store.descriptor(for: $0)?.id },
+            ["claude.weekly"]
+        )
+        XCTAssertTrue(dashboard?.expandedWidgets.isEmpty ?? false)
+        XCTAssertEqual(customize?.alwaysShownMetrics.map(\.id), ["claude.weekly"])
+        XCTAssertTrue(customize?.expandedMetrics.isEmpty ?? false)
+    }
+
+    func testApplicabilityProjectionDropsProviderWithNoApplicableEnabledMetrics() {
+        let store = LayoutStore(
+            registry: .mock,
+            defaults: makeDefaults("NoApplicableEnabled"),
+            storageKey: "layout",
+            defaultMetricIDs: ["claude.session"],
+            defaultExpandedMetricIDs: []
+        )
+
+        XCTAssertNotNil(store.displayGroups.first { $0.provider.id == "claude" })
+        XCTAssertNil(
+            store.displayGroups(matching: { $0.id == "claude.weekly" })
+                .first { $0.provider.id == "claude" }
+        )
+    }
+
     func testProviderExpandedStateDoesNotPersistAcrossReload() {
         let defaults = makeDefaults("ProviderExpanded")
         let store = LayoutStore(registry: .mock, defaults: defaults, storageKey: "layout")

@@ -72,14 +72,26 @@ enum ShareCardRenderer {
         displayName: String? = nil
     ) -> Bool {
         let isExpanded = layout.isProviderExpanded(group.provider.id)
-        let alwaysRows = group.alwaysShownWidgets.compactMap { widget -> WidgetData? in
-            guard let descriptor = layout.descriptor(for: widget) else { return nil }
+        let rawAlwaysRows = group.alwaysShownWidgets.compactMap { widget -> WidgetData? in
+            guard let descriptor = layout.descriptor(for: widget),
+                  dataStore.isMetricApplicable(descriptor)
+            else {
+                return nil
+            }
             return dataStore.data(for: descriptor)
         }
-        let expandedRows = group.expandedWidgets.compactMap { widget -> WidgetData? in
-            guard let descriptor = layout.descriptor(for: widget) else { return nil }
+        let rawExpandedRows = group.expandedWidgets.compactMap { widget -> WidgetData? in
+            guard let descriptor = layout.descriptor(for: widget),
+                  dataStore.isMetricApplicable(descriptor)
+            else {
+                return nil
+            }
             return dataStore.data(for: descriptor)
         }
+        // Match the dashboard's invariant after account-aware filtering: if no applicable metric remains
+        // Always Visible, promote the On Demand rows rather than exporting a blank collapsed card.
+        let alwaysRows = rawAlwaysRows.isEmpty ? rawExpandedRows : rawAlwaysRows
+        let expandedRows = rawAlwaysRows.isEmpty ? [] : rawExpandedRows
         let rows = isExpanded ? alwaysRows + expandedRows : alwaysRows
         let view = ShareCardView(
             provider: group.provider,

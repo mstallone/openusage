@@ -571,6 +571,14 @@ final class WidgetDataStore {
         return result
     }
 
+    /// Whether a descriptor represents a real capability for the provider's current account type.
+    /// Providers that do not publish account-aware applicability keep the legacy all-applicable
+    /// behavior. This is intentionally separate from `data(for:)`: an applicable metric can still
+    /// have no data after a partial response, and should continue to render that honest state.
+    func isMetricApplicable(_ descriptor: WidgetDescriptor) -> Bool {
+        snapshots[descriptor.providerID]?.applicableMetricIDs?.contains(descriptor.id) ?? true
+    }
+
     /// The plan label for a provider's latest snapshot. `nil` until a snapshot exists or when the
     /// provider doesn't expose a plan. Provider section headers render this beside the provider name.
     func plan(for providerID: String) -> String? {
