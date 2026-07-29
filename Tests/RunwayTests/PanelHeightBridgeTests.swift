@@ -109,6 +109,35 @@ final class PanelHeightBridgeTests: XCTestCase {
         wait(for: [droppedApply], timeout: 0.05)
     }
 
+    /// A synchronous main-thread apply supersedes a height still queued by the off-main hop: the
+    /// stale older height must never land after the newer one.
+    func testMainThreadApplySupersedesQueuedOffMainHeight() {
+        resetBridge()
+        defer { resetBridge() }
+
+        var applied: [CGFloat] = []
+        let staleApply = expectation(description: "stale queued height never applies")
+        staleApply.isInverted = true
+        MenuBarPopover.applyHeight = { height in
+            applied.append(height)
+            if height == 520 { staleApply.fulfill() }
+        }
+
+        // Queue 520 from off-main; the main thread is busy here, so the hop can't drain yet.
+        let pushed = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            PanelHeightBridge.push(520)
+            pushed.signal()
+        }
+        pushed.wait()
+
+        PanelHeightBridge.push(600)
+        XCTAssertEqual(applied, [600], "the newer height applies synchronously")
+
+        wait(for: [staleApply], timeout: 0.05)
+        XCTAssertEqual(applied, [600])
+    }
+
     private func resetBridge() {
         PanelHeightBridge.invalidate()
         MenuBarPopover.applyHeight = nil

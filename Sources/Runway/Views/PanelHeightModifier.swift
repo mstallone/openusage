@@ -76,14 +76,19 @@ enum PanelHeightBridge {
 
     nonisolated static func push(_ height: CGFloat) {
         guard height > 0 else { return }
+        let isMain = Thread.isMainThread
         let isNew = state.withLock { state -> Bool in
             guard height != state.lastPushed else { return false }
             state.lastPushed = height
+            // A synchronous apply supersedes any height still queued by the off-main safety net —
+            // its hop drains this slot when it runs, so clearing it here keeps a stale older height
+            // from being applied after the newer one.
+            if isMain { state.pendingHeight = nil }
             return true
         }
         guard isNew else { return }
         // Normal path: same thread, same transaction — the backdrop commits with this exact frame.
-        if Thread.isMainThread {
+        if isMain {
             MainActor.assumeIsolated {
                 MenuBarPopover.applyHeight?(height)
             }

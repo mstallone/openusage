@@ -96,6 +96,15 @@ struct DashboardView: View {
             // The easter egg's visuals hug the visual panel (and get clipped to its rounded shape
             // below), so party/drunk layers can't paint into the window's transparent remainder.
             .tooMuchTransparency(transparency.effectiveStyle)
+            // Inside the clip below, so a drag that wanders past the panel's bottom edge clips the
+            // floating chip at the edge (as the window bounds used to) instead of rendering it into
+            // the fixed window's transparent remainder. Same origin as the outer fill — the panel is
+            // top-aligned at the window's top-left — so the lift's reorder-space coordinates line up.
+            .overlay(alignment: .topLeading) {
+                if let reorderLift {
+                    ReorderLiftPreview(lift: reorderLift)
+                }
+            }
             // Round the visual panel itself. The host layer's mask only rounds the window bounds, which
             // only coincide with the panel when the content happens to fill the whole window.
             .clipShape(RoundedRectangle(cornerRadius: StatusItemController.cornerRadius, style: .continuous))
@@ -105,11 +114,6 @@ struct DashboardView: View {
             // Drive the backdrop's height on SwiftUI's clock. At the body root, outside `modeBody`'s
             // structural-animation suppression, so it can ride the active transition spring.
             .drivesPanelHeight(animatedHeight)
-            .overlay(alignment: .topLeading) {
-                if let reorderLift {
-                    ReorderLiftPreview(lift: reorderLift)
-                }
-            }
             .coordinateSpace(name: Self.reorderSpace)
             .background(
                 // Esc backs out of Customize / Settings first; only from the dashboard does it close
