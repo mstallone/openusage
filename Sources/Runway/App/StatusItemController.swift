@@ -52,10 +52,6 @@ final class StatusItemController: NSObject {
     /// Corner radius of the panel surface; tuned to read like a system menu-bar popover. Shared with
     /// `DashboardView`, whose clip rounds the animated visual panel to the same shape.
     static let cornerRadius: CGFloat = 13
-    /// Pins the backdrop to the panel's *visual* height. At rest it equals the window height; during a
-    /// height morph the window is parked larger while `PanelHeightController` drives this constant per
-    /// frame, so the tray/vibrancy always backs exactly the revealed panel and nothing more.
-    private var backdropHeightConstraint: NSLayoutConstraint?
 
     init(container: AppContainer, updater: UpdaterController) {
         self.container = container
@@ -138,7 +134,15 @@ final class StatusItemController: NSObject {
 
         heightController.installBridge()
         heightController.onVisualHeightChange = { [weak self] height in
-            self?.backdropHeightConstraint?.constant = height
+            guard let self, let bounds = self.panel.contentView?.bounds else { return }
+            // AppKit y grows upward: the visual panel hugs the window's TOP, so the backdrop's origin
+            // sits `height` below the container's top edge.
+            self.backdrop.frame = NSRect(
+                x: 0,
+                y: bounds.height - height,
+                width: bounds.width,
+                height: height
+            )
         }
 
         AppLog.info(.statusItem, "Status item ready (button: \(self.statusItem.button != nil), shortcut: \(KeyboardShortcuts.getShortcut(for: .togglePopover)?.description ?? "none"))")
@@ -182,22 +186,16 @@ final class StatusItemController: NSObject {
 
         container.addSubview(backdrop)
         container.addSubview(host, positioned: .above, relativeTo: backdrop)
-        // The backdrop hangs from the top at the visual height instead of filling the window: during a
-        // morph the window is parked larger than the panel, and a full-frame backdrop would flash the
-        // whole tray at the parked size before the reveal animation ran.
-        let backdropHeight = backdrop.heightAnchor.constraint(
-            equalToConstant: PanelHeightController.defaultHeight
-        )
-        // Below required, so a spring overshoot past the parked window height clips the backdrop
-        // instead of Auto Layout growing the window to satisfy it (a required constraint on content
-        // can resize the window, which would sneak per-morph window resizes back in).
-        backdropHeight.priority = NSLayoutConstraint.Priority(999)
-        backdropHeightConstraint = backdropHeight
+        // The backdrop hangs from the top at the visual height instead of filling the window (the
+        // window is a fixed-size canvas taller than the panel), and it is positioned with DIRECT frame
+        // assignment, never Auto Layout: a per-frame constraint-constant update runs the window's
+        // whole layout engine — the same engine that holds the hosting view's edge pins — which
+        // re-enters the SwiftUI host every frame and measurably knocks the morph animation off its
+        // vsync cadence (the bottom-edge jitter this replaces). A plain frame set dirties only the
+        // backdrop's own subtree.
+        backdrop.translatesAutoresizingMaskIntoConstraints = true
+        backdrop.autoresizingMask = []
         NSLayoutConstraint.activate([
-            backdrop.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            backdrop.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            backdrop.topAnchor.constraint(equalTo: container.topAnchor),
-            backdropHeight,
             host.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             host.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             host.topAnchor.constraint(equalTo: container.topAnchor),
