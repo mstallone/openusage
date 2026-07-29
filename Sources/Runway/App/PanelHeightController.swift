@@ -1,5 +1,4 @@
 import AppKit
-import QuartzCore
 
 /// Owns the menu-bar panel's placement and content-driven height changes. The status-item controller
 /// still owns panel creation and show/hide; this type owns only the height boundary between SwiftUI and
@@ -17,7 +16,7 @@ import QuartzCore
 /// nor blocks anything. Outside-click dismissal still hit-tests the visual panel rect, not the window
 /// frame (`PanelOutsideClickMonitor`), so a click there closes the popover like any outside click.
 @MainActor
-final class PanelHeightController: NSObject {
+final class PanelHeightController {
     static let panelWidth: CGFloat = 320
     static let defaultHeight: CGFloat = 800
 
@@ -29,14 +28,6 @@ final class PanelHeightController: NSObject {
     private var anchorTopLeft: NSPoint?
     private var morphSettleTask: Task<Void, Never>?
     private(set) var isMorphing = false
-    /// Paces morph frames while the panel is open: once per display refresh it drains the newest
-    /// height from `PanelHeightBridge` and applies it. See `PanelHeightBridge.takePending` for why the
-    /// main-queue hop alone isn't enough. Pauses itself after a morph goes quiet (so an idle popover
-    /// costs no timer wakeups and doesn't pin ProMotion at full rate) and resumes on the next height
-    /// push, which arrives through the bridge's main-queue fallback while paced.
-    private var displayLink: CADisplayLink?
-    /// Consecutive display-link ticks with nothing pending; drives the idle pause above.
-    private var idleTicks = 0
     /// The height of the panel the user actually sees — the backdrop and the SwiftUI-clipped content,
     /// always ≤ the fixed window height. This is also the height that gets remembered per screen.
     private(set) var visualHeight: CGFloat = PanelHeightController.defaultHeight
@@ -96,7 +87,6 @@ final class PanelHeightController: NSObject {
         visualHeight = height
         onVisualHeightChange?(height)
         panel.invalidateShadow()
-        startDisplayLink()
     }
 
     /// Saves before the caller changes screens or orders the panel out.
@@ -111,74 +101,11 @@ final class PanelHeightController: NSObject {
         anchorScreen = nil
         morphSettleTask?.cancel()
         isMorphing = false
-        displayLink?.invalidate()
-        displayLink = nil
-        PanelHeightBridge.setPaced(false)
         PanelHeightBridge.invalidate()
-    }
-
-    private func startDisplayLink() {
-        guard displayLink == nil, let view = panel.contentView else { return }
-        let link = view.displayLink(target: self, selector: #selector(displayLinkFired))
-        // Without a floor the link downclocks when morph frames run long, and the panel edge visibly
-        // notches; ask for the anchored display's full rate — SwiftUI animates the panel at that
-        // cadence, and the backdrop should keep step — and let the idle pause handle quiet stretches.
-        // The link is recreated per open, so a screen change between opens picks up the new rate.
-        let maxRate = Float((anchorScreen ?? NSScreen.main)?.maximumFramesPerSecond ?? 120)
-        link.preferredFrameRateRange = CAFrameRateRange(
-            minimum: min(60, maxRate),
-            maximum: maxRate,
-            preferred: maxRate
-        )
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-        idleTicks = 0
-        PanelHeightBridge.setPaced(true)
-    }
-
-    /// Quiet ticks before the link pauses itself: long enough to outlast a spring's sub-pixel tail
-    /// (which the apply threshold below drops), short enough that an open-and-idle popover stops
-    /// ticking within a second.
-    private static let idleTicksBeforePause = 60
-
-    @objc private func displayLinkFired() {
-        guard let height = PanelHeightBridge.takePending() else {
-            idleTicks += 1
-            if idleTicks >= Self.idleTicksBeforePause {
-                pauseDisplayLink()
-            }
-            return
-        }
-        idleTicks = 0
-        applyVisualHeight(height)
-    }
-
-    /// Hand consumption back to the bridge's main-queue fallback, then stop ticking. Order matters:
-    /// once pacing is off, a concurrent push schedules its own fallback apply, and `resumePacing`
-    /// restarts the link — so drain anything that squeaked in between under the old mode before
-    /// actually pausing.
-    private func pauseDisplayLink() {
-        PanelHeightBridge.setPaced(false)
-        if let height = PanelHeightBridge.takePending() {
-            PanelHeightBridge.setPaced(true)
-            applyVisualHeight(height)
-            return
-        }
-        displayLink?.isPaused = true
-    }
-
-    /// Called from the fallback apply while the link is paused: take over pacing again for the morph
-    /// that just started.
-    private func resumePacingIfNeeded() {
-        guard let displayLink, displayLink.isPaused else { return }
-        displayLink.isPaused = false
-        idleTicks = 0
-        PanelHeightBridge.setPaced(true)
     }
 
     private func applyVisualHeight(_ rawHeight: CGFloat) {
         guard rawHeight > 1, panel.isVisible else { return }
-        resumePacingIfNeeded()
         // Deliberately NOT clamped: every target (and the opening guess) is already clamped before it
         // animates, so per-frame values only leave the range during spring overshoot — and SwiftUI
         // renders those raw values. Re-clamping here would pin the backdrop at the boundary while the

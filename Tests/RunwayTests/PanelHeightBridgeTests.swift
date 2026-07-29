@@ -3,34 +3,94 @@ import XCTest
 
 @MainActor
 final class PanelHeightBridgeTests: XCTestCase {
-    func testCoalescesBurstToNewestHeight() async {
+    /// Main-thread pushes (SwiftUI's interpolation thread) apply synchronously, in push order — that's
+    /// what keeps the AppKit backdrop in the same transaction as the SwiftUI frame it matches.
+    func testMainThreadPushesApplySynchronouslyInOrder() {
         resetBridge()
         defer { resetBridge() }
 
         var applied: [CGFloat] = []
-        let firstApply = expectation(description: "applies coalesced height")
-        let secondApply = expectation(description: "does not replay stale heights")
-        secondApply.isInverted = true
-
-        MenuBarPopover.applyHeight = { height in
-            applied.append(height)
-            if applied.count == 1 {
-                firstApply.fulfill()
-            } else {
-                secondApply.fulfill()
-            }
-        }
+        MenuBarPopover.applyHeight = { applied.append($0) }
 
         PanelHeightBridge.push(520)
         PanelHeightBridge.push(560)
         PanelHeightBridge.push(600)
 
-        await fulfillment(of: [firstApply], timeout: 1)
-        await fulfillment(of: [secondApply], timeout: 0.05)
+        XCTAssertEqual(applied, [520, 560, 600])
+    }
+
+    /// `effectValue` re-pushes the current height on every re-render of the popover root, including
+    /// renders where nothing moved; duplicates must not re-apply identical frames.
+    func testDuplicatePushIsDropped() {
+        resetBridge()
+        defer { resetBridge() }
+
+        var applied: [CGFloat] = []
+        MenuBarPopover.applyHeight = { applied.append($0) }
+
+        PanelHeightBridge.push(600)
+        PanelHeightBridge.push(600)
+        PanelHeightBridge.push(640)
+
+        XCTAssertEqual(applied, [600, 640])
+    }
+
+    /// `invalidate` (panel open/close) clears the duplicate filter, so a reopen that re-establishes
+    /// the same height still reaches the controller.
+    func testInvalidateAllowsSameHeightToReapply() {
+        resetBridge()
+        defer { resetBridge() }
+
+        var applied: [CGFloat] = []
+        MenuBarPopover.applyHeight = { applied.append($0) }
+
+        PanelHeightBridge.push(600)
+        PanelHeightBridge.invalidate()
+        PanelHeightBridge.push(600)
+
+        XCTAssertEqual(applied, [600, 600])
+    }
+
+    func testEffectValuePushesEstablishedHeight() {
+        resetBridge()
+        defer { resetBridge() }
+
+        var applied: [CGFloat] = []
+        MenuBarPopover.applyHeight = { applied.append($0) }
+
+        _ = PanelHeightModifier(height: 640).effectValue(size: CGSize(width: 320, height: 640))
+
+        XCTAssertEqual(applied, [640])
+    }
+
+    /// The off-main safety net: pushes from another thread coalesce into one main-queue apply carrying
+    /// the newest height.
+    func testOffMainBurstCoalescesToNewestHeight() {
+        resetBridge()
+        defer { resetBridge() }
+
+        var applied: [CGFloat] = []
+        let apply = expectation(description: "applies coalesced height")
+        MenuBarPopover.applyHeight = { height in
+            applied.append(height)
+            apply.fulfill()
+        }
+
+        let pushed = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            PanelHeightBridge.push(520)
+            PanelHeightBridge.push(560)
+            PanelHeightBridge.push(600)
+            pushed.signal()
+        }
+        pushed.wait()
+
+        wait(for: [apply], timeout: 1)
         XCTAssertEqual(applied, [600])
     }
 
-    func testInvalidateDropsQueuedHeight() async {
+    /// A queued off-main height must not survive an `invalidate` (the panel closed before the hop ran).
+    func testInvalidateDropsQueuedOffMainHeight() {
         resetBridge()
         defer { resetBridge() }
 
@@ -38,96 +98,19 @@ final class PanelHeightBridgeTests: XCTestCase {
         droppedApply.isInverted = true
         MenuBarPopover.applyHeight = { _ in droppedApply.fulfill() }
 
-        PanelHeightBridge.push(600)
-        PanelHeightBridge.invalidate()
-
-        await fulfillment(of: [droppedApply], timeout: 0.05)
-    }
-
-    func testOpeningAcceptsNewHeightAfterDroppingPreviousSession() async {
-        resetBridge()
-        defer { resetBridge() }
-
-        var applied: [CGFloat] = []
-        let openingApply = expectation(description: "applies this opening's height")
-        MenuBarPopover.applyHeight = { height in
-            applied.append(height)
-            openingApply.fulfill()
+        let pushed = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            PanelHeightBridge.push(600)
+            pushed.signal()
         }
-
-        PanelHeightBridge.push(480) // queued by the previous session
-        PanelHeightBridge.invalidate()
-        PanelHeightBridge.push(760) // measured for the display being opened on now
-
-        await fulfillment(of: [openingApply], timeout: 1)
-        XCTAssertEqual(applied, [760])
-    }
-
-    func testEffectValuePushesEstablishedHeight() async {
-        resetBridge()
-        defer { resetBridge() }
-
-        var applied: [CGFloat] = []
-        let firstApply = expectation(description: "applies established height")
-        MenuBarPopover.applyHeight = { height in
-            applied.append(height)
-            firstApply.fulfill()
-        }
-
-        _ = PanelHeightModifier(height: 640).effectValue(size: CGSize(width: 320, height: 640))
-
-        await fulfillment(of: [firstApply], timeout: 1)
-        XCTAssertEqual(applied, [640])
-    }
-
-    func testPacedModeSkipsMainQueueHopAndExposesNewestHeight() async {
-        resetBridge()
-        defer { resetBridge() }
-
-        let skippedApply = expectation(description: "paced pushes never dispatch an apply")
-        skippedApply.isInverted = true
-        MenuBarPopover.applyHeight = { _ in skippedApply.fulfill() }
-
-        PanelHeightBridge.setPaced(true)
-        PanelHeightBridge.push(520)
-        PanelHeightBridge.push(560)
-
-        await fulfillment(of: [skippedApply], timeout: 0.05)
-        XCTAssertEqual(PanelHeightBridge.takePending(), 560)
-        XCTAssertNil(PanelHeightBridge.takePending(), "takePending consumes the slot")
-    }
-
-    func testInvalidateClearsPendingForPacedConsumer() {
-        resetBridge()
-        defer { resetBridge() }
-
-        PanelHeightBridge.setPaced(true)
-        PanelHeightBridge.push(600)
+        pushed.wait()
         PanelHeightBridge.invalidate()
 
-        XCTAssertNil(PanelHeightBridge.takePending())
-    }
-
-    /// Re-pushing an unchanged height (idle re-renders re-evaluate `effectValue` with the same value)
-    /// must leave nothing pending, so the controller's display link sees a quiet stream and can pause.
-    func testDuplicatePushLeavesNothingPending() {
-        resetBridge()
-        defer { resetBridge() }
-
-        PanelHeightBridge.setPaced(true)
-        PanelHeightBridge.push(600)
-        XCTAssertEqual(PanelHeightBridge.takePending(), 600)
-
-        PanelHeightBridge.push(600)
-        XCTAssertNil(PanelHeightBridge.takePending())
-
-        PanelHeightBridge.push(640)
-        XCTAssertEqual(PanelHeightBridge.takePending(), 640)
+        wait(for: [droppedApply], timeout: 0.05)
     }
 
     private func resetBridge() {
         PanelHeightBridge.invalidate()
-        PanelHeightBridge.setPaced(false)
         MenuBarPopover.applyHeight = nil
     }
 }

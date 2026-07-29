@@ -158,10 +158,9 @@ enum MenuBarPopover {
 
     /// Auto-fit bridge — the "single clock". SwiftUI owns the animated visual height (the window is a
     /// fixed-size transparent canvas and never resizes while open): a SwiftUI `Animatable` modifier
-    /// records each interpolated height in `PanelHeightBridge`, and the controller's display link (or,
-    /// without one, a main-queue hop that invokes `applyHeight`) sizes the AppKit backdrop and shadow
-    /// to the newest height once per display refresh — deferred out of SwiftUI's layout pass, which
-    /// AppKit layout would otherwise re-enter (`_NSDetectedLayoutRecursion`). `clampHeight` lets
+    /// pushes each interpolated height through `PanelHeightBridge`, which invokes `applyHeight`
+    /// synchronously on the main thread so the AppKit backdrop and shadow commit in the same
+    /// transaction as the SwiftUI frame they match (see `PanelHeightBridge`). `clampHeight` lets
     /// SwiftUI clamp its target to the same [min, screen-max] range the panel will actually sit at,
     /// so the spring settles exactly on-frame.
     static var applyHeight: ((CGFloat) -> Void)?

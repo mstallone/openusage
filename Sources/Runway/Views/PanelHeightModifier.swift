@@ -39,32 +39,21 @@ struct PanelHeightModifier: GeometryEffect {
 }
 
 /// Forwards interpolated heights from the (nonisolated) `Animatable` setter to the `@MainActor` panel
-/// controller. Applying synchronously is off the table: the setter fires from inside SwiftUI's update
-/// pass, and resizing the backdrop re-enters AppKit layout — it would trip
-/// `_NSDetectedLayoutRecursion`. So pushes only record the newest pending height, and one of two
-/// deferred consumers applies it:
-///
-/// - **Paced** (the app's normal mode): the panel controller's display link drains `takePending()`
-///   once per display refresh — see `takePending` for why this beats the main-queue hop.
-/// - **Fallback** (no display link installed, e.g. unit tests): a coalesced `DispatchQueue.main`
-///   hop applies the newest pending height just after the update pass unwinds.
-///
-/// Either way bursts coalesce to the newest height, so the panel never replays stale animation frames
-/// after SwiftUI has already moved on. SwiftUI interpolates on the main thread, so `assumeIsolated`
-/// is the right bridge to the `@MainActor` closure in the fallback.
+/// controller. SwiftUI interpolates on the main thread, and the apply is a direct frame set on a
+/// constraint-free sibling view plus a shadow invalidation — nothing that re-enters layout — so pushes
+/// apply **synchronously, inside the same transaction as the SwiftUI frame they match**. That's what
+/// glues the AppKit backdrop to the clipped panel: any deferred apply (a main-queue hop, or the
+/// display link this replaced) lands 0-or-1 frames behind SwiftUI, and during a shrink a one-frame-late
+/// backdrop pokes out below the footer as a trailing tray strip. A coalesced main-queue hop remains
+/// only as a safety net for a push that ever arrives off the main thread.
 enum PanelHeightBridge {
     private struct State {
         var generation = 0
         var pendingHeight: CGFloat?
         var isScheduled = false
-        /// True while the panel controller's display link is draining `takePending()` once per display
-        /// refresh. Pushes then only record the height — no main-queue hop — so each display frame gets
-        /// exactly one apply instead of racing consumers applying two heights back to back.
-        var isPaced = false
-        /// The last height recorded, applied or not. `effectValue` re-pushes the current height on
-        /// every re-render of the popover root — including renders where nothing moved — and dropping
-        /// those duplicates here is what lets the controller's display link see a genuinely quiet
-        /// stream and pause itself.
+        /// The last height pushed. `effectValue` re-pushes the current height on every re-render of
+        /// the popover root — including renders where nothing moved — and dropping those duplicates
+        /// keeps the synchronous path from re-applying identical frames.
         var lastPushed: CGFloat?
     }
 
@@ -85,35 +74,25 @@ enum PanelHeightBridge {
         }
     }
 
-    /// Consume the newest pending height, or `nil` when nothing new arrived. The panel controller's
-    /// display link drains this once per display refresh: the main-queue hop below only runs when the
-    /// run loop goes idle, which a morph's continuous SwiftUI layout passes can starve for several
-    /// frames at a time — the backdrop edge then jumps in visible steps. The display link is a
-    /// run-loop timer source, so it fires between passes at display cadence regardless of idleness.
-    /// Both consumers take from this one slot, so whichever runs first applies the freshest height and
-    /// the other becomes a no-op.
-    nonisolated static func takePending() -> CGFloat? {
-        state.withLock { state in
-            guard let height = state.pendingHeight else { return nil }
-            state.pendingHeight = nil
-            return height
-        }
-    }
-
-    /// Enable or disable display-link pacing (see `State.isPaced`). Survives `invalidate()`, which is
-    /// generation/pending bookkeeping — the pacing mode belongs to the controller's link lifecycle.
-    nonisolated static func setPaced(_ paced: Bool) {
-        state.withLock { $0.isPaced = paced }
-    }
-
     nonisolated static func push(_ height: CGFloat) {
         guard height > 0 else { return }
-        let (scheduled, shouldSchedule) = state.withLock { state -> (Int, Bool) in
-            let scheduled = state.generation
-            guard height != state.lastPushed else { return (scheduled, false) }
+        let isNew = state.withLock { state -> Bool in
+            guard height != state.lastPushed else { return false }
             state.lastPushed = height
+            return true
+        }
+        guard isNew else { return }
+        // Normal path: same thread, same transaction — the backdrop commits with this exact frame.
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                MenuBarPopover.applyHeight?(height)
+            }
+            return
+        }
+        let (scheduled, shouldSchedule) = state.withLock { state -> (Int, Bool) in
             state.pendingHeight = height
-            guard !state.isPaced, !state.isScheduled else { return (scheduled, false) }
+            let scheduled = state.generation
+            guard !state.isScheduled else { return (scheduled, false) }
             state.isScheduled = true
             return (scheduled, true)
         }
