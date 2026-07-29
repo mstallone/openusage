@@ -9,6 +9,8 @@ struct PopoverFooter: View {
     let horizontalPadding: CGFloat
     let onHeightChange: (PopoverScreen, CGFloat) -> Void
 
+    @Environment(\.popoverIsVisible) private var popoverIsVisible
+
     @ViewBuilder
     var body: some View {
         Group {
@@ -68,15 +70,13 @@ struct PopoverFooter: View {
         Button {
             refreshNow()
         } label: {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                HStack(spacing: 5) {
-                    Text(updateStatusText(now: context.date))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                    if isUpdating {
-                        ProgressView()
-                            .controlSize(.mini)
+            Group {
+                if popoverIsVisible {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        updateStatusLabel(now: context.date)
                     }
+                } else {
+                    updateStatusLabel(now: Date())
                 }
             }
             .contentShape(Rectangle())
@@ -85,6 +85,18 @@ struct PopoverFooter: View {
         .keyboardShortcut("r", modifiers: .command)
         .hoverTooltip("Refresh now (⌘R)")
         .disabled(isUpdating)
+    }
+
+    private func updateStatusLabel(now: Date) -> some View {
+        HStack(spacing: 5) {
+            Text(updateStatusText(now: now))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+            if isUpdating {
+                ProgressView()
+                    .controlSize(.mini)
+            }
+        }
     }
 
     private var isUpdating: Bool {

@@ -281,11 +281,16 @@ actor JSONLScanCacheWriter {
                         identity: identity,
                         fileName: metadata.recordFileName
                     )
-                    guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-                          let record = try? recordDecoder.decode(
-                              JSONLScanCacheRecord<Item>.self,
-                              from: data
-                          ),
+                    let record: JSONLScanCacheRecord<Item>? = autoreleasepool {
+                        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
+                            return nil
+                        }
+                        return try? recordDecoder.decode(
+                            JSONLScanCacheRecord<Item>.self,
+                            from: data
+                        )
+                    }
+                    guard let record,
                           record.path == path,
                           record.size == metadata.size,
                           record.mtime == metadata.mtime
