@@ -1,6 +1,20 @@
 import AppKit
 import SwiftUI
 
+/// One native tooltip region over the flattened Text strip, expressed in the rendered image's point
+/// coordinates. `StatusItemController` maps it into the status button without adding child views, so
+/// the whole item keeps its existing click target.
+struct MenuBarToolTipRegion: Equatable {
+    let displayName: String
+    let rect: CGRect
+}
+
+/// The flattened menu-bar image plus any native tooltip regions that belong over it.
+struct MenuBarStripPresentation {
+    let image: NSImage
+    let toolTipRegions: [MenuBarToolTipRegion]
+}
+
 /// Renders the Text-style menu-bar strip (`MenuBarContent`) into a template `NSImage` for the
 /// `MenuBarExtra` label: provider mark + bare value for a single metric, or a tight labeled stack for
 /// two. Black-on-clear so macOS tints it for light/dark; sized to its natural width. The image is built
@@ -11,24 +25,39 @@ enum MenuBarStripRenderer {
     /// write — several times per refresh pass — but the strip's visible content rarely changes.
     /// Returning the same `NSImage` instance lets SwiftUI skip the status-item update, and keeps
     /// `ImageRenderer` (which retains a little memory per run on macOS) to actual visual changes.
-    private static var lastRender: (content: MenuBarContent, style: MenuBarStyle, image: NSImage?)?
+    private static var lastRender: (
+        content: MenuBarContent,
+        style: MenuBarStyle,
+        presentation: MenuBarStripPresentation?
+    )?
 
     /// The strip image for the given content and style, or `nil` when the content renders nothing
     /// in that style (caller falls back to the app icon). Memoized: equal inputs return the
     /// previously rendered instance.
     static func image(for content: MenuBarContent, style: MenuBarStyle) -> NSImage? {
+        presentation(for: content, style: style)?.image
+    }
+
+    /// The flattened strip image and its Text-only account tooltip regions. Bars deliberately carry
+    /// no regions: they flatten metrics across providers and therefore have no segment-to-account
+    /// geometry to label.
+    static func presentation(for content: MenuBarContent, style: MenuBarStyle) -> MenuBarStripPresentation? {
         if let lastRender, lastRender.content == content, lastRender.style == style {
             AppLog.debug(.menubar, "strip cache hit")
-            return lastRender.image
+            return lastRender.presentation
         }
         AppLog.debug(.menubar, "strip cache miss (rendering)")
-        let image: NSImage?
+        let presentation: MenuBarStripPresentation?
         switch style {
-        case .text: image = textImage(for: content)
-        case .bars: image = barsImage(for: content)
+        case .text:
+            presentation = textPresentation(for: content)
+        case .bars:
+            presentation = barsImage(for: content).map {
+                MenuBarStripPresentation(image: $0, toolTipRegions: [])
+            }
         }
-        lastRender = (content, style, image)
-        return image
+        lastRender = (content, style, presentation)
+        return presentation
     }
 
     /// The pinned-metrics strip, or `nil` when nothing is pinned or no pinned metric has data yet
@@ -39,6 +68,10 @@ enum MenuBarStripRenderer {
     /// item past its artwork (the menu bar already pads every item, so baked-in margins read as an
     /// extra-large gap next to neighboring items).
     static func textImage(for content: MenuBarContent) -> NSImage? {
+        textPresentation(for: content)?.image
+    }
+
+    private static func textPresentation(for content: MenuBarContent) -> MenuBarStripPresentation? {
         guard !content.isEmpty else { return nil }
         let renderer = ImageRenderer(content: MenuBarTextStrip(content: content))
         renderer.scale = 2
@@ -50,7 +83,48 @@ enum MenuBarStripRenderer {
         )
         image.isTemplate = true
         image.accessibilityDescription = content.accessibilityText
-        return image
+        return MenuBarStripPresentation(
+            image: image,
+            toolTipRegions: textToolTipRegions(for: content, imageSize: image.size)
+        )
+    }
+
+    /// Measures each segment using the exact view shared by the flattened strip, then partitions the
+    /// final trimmed image at the midpoint of each 11-point inter-segment gap. Scaling the natural
+    /// widths back onto the trimmed image absorbs the small transparent edge crop without changing the
+    /// strip renderer or leaving dead hover gaps between adjacent accounts.
+    private static func textToolTipRegions(
+        for content: MenuBarContent,
+        imageSize: NSSize
+    ) -> [MenuBarToolTipRegion] {
+        guard !content.groups.isEmpty, imageSize.width > 0 else { return [] }
+        let widths = content.groups.compactMap { group -> CGFloat? in
+            let renderer = ImageRenderer(content: MenuBarTextSegment(group: group))
+            renderer.scale = 2
+            return renderer.cgImage.map { CGFloat($0.width) / renderer.scale }
+        }
+        guard widths.count == content.groups.count else { return [] }
+
+        let spacing = MenuBarTextStrip.segmentSpacing
+        let naturalWidth = widths.reduce(0, +) + spacing * CGFloat(max(0, widths.count - 1))
+        guard naturalWidth > 0 else { return [] }
+        let scale = imageSize.width / naturalWidth
+
+        var segmentX: CGFloat = 0
+        return zip(content.groups.indices, zip(content.groups, widths)).map { index, pair in
+            let (group, width) = pair
+            let minX = index == content.groups.startIndex
+                ? 0
+                : (segmentX - spacing / 2) * scale
+            let maxX = index == content.groups.index(before: content.groups.endIndex)
+                ? imageSize.width
+                : (segmentX + width + spacing / 2) * scale
+            segmentX += width + spacing
+            return MenuBarToolTipRegion(
+                displayName: group.displayName,
+                rect: CGRect(x: minX, y: 0, width: max(0, maxX - minX), height: imageSize.height)
+            )
+        }
     }
 
     /// Crops fully transparent margins off a rendered strip, or `nil` when the image has no visible
@@ -154,20 +228,31 @@ private struct MenuBarPrivacyLabel: View {
 
 private struct MenuBarTextStrip: View {
     let content: MenuBarContent
+    static let segmentSpacing: CGFloat = 11
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: Self.segmentSpacing) {
             ForEach(content.groups, id: \.providerID) { group in
-                HStack(spacing: 4) {
-                    glyph(group.icon)
-                    metricsView(group.metrics)
-                }
+                MenuBarTextSegment(group: group)
             }
         }
         .foregroundStyle(.black)
-        .monospacedDigit()
         .padding(.horizontal, 2)
         .padding(.vertical, 1)
+        .fixedSize()
+    }
+}
+
+/// One provider/account segment shared by the flattened strip and its tooltip-width measurement.
+private struct MenuBarTextSegment: View {
+    let group: MenuBarContent.Group
+
+    var body: some View {
+        HStack(spacing: 4) {
+            glyph(group.icon)
+            metricsView(group.metrics)
+        }
+        .monospacedDigit()
         .fixedSize()
     }
 

@@ -27,6 +27,9 @@ final class MenuBarPanel: NSPanel {
 final class StatusItemController: NSObject {
     private let container: AppContainer
     private let statusItem: NSStatusItem
+    /// Native tooltip registrations over the flattened Text strip. They live on the existing status
+    /// button and therefore do not split or intercept its whole-item click target.
+    private let toolTipCoordinator: StatusItemToolTipCoordinator
     /// Owns the menu-bar strip render loop. Its apply closure captures the `NSStatusItem` directly
     /// (which never retains the controller), so this can be a plain non-optional `let`.
     private let imageUpdater: StatusItemImageUpdater
@@ -52,11 +55,19 @@ final class StatusItemController: NSObject {
         self.container = container
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.statusItem = statusItem
+        let toolTipCoordinator = StatusItemToolTipCoordinator()
+        self.toolTipCoordinator = toolTipCoordinator
         // Captures the status item, not `self` — no retain cycle, and no optional property just to
         // work around `[weak self]` being unavailable before `super.init()`. The button is resolved
         // lazily at each apply, so a not-yet-configured button is harmless (same as before the split).
-        self.imageUpdater = StatusItemImageUpdater(container: container) { image in
-            statusItem.button?.image = image
+        self.imageUpdater = StatusItemImageUpdater(container: container) { presentation in
+            guard let button = statusItem.button else { return }
+            button.image = presentation.image
+            toolTipCoordinator.apply(
+                presentation.toolTipRegions,
+                imageSize: presentation.image.size,
+                to: button
+            )
         }
 
         let hosting = NSHostingController(
@@ -363,4 +374,94 @@ final class StatusItemController: NSObject {
         panel.makeFirstResponder(nil)
     }
 
+}
+
+/// Pure mapping from flattened-image coordinates into the existing status-button coordinate space.
+/// The regions use the button's full height for an easy native hover target while preserving their
+/// per-segment horizontal boundaries.
+enum StatusItemToolTipGeometry {
+    static func buttonRects(
+        for regions: [MenuBarToolTipRegion],
+        imageSize: NSSize,
+        imageRect: NSRect,
+        buttonBounds: NSRect
+    ) -> [NSRect] {
+        guard imageSize.width > 0, imageRect.width > 0 else { return [] }
+        let horizontalScale = imageRect.width / imageSize.width
+        return regions.map { region in
+            let minX = max(buttonBounds.minX, imageRect.minX + region.rect.minX * horizontalScale)
+            let maxX = min(buttonBounds.maxX, imageRect.minX + region.rect.maxX * horizontalScale)
+            return NSRect(
+                x: minX,
+                y: buttonBounds.minY,
+                width: max(0, maxX - minX),
+                height: buttonBounds.height
+            )
+        }
+    }
+}
+
+/// Owns AppKit's tooltip tags and their string providers. Re-applying first removes the old tags so
+/// style changes, data-width changes, renames, privacy concealment, and provider disappearance cannot
+/// leave stale hover regions behind.
+@MainActor
+private final class StatusItemToolTipCoordinator {
+    private weak var button: NSStatusBarButton?
+    private var tags: [NSView.ToolTipTag] = []
+    private var owners: [StatusItemToolTipOwner] = []
+
+    func apply(
+        _ regions: [MenuBarToolTipRegion],
+        imageSize: NSSize,
+        to button: NSStatusBarButton
+    ) {
+        clear()
+        self.button = button
+        guard !regions.isEmpty else { return }
+
+        button.layoutSubtreeIfNeeded()
+        let imageRect = button.cell?.imageRect(forBounds: button.bounds) ?? button.bounds
+        let rects = StatusItemToolTipGeometry.buttonRects(
+            for: regions,
+            imageSize: imageSize,
+            imageRect: imageRect,
+            buttonBounds: button.bounds
+        )
+        for (region, rect) in zip(regions, rects) where !rect.isEmpty {
+            let owner = StatusItemToolTipOwner(displayName: region.displayName)
+            owners.append(owner)
+            tags.append(button.addToolTip(rect, owner: owner, userData: nil))
+        }
+    }
+
+    private func clear() {
+        if let button {
+            for tag in tags {
+                button.removeToolTip(tag)
+            }
+        }
+        tags.removeAll(keepingCapacity: true)
+        owners.removeAll(keepingCapacity: true)
+        button = nil
+    }
+}
+
+/// One retained owner per tooltip region. AppKit asks it for the account title only after its native
+/// hover delay, so the status item pays no custom mouse-tracking or popover cost.
+@MainActor
+private final class StatusItemToolTipOwner: NSObject, NSViewToolTipOwner {
+    private let displayName: String
+
+    init(displayName: String) {
+        self.displayName = displayName
+    }
+
+    func view(
+        _ view: NSView,
+        stringForToolTip tag: NSView.ToolTipTag,
+        point: NSPoint,
+        userData data: UnsafeMutableRawPointer?
+    ) -> String {
+        displayName
+    }
 }
