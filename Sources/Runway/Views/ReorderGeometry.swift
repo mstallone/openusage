@@ -129,6 +129,17 @@ struct ReorderFramePreferenceKey: PreferenceKey {
     }
 }
 
+/// The latest reorder-row frames, held behind a plain reference (deliberately NOT `@Observable` /
+/// `@State`-value semantics). Row frames change on every animation frame of a card-expand or
+/// window-height morph, and storing them as view state re-rendered the whole list per frame — the
+/// main-thread churn that made the panel's growth visibly stutter. Gestures instead read `frames`
+/// through this box at event time, which also means mid-drag hit-testing always sees the current
+/// layout rather than a render-time snapshot.
+@MainActor
+final class ReorderFrameStore {
+    var frames: [String: CGRect] = [:]
+}
+
 extension View {
     func reorderFrame(id: String, in coordinateSpace: CoordinateSpace, yOutset: CGFloat = 0) -> some View {
         background(
@@ -150,7 +161,7 @@ extension View {
 func reorderDragGesture(
     id: String,
     coordinateSpaceName: String,
-    rowFrames: [String: CGRect],
+    rowFrames: ReorderFrameStore,
     active: Binding<String?>,
     lift: Binding<ReorderLift?>,
     makeLift: @escaping (DragGesture.Value) -> ReorderLift?,
@@ -166,7 +177,7 @@ func reorderDragGesture(
             lift.wrappedValue?.location = value.location
             guard let target = reorderTarget(
                 at: value.location,
-                in: rowFrames,
+                in: rowFrames.frames,
                 excluding: id,
                 orderedIDs: orderedIDs()
             ) else { return }

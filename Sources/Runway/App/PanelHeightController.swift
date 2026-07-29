@@ -1,10 +1,21 @@
 import AppKit
+import QuartzCore
 
 /// Owns the menu-bar panel's placement and content-driven height changes. The status-item controller
 /// still owns panel creation and show/hide; this type owns only the height boundary between SwiftUI and
 /// AppKit.
+///
+/// A height morph never resizes the window at all: `NSWindow.setFrame` forces a synchronous
+/// window-server commit (backing-store reallocation + frame/content sync), and even occasional
+/// mid-interaction resizes stretch the hosting layer for a frame and read as jank. Instead the window
+/// opens **once per session at the screen-clamped maximum height** and stays there; the *visual*
+/// panel — the AppKit backdrop via `onVisualHeightChange`, and SwiftUI's own height-framed,
+/// corner-clipped content — grows and shrinks inside it on SwiftUI's clock. The window's uncovered
+/// region renders fully transparent (and passes clicks through to whatever is beneath), so nothing is
+/// visible there. Outside-click dismissal therefore hit-tests the visual panel rect, not the window
+/// frame (`PanelOutsideClickMonitor`).
 @MainActor
-final class PanelHeightController {
+final class PanelHeightController: NSObject {
     static let panelWidth: CGFloat = 320
     static let defaultHeight: CGFloat = 800
 
@@ -16,6 +27,20 @@ final class PanelHeightController {
     private var anchorTopLeft: NSPoint?
     private var morphSettleTask: Task<Void, Never>?
     private(set) var isMorphing = false
+    /// Paces morph frames while the panel is open: once per display refresh it drains the newest
+    /// height from `PanelHeightBridge` and applies it. See `PanelHeightBridge.takePending` for why the
+    /// main-queue hop alone isn't enough. Pauses itself after a morph goes quiet (so an idle popover
+    /// costs no timer wakeups and doesn't pin ProMotion at full rate) and resumes on the next height
+    /// push, which arrives through the bridge's main-queue fallback while paced.
+    private var displayLink: CADisplayLink?
+    /// Consecutive display-link ticks with nothing pending; drives the idle pause above.
+    private var idleTicks = 0
+    /// The height of the panel the user actually sees — the backdrop and the SwiftUI-clipped content,
+    /// always ≤ the fixed window height. This is also the height that gets remembered per screen.
+    private(set) var visualHeight: CGFloat = PanelHeightController.defaultHeight
+    /// Installed by `StatusItemController`: sizes the AppKit backdrop (the tray / vibrancy layers) to
+    /// the visual height so the revealed panel and its backing always match.
+    var onVisualHeightChange: ((CGFloat) -> Void)?
 
     init(
         panel: MenuBarPanel,
@@ -27,14 +52,17 @@ final class PanelHeightController {
         self.currentScreen = currentScreen
     }
 
-    /// Installs the two narrow callbacks SwiftUI uses: apply one animated frame and clamp a target to
-    /// the available display height.
+    /// Installs the narrow callbacks SwiftUI uses: apply one animated visual height, clamp a target to
+    /// the available display height, and read the opening height for the first pre-measurement render.
     func installBridge() {
         MenuBarPopover.applyHeight = { [weak self] height in
-            self?.applyMorphHeight(height)
+            self?.applyVisualHeight(height)
         }
         MenuBarPopover.clampHeight = { [weak self] rawHeight in
             self?.clampedHeight(rawHeight) ?? rawHeight
+        }
+        MenuBarPopover.openingHeight = { [weak self] in
+            self?.visualHeight ?? Self.defaultHeight
         }
     }
 
@@ -55,19 +83,24 @@ final class PanelHeightController {
         )
         anchorTopLeft = topLeft
 
-        let remembered = loadHeight(for: currentScreen()) ?? Self.defaultHeight
-        let height = clampedHeight(remembered)
+        // The window takes the whole allowed height for the session; only the visual panel (backdrop +
+        // SwiftUI content) opens at the remembered guess and animates from there.
         panel.setFrame(
-            PanelGeometry.frame(topLeft: topLeft, width: Self.panelWidth, height: height),
+            PanelGeometry.frame(topLeft: topLeft, width: Self.panelWidth, height: maximumHeight()),
             display: false
         )
+        let remembered = loadHeight(for: currentScreen()) ?? Self.defaultHeight
+        let height = clampedHeight(remembered)
+        visualHeight = height
+        onVisualHeightChange?(height)
         panel.invalidateShadow()
+        startDisplayLink()
     }
 
     /// Saves before the caller changes screens or orders the panel out.
     func saveBeforeClosing() {
         guard panel.isVisible else { return }
-        saveHeight(panel.frame.height, for: currentScreen())
+        saveHeight(visualHeight, for: currentScreen())
     }
 
     /// Clears all opening-session state after the panel is ordered out.
@@ -76,21 +109,75 @@ final class PanelHeightController {
         anchorScreen = nil
         morphSettleTask?.cancel()
         isMorphing = false
+        displayLink?.invalidate()
+        displayLink = nil
+        PanelHeightBridge.setPaced(false)
         PanelHeightBridge.invalidate()
     }
 
-    private func applyMorphHeight(_ rawHeight: CGFloat) {
-        guard rawHeight > 1, panel.isVisible else { return }
-        guard let anchorTopLeft else {
-            AppLog.error(.statusItem, "Morph height while visible but no anchor; frame not applied")
+    private func startDisplayLink() {
+        guard displayLink == nil, let view = panel.contentView else { return }
+        let link = view.displayLink(target: self, selector: #selector(displayLinkFired))
+        // Without a floor the link downclocks when morph frames run long, and the panel edge visibly
+        // notches; ask for the display's full rate and let the idle pause handle the quiet stretches.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+        idleTicks = 0
+        PanelHeightBridge.setPaced(true)
+    }
+
+    /// Quiet ticks before the link pauses itself: long enough to outlast a spring's sub-pixel tail
+    /// (which the apply threshold below drops), short enough that an open-and-idle popover stops
+    /// ticking within a second.
+    private static let idleTicksBeforePause = 60
+
+    @objc private func displayLinkFired() {
+        guard let height = PanelHeightBridge.takePending() else {
+            idleTicks += 1
+            if idleTicks >= Self.idleTicksBeforePause {
+                pauseDisplayLink()
+            }
             return
         }
+        idleTicks = 0
+        applyVisualHeight(height)
+    }
+
+    /// Hand consumption back to the bridge's main-queue fallback, then stop ticking. Order matters:
+    /// once pacing is off, a concurrent push schedules its own fallback apply, and `resumePacing`
+    /// restarts the link — so drain anything that squeaked in between under the old mode before
+    /// actually pausing.
+    private func pauseDisplayLink() {
+        PanelHeightBridge.setPaced(false)
+        if let height = PanelHeightBridge.takePending() {
+            PanelHeightBridge.setPaced(true)
+            applyVisualHeight(height)
+            return
+        }
+        displayLink?.isPaused = true
+    }
+
+    /// Called from the fallback apply while the link is paused: take over pacing again for the morph
+    /// that just started.
+    private func resumePacingIfNeeded() {
+        guard let displayLink, displayLink.isPaused else { return }
+        displayLink.isPaused = false
+        idleTicks = 0
+        PanelHeightBridge.setPaced(true)
+    }
+
+    private func applyVisualHeight(_ rawHeight: CGFloat) {
+        guard rawHeight > 1, panel.isVisible else { return }
+        resumePacingIfNeeded()
         let height = clampedHeight(rawHeight)
-        guard abs(panel.frame.height - height) > 1 else { return }
-        panel.setFrame(
-            PanelGeometry.frame(topLeft: anchorTopLeft, width: Self.panelWidth, height: height),
-            display: false
-        )
+        guard abs(visualHeight - height) > 0.5 else { return }
+        visualHeight = height
+        onVisualHeightChange?(height)
+        // The shadow follows the window's rendered alpha shape — the visual panel, not the fixed
+        // window frame — so refresh it as the shape animates. This is the only per-frame AppKit work
+        // a morph does; the window itself never moves.
+        panel.invalidateShadow()
         isMorphing = true
         scheduleMorphSettle()
     }
@@ -101,11 +188,8 @@ final class PanelHeightController {
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled, let self, self.panel.isVisible else { return }
             self.isMorphing = false
-            // Rebuilding the window shadow on every interpolated frame adds AppKit work without
-            // changing content layout. Keep the existing shadow during the brief morph and refresh
-            // it once for the settled frame.
             self.panel.invalidateShadow()
-            self.saveHeight(self.panel.frame.height, for: self.currentScreen())
+            self.saveHeight(self.visualHeight, for: self.currentScreen())
         }
     }
 

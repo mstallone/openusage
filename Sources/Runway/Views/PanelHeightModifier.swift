@@ -1,18 +1,19 @@
 import SwiftUI
 import os
 
-/// Drives the host panel's height on SwiftUI's animation clock. This is the "single clock" that fixes
-/// the old stutter and the diagonal jank: instead of AppKit running its own `setFrame` animation
-/// alongside SwiftUI's screen-slide (two clocks fighting), the window is a passive follower of one
-/// SwiftUI-owned, animated value.
+/// Drives the AppKit side of the visual panel — the backdrop height and the window shadow — on
+/// SwiftUI's animation clock. This is the "single clock": SwiftUI owns the animated panel height (the
+/// window itself is a fixed-size transparent canvas that never resizes while open, see
+/// `PanelHeightController`), and AppKit passively follows the same value, so the tray/vibrancy backing
+/// can never fight or lag the SwiftUI-rendered panel by more than a frame.
 ///
 /// `animatableData == height` is the per-frame interpolation hook: during a `withAnimation`, the
 /// animation system sets `animatableData` once per display refresh with the interpolated height, and
-/// the setter forwards it (via `PanelHeightBridge`) to the panel — so the window frame and the screen
-/// slide ride the *same* spring. `effectValue` also forwards the current value so non-animated height
-/// establishments still resize the panel. A height of 0 is the "not established yet" sentinel (the
-/// panel keeps the size the controller opened it at) and is skipped, so the first render before
-/// measurement lands never pushes a bogus frame.
+/// the setter forwards it (via `PanelHeightBridge`) to the controller — so the backdrop and the
+/// SwiftUI panel ride the *same* spring. `effectValue` also forwards the current value so non-animated
+/// height establishments still resize the backdrop. A height of 0 is the "not established yet"
+/// sentinel (the backdrop keeps the opening-guess size the controller seeded) and is skipped, so the
+/// first render before measurement lands never pushes a bogus height.
 ///
 /// Built as a `GeometryEffect` (like `DenyShakeEffect`) rather than a plain `ViewModifier`: a custom
 /// `ViewModifier` that implements `body` is inferred `@MainActor` (because `ViewModifier.body` is), which
@@ -38,18 +39,33 @@ struct PanelHeightModifier: GeometryEffect {
 }
 
 /// Forwards interpolated heights from the (nonisolated) `Animatable` setter to the `@MainActor` panel
-/// bridge. The hop onto the main queue is MANDATORY and lives here: the setter fires from inside
-/// SwiftUI's update pass, and `applyHeight`'s `setFrame` re-enters AppKit layout on the
-/// constraint-pinned host — running it synchronously would trip `_NSDetectedLayoutRecursion`. The hop
-/// lands it just after the pass unwinds, still within the same display interval. Bursts are coalesced
-/// to the newest pending height so the panel never replays stale animation frames after SwiftUI has
-/// already moved on. SwiftUI interpolates on the main thread, so `assumeIsolated` is the right bridge
-/// to the `@MainActor` closure.
+/// controller. Applying synchronously is off the table: the setter fires from inside SwiftUI's update
+/// pass, and resizing the backdrop re-enters AppKit layout — it would trip
+/// `_NSDetectedLayoutRecursion`. So pushes only record the newest pending height, and one of two
+/// deferred consumers applies it:
+///
+/// - **Paced** (the app's normal mode): the panel controller's display link drains `takePending()`
+///   once per display refresh — see `takePending` for why this beats the main-queue hop.
+/// - **Fallback** (no display link installed, e.g. unit tests): a coalesced `DispatchQueue.main`
+///   hop applies the newest pending height just after the update pass unwinds.
+///
+/// Either way bursts coalesce to the newest height, so the panel never replays stale animation frames
+/// after SwiftUI has already moved on. SwiftUI interpolates on the main thread, so `assumeIsolated`
+/// is the right bridge to the `@MainActor` closure in the fallback.
 enum PanelHeightBridge {
     private struct State {
         var generation = 0
         var pendingHeight: CGFloat?
         var isScheduled = false
+        /// True while the panel controller's display link is draining `takePending()` once per display
+        /// refresh. Pushes then only record the height — no main-queue hop — so each display frame gets
+        /// exactly one apply instead of racing consumers applying two heights back to back.
+        var isPaced = false
+        /// The last height recorded, applied or not. `effectValue` re-pushes the current height on
+        /// every re-render of the popover root — including renders where nothing moved — and dropping
+        /// those duplicates here is what lets the controller's display link see a genuinely quiet
+        /// stream and pause itself.
+        var lastPushed: CGFloat?
     }
 
     /// Bumped on every panel open and close. A queued height is applied only if the generation is
@@ -65,15 +81,39 @@ enum PanelHeightBridge {
             $0.generation += 1
             $0.pendingHeight = nil
             $0.isScheduled = false
+            $0.lastPushed = nil
         }
+    }
+
+    /// Consume the newest pending height, or `nil` when nothing new arrived. The panel controller's
+    /// display link drains this once per display refresh: the main-queue hop below only runs when the
+    /// run loop goes idle, which a morph's continuous SwiftUI layout passes can starve for several
+    /// frames at a time — the backdrop edge then jumps in visible steps. The display link is a
+    /// run-loop timer source, so it fires between passes at display cadence regardless of idleness.
+    /// Both consumers take from this one slot, so whichever runs first applies the freshest height and
+    /// the other becomes a no-op.
+    nonisolated static func takePending() -> CGFloat? {
+        state.withLock { state in
+            guard let height = state.pendingHeight else { return nil }
+            state.pendingHeight = nil
+            return height
+        }
+    }
+
+    /// Enable or disable display-link pacing (see `State.isPaced`). Survives `invalidate()`, which is
+    /// generation/pending bookkeeping — the pacing mode belongs to the controller's link lifecycle.
+    nonisolated static func setPaced(_ paced: Bool) {
+        state.withLock { $0.isPaced = paced }
     }
 
     nonisolated static func push(_ height: CGFloat) {
         guard height > 0 else { return }
-        let (scheduled, shouldSchedule) = state.withLock { state in
-            state.pendingHeight = height
+        let (scheduled, shouldSchedule) = state.withLock { state -> (Int, Bool) in
             let scheduled = state.generation
-            guard !state.isScheduled else { return (scheduled, false) }
+            guard height != state.lastPushed else { return (scheduled, false) }
+            state.lastPushed = height
+            state.pendingHeight = height
+            guard !state.isPaced, !state.isScheduled else { return (scheduled, false) }
             state.isScheduled = true
             return (scheduled, true)
         }
@@ -95,8 +135,9 @@ enum PanelHeightBridge {
 }
 
 extension View {
-    /// Make this view's enclosing menu-bar panel follow `height` on SwiftUI's animation clock. Attach
-    /// at the body root, outside any `.animation(nil, …)` scope, so the height rides the active spring.
+    /// Make the panel's AppKit backing (backdrop + shadow) follow `height` on SwiftUI's animation
+    /// clock. Attach at the body root, outside any `.animation(nil, …)` scope, so the height rides the
+    /// active spring.
     func drivesPanelHeight(_ height: CGFloat) -> some View {
         modifier(PanelHeightModifier(height: height))
     }

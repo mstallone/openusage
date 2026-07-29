@@ -156,15 +156,21 @@ enum MenuBarPopover {
     /// quota pace notification banner).
     static var showHandler: (() -> Void)?
 
-    /// Auto-resize bridge — the "single clock". SwiftUI owns the animated height and the AppKit panel
-    /// is a passive follower: `applyHeight` is called once per animation frame from a SwiftUI
-    /// `Animatable` modifier with the interpolated height, and the controller hops it onto the main
-    /// queue (mandatory — it's invoked from inside SwiftUI's layout pass, and `setFrame` re-enters
-    /// AppKit layout on the constraint-pinned host, which would trip `_NSDetectedLayoutRecursion`) and
-    /// `setFrame`s the panel. `clampHeight` lets SwiftUI clamp its target to the same [min, screen-max]
-    /// range the panel will actually sit at, so the spring settles exactly on-frame.
+    /// Auto-fit bridge — the "single clock". SwiftUI owns the animated visual height (the window is a
+    /// fixed-size transparent canvas and never resizes while open): a SwiftUI `Animatable` modifier
+    /// records each interpolated height in `PanelHeightBridge`, and the controller's display link (or,
+    /// without one, a main-queue hop that invokes `applyHeight`) sizes the AppKit backdrop and shadow
+    /// to the newest height once per display refresh — deferred out of SwiftUI's layout pass, which
+    /// AppKit layout would otherwise re-enter (`_NSDetectedLayoutRecursion`). `clampHeight` lets
+    /// SwiftUI clamp its target to the same [min, screen-max] range the panel will actually sit at,
+    /// so the spring settles exactly on-frame.
     static var applyHeight: ((CGFloat) -> Void)?
     static var clampHeight: ((CGFloat) -> CGFloat)?
+    /// Installed by `PanelHeightController`: the visual height the panel opened at (the remembered
+    /// per-screen guess). `DashboardView` renders the panel at this height until the first content
+    /// measurement establishes the real one — the window itself is a fixed-size transparent canvas
+    /// (see `PanelHeightController`), so without this the pre-measurement panel would fill it whole.
+    static var openingHeight: (() -> CGFloat)?
 
     /// Closes the popover. Falls back to ordering the given window out if no owner has installed
     /// a handler (which would be a wiring bug, so it's logged loudly by the caller's absence of

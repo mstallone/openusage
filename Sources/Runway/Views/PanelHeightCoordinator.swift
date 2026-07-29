@@ -12,7 +12,7 @@ import Observation
 @MainActor
 @Observable
 final class PanelHeightCoordinator {
-    /// The window height each screen wants (top bar + footer + scroll content) — the morph target the
+    /// The panel height each screen wants (top bar + footer + scroll content) — the morph target the
     /// view animates toward. `private(set)`: written only through the measurement setters below.
     private(set) var measuredIdeal: [PopoverScreen: CGFloat] = [:]
 
@@ -38,9 +38,9 @@ final class PanelHeightCoordinator {
         recomposeIdeal(for: screen)
     }
 
-    /// Sum a screen's measured parts into its ideal window height. The dashboard shows no top bar; other
+    /// Sum a screen's measured parts into its ideal panel height. The dashboard shows no top bar; other
     /// screens pin it to `topBarHeight`. A zero/absent scroll content leaves the ideal unset (not yet
-    /// measured), so the view keeps the size the controller opened at until a real measurement lands.
+    /// measured), so the view keeps the controller's opening guess until a real measurement lands.
     private func recomposeIdeal(for screen: PopoverScreen) {
         guard let content = measuredScrollContent[screen], content > 0 else { return }
         let topBar: CGFloat = screen == .dashboard ? 0 : topBarHeight

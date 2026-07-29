@@ -80,8 +80,54 @@ final class PanelHeightBridgeTests: XCTestCase {
         XCTAssertEqual(applied, [640])
     }
 
+    func testPacedModeSkipsMainQueueHopAndExposesNewestHeight() async {
+        resetBridge()
+        defer { resetBridge() }
+
+        let skippedApply = expectation(description: "paced pushes never dispatch an apply")
+        skippedApply.isInverted = true
+        MenuBarPopover.applyHeight = { _ in skippedApply.fulfill() }
+
+        PanelHeightBridge.setPaced(true)
+        PanelHeightBridge.push(520)
+        PanelHeightBridge.push(560)
+
+        await fulfillment(of: [skippedApply], timeout: 0.05)
+        XCTAssertEqual(PanelHeightBridge.takePending(), 560)
+        XCTAssertNil(PanelHeightBridge.takePending(), "takePending consumes the slot")
+    }
+
+    func testInvalidateClearsPendingForPacedConsumer() {
+        resetBridge()
+        defer { resetBridge() }
+
+        PanelHeightBridge.setPaced(true)
+        PanelHeightBridge.push(600)
+        PanelHeightBridge.invalidate()
+
+        XCTAssertNil(PanelHeightBridge.takePending())
+    }
+
+    /// Re-pushing an unchanged height (idle re-renders re-evaluate `effectValue` with the same value)
+    /// must leave nothing pending, so the controller's display link sees a quiet stream and can pause.
+    func testDuplicatePushLeavesNothingPending() {
+        resetBridge()
+        defer { resetBridge() }
+
+        PanelHeightBridge.setPaced(true)
+        PanelHeightBridge.push(600)
+        XCTAssertEqual(PanelHeightBridge.takePending(), 600)
+
+        PanelHeightBridge.push(600)
+        XCTAssertNil(PanelHeightBridge.takePending())
+
+        PanelHeightBridge.push(640)
+        XCTAssertEqual(PanelHeightBridge.takePending(), 640)
+    }
+
     private func resetBridge() {
         PanelHeightBridge.invalidate()
+        PanelHeightBridge.setPaced(false)
         MenuBarPopover.applyHeight = nil
     }
 }

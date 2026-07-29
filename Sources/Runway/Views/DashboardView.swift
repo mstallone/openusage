@@ -13,10 +13,12 @@ import SwiftUI
 /// `.scrollEdgeEffectStyle(.soft)`, macOS 26+) — Apple's blurred boundary, not a custom gradient or a
 /// material bar. On macOS 15 the footer/top bar still pin via `safeAreaInset`, just without the blur
 /// (content scrolls flush). The panel **auto-fits its content**: each screen publishes its intrinsic
-/// height (`ScrollContentHeightKey` + the measured footer), and the host window is driven to that on
-/// SwiftUI's animation clock (`drivesPanelHeight` / `PanelHeightModifier`). The destination is the only
-/// live screen tree during a switch, and its height morph rides the same spring as its entrance. Scroll
-/// views take over once content exceeds the screen-height cap.
+/// height (`ScrollContentHeightKey` + the measured footer), and the visual panel — a height-framed,
+/// corner-clipped card pinned to the top of a fixed-size transparent window (see
+/// `PanelHeightController`) — animates to that on SwiftUI's clock, with the AppKit backdrop following
+/// via `drivesPanelHeight` / `PanelHeightModifier`. The destination is the only live screen tree
+/// during a switch, and its height morph rides the same spring as its entrance. Scroll views take
+/// over once content exceeds the screen-height cap.
 struct DashboardView: View {
     @Environment(AppContainer.self) private var container
     @Environment(LayoutStore.self) private var layout
@@ -24,10 +26,11 @@ struct DashboardView: View {
     @Environment(PopoverTransparencyStore.self) private var transparency
     @Environment(UpdaterController.self) private var updater
     @State private var reorderLift: ReorderLift?
-    /// The panel height SwiftUI drives — the single animation clock. `PanelHeightModifier` follows it
-    /// frame-by-frame onto the AppKit panel, so the window resize rides the same spring as the screen
-    /// entrance. 0 means "not established yet": the panel keeps the size the controller opened it at
-    /// until the first measurement lands, then we snap un-animated.
+    /// The visual panel height SwiftUI drives — the single animation clock. The height frame below
+    /// animates the panel itself, and `PanelHeightModifier` follows the same value frame-by-frame onto
+    /// the AppKit backdrop, so both ride the same spring as the screen entrance. 0 means "not
+    /// established yet": the panel renders at the controller's opening guess until the first
+    /// measurement lands, then we snap un-animated.
     @State private var animatedHeight: CGFloat = 0
     /// Whether `animatedHeight` has been seeded for this open. Until then the first measurement (or a
     /// reopen) establishes it without animation; afterwards, changes spring.
@@ -69,18 +72,29 @@ struct DashboardView: View {
     var body: some View {
         modeBody
             .frame(width: Self.popoverWidth)
-            // Fill the panel. The panel auto-fits its content (the window height is driven to each
-            // screen's measured ideal via `drivesPanelHeight`), so at rest the window is exactly the
-            // content's height and this fill is a no-op; when content exceeds the screen cap the window
-            // clamps and the scroll views inside take the overflow.
-            .frame(maxHeight: .infinity, alignment: .top)
-            // Paint the page surface behind all content (and the footer). Opaque by default so the
-            // popover reads as one solid panel; under Increase Transparency / the egg it clears so the
-            // behind-window backdrop (or party gradient) shows through. Outermost so the footer, header,
-            // and scroll content all sit on it; separation from the footer comes from the native soft
-            // scroll-edge fade (not a distinct bar).
+            // The visual panel: exactly `animatedHeight` tall, growing and shrinking purely inside the
+            // fixed-size window (see `PanelHeightController` — the window opens at the screen-clamped
+            // maximum and never resizes while open). Footer and chrome pin to this frame's bottom.
+            // Until the first measurement lands, the controller's remembered opening height stands in.
+            .frame(
+                height: animatedHeight > 0 ? animatedHeight : MenuBarPopover.openingHeight?(),
+                alignment: .top
+            )
+            // Paint the page surface behind the panel's content (and its footer). Opaque by default so
+            // the popover reads as one solid panel; under Increase Transparency / the egg it clears so
+            // the behind-window backdrop (or party gradient) shows through. Inside the height frame so
+            // it covers exactly the visual panel — never the window's transparent remainder.
             .background(PopoverSurface())
-            // Drive the host panel's height on SwiftUI's clock. At the body root, outside `modeBody`'s
+            // The easter egg's visuals hug the visual panel (and get clipped to its rounded shape
+            // below), so party/drunk layers can't paint into the window's transparent remainder.
+            .tooMuchTransparency(transparency.effectiveStyle)
+            // Round the visual panel itself. The host layer's mask only rounds the window bounds, which
+            // only coincide with the panel when the content happens to fill the whole window.
+            .clipShape(RoundedRectangle(cornerRadius: StatusItemController.cornerRadius, style: .continuous))
+            // Top-pin the panel in the window-filling root: the hosting view centers an undersized
+            // root, so without this the panel would float mid-window.
+            .frame(maxHeight: .infinity, alignment: .top)
+            // Drive the backdrop's height on SwiftUI's clock. At the body root, outside `modeBody`'s
             // structural-animation suppression, so it can ride the active transition spring.
             .drivesPanelHeight(animatedHeight)
             .overlay(alignment: .topLeading) {
@@ -218,15 +232,11 @@ struct DashboardView: View {
             // sibling of `PopoverKeyReader` that only observes (never consumes), so it can't disturb
             // navigation or typing.
             .background(TooMuchTransparencyKeyReader { transparency.toggleSecretCode() })
-            // Reaches `modeBody`, the `PopoverSurface` background, and every card: drives whether surfaces
-            // paint their opaque base or clear to the behind-window vibrancy backdrop.
+            // Reaches `modeBody`, the `PopoverSurface` background, the `.tooMuchTransparency` egg layers
+            // (applied on the visual panel above), and every card: drives whether surfaces paint their
+            // opaque base or clear to the behind-window vibrancy backdrop.
             .environment(\.popoverSurfaceTreatment, transparency.surfaceTreatment)
-            // The easter egg's visuals: the readable party (gradient backdrop + glowing rim, text crisp
-            // on frosted cards) for the secret code, or the woozy, barely-readable pink-glass drunk mode
-            // for "Drunk Mode". No-op for the normal/increased styles. Controls stay clickable (overlays
-            // don't hit-test), so the Settings "Drunk Mode" toggle is reachable while it's running.
-            .tooMuchTransparency(transparency.effectiveStyle)
-            // Gate the egg's animation loops on whether the popover is on-screen. Applied OUTSIDE
+            // Gate the egg's animation loops on whether the popover is on-screen. Applied outside
             // `.tooMuchTransparency` so it reaches both the gradient/rim/drunk layers that modifier adds
             // and the in-content `partyPulse`. Hidden → the loops unmount their `TimelineView` clocks, so a
             // left-on egg spends no CPU; a fresh mount on reopen / in-place activation starts them at once.

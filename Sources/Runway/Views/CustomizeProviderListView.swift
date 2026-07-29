@@ -10,7 +10,7 @@ struct CustomizeProviderListView: View {
     @Environment(AppContainer.self) private var container
     let reorderSpaceName: String
     @Binding var reorderLift: ReorderLift?
-    let rowFrames: [String: CGRect]
+    let rowFrames: ReorderFrameStore
 
     @State private var activeProviderID: String?
     private let density = DensitySetting.compact
@@ -79,7 +79,7 @@ struct CustomizeProviderListView: View {
             id: row.id,
             payload: .customizeProviderRow(provider: row.provider, isEnabled: row.isEnabled, metricCount: row.metricCount),
             value: value,
-            frames: rowFrames
+            frames: rowFrames.frames
         )
     }
 }
