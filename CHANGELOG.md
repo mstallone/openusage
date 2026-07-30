@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8.2
+
+### Bug Fixes
+- Rename update feed infrastructure ([#18](https://github.com/mstallone/runway/pull/18)) by @mstallone
+- Rename update feed deployment environment ([#19](https://github.com/mstallone/runway/pull/19)) by @mstallone
+- Prevent unexpected Claude Keychain prompts ([#20](https://github.com/mstallone/runway/pull/20)) by @mstallone
+- Redesign the popover footer with a compact bar, gear menu, and countdown ([#21](https://github.com/mstallone/runway/pull/21)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.1...v0.8.2](https://github.com/mstallone/runway/compare/v0.8.1...v0.8.2)
+
+- [8de3243](https://github.com/mstallone/runway/commit/8de3243c243376c5994c4542527859280cffebe3) Rename update feed infrastructure (#18) by @mstallone
+- [5fb41b5](https://github.com/mstallone/runway/commit/5fb41b553f0287bc094a8eeca92122f077d0ebe6) Rename update feed deployment environment (#19) by @mstallone
+- [f5ca794](https://github.com/mstallone/runway/commit/f5ca794554fd5a16132816048b6f2f7266a501a7) Prevent unexpected Claude Keychain prompts (#20) by @mstallone
+- [cb375f0](https://github.com/mstallone/runway/commit/cb375f02e5cc60737cbaccd725bbc168d2e722f7) Redesign the popover footer: compact bar with gear menu and countdown (#21) by @mstallone
+
 ## v0.8.1
 
 ### Bug Fixes
