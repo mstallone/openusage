@@ -80,10 +80,11 @@ final class KeychainAccessorTests: XCTestCase {
         // flipping that switch, automatic refreshes regress into launch-time password dialogs.
         var allowed = DarwinBoolean(false)
 
-        KeychainUISuppression.withUISuppressed {
+        KeychainUISuppression.withUISuppressed { isSuppressed in
+            XCTAssertTrue(isSuppressed, "the disable call should succeed in tests")
             SecKeychainGetUserInteractionAllowed(&allowed)
             XCTAssertFalse(allowed.boolValue, "classic keychain UI must be off inside the scope")
-            KeychainUISuppression.withUISuppressed {}
+            KeychainUISuppression.withUISuppressed { _ in }
             SecKeychainGetUserInteractionAllowed(&allowed)
             XCTAssertFalse(allowed.boolValue, "an inner scope exit must not re-enable UI early")
         }
@@ -112,7 +113,7 @@ final class KeychainAccessorTests: XCTestCase {
 
         KeychainUISuppression.withUIAllowed {
             let thread = Thread {
-                KeychainUISuppression.withUISuppressed {
+                KeychainUISuppression.withUISuppressed { _ in
                     events.withLock { $0.append("suppressed-ran") }
                 }
                 suppressedDone.fulfill()

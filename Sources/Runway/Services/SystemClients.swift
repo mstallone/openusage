@@ -380,16 +380,31 @@ enum KeychainUISuppression {
     private static let condition = NSCondition()
     nonisolated(unsafe) private static var suppressedDepth = 0
     nonisolated(unsafe) private static var interactiveCount = 0
+    /// Whether the outermost scope's disable call actually succeeded. The setter essentially never
+    /// fails, but if it does, running the protected query anyway could show the exact background
+    /// dialog this gate exists to prevent — so bodies receive this and skip the prompt-capable call.
+    nonisolated(unsafe) private static var suppressionActive = false
+    /// A failed restore would leave the process unable to show approval prompts; interactive
+    /// callers retry it.
+    nonisolated(unsafe) private static var restoreFailed = false
 
-    static func withUISuppressed<T>(_ body: () throws -> T) rethrows -> T {
+    /// `body` receives whether keychain UI is genuinely disabled. When `false` (the disable call
+    /// failed — logged loudly), the body must NOT issue a prompt-capable Security.framework call
+    /// and should report its non-interactive "unavailable" outcome instead.
+    static func withUISuppressed<T>(_ body: (_ isSuppressed: Bool) throws -> T) rethrows -> T {
         condition.lock()
         while interactiveCount > 0 {
             condition.wait()
         }
         suppressedDepth += 1
         if suppressedDepth == 1 {
-            SecKeychainSetUserInteractionAllowed(false)
+            let status = SecKeychainSetUserInteractionAllowed(false)
+            suppressionActive = status == errSecSuccess
+            if !suppressionActive {
+                AppLog.error(.keychain, "failed to disable keychain UI for a background operation (status \(status)); treating the operation as unavailable")
+            }
         }
+        let isSuppressed = suppressionActive
         condition.unlock()
         defer {
             condition.lock()
@@ -397,12 +412,17 @@ enum KeychainUISuppression {
             if suppressedDepth == 0 {
                 // Runway never disables keychain UI outside this scope, so the process default
                 // (allowed) is the correct restore value.
-                SecKeychainSetUserInteractionAllowed(true)
+                let status = SecKeychainSetUserInteractionAllowed(true)
+                if status != errSecSuccess {
+                    restoreFailed = true
+                    AppLog.error(.keychain, "failed to re-enable keychain UI after a background operation (status \(status)); approval prompts may not appear until retried")
+                }
+                suppressionActive = false
                 condition.broadcast()
             }
             condition.unlock()
         }
-        return try body()
+        return try body(isSuppressed)
     }
 
     /// Runs one interactive Security.framework operation with the gate held: registered first (so
@@ -417,6 +437,13 @@ enum KeychainUISuppression {
         let deadline = Date().addingTimeInterval(2)
         while suppressedDepth > 0, Date() < deadline {
             condition.wait(until: deadline)
+        }
+        // A previously failed restore leaves the process-wide flag disabled; retry before an
+        // interactive query so approval prompts aren't permanently broken.
+        if restoreFailed, suppressedDepth == 0,
+           SecKeychainSetUserInteractionAllowed(true) == errSecSuccess
+        {
+            restoreFailed = false
         }
         let suppressionStuck = suppressedDepth > 0
         condition.unlock()
@@ -543,11 +570,18 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     /// Routes one Security.framework operation through the process-global UI gate: forbidden-UI
     /// callers run inside the suppression scope (the classic ACL dialog fails with `errSecAuthFailed`
     /// instead of appearing); interactive callers hold the gate for their whole duration so a racing
-    /// background read can't flip the process-wide flag under an open approval dialog.
-    private static func performing<T>(allowUserInteraction: Bool, _ body: () throws -> T) rethrows -> T {
-        allowUserInteraction
-            ? try KeychainUISuppression.withUIAllowed(body)
-            : try KeychainUISuppression.withUISuppressed(body)
+    /// background read can't flip the process-wide flag under an open approval dialog. If suppression
+    /// could not actually engage, the non-interactive operation fails instead of running prompt-capable.
+    private static func performing<T>(allowUserInteraction: Bool, _ body: () throws -> T) throws -> T {
+        if allowUserInteraction {
+            return try KeychainUISuppression.withUIAllowed(body)
+        }
+        return try KeychainUISuppression.withUISuppressed { isSuppressed in
+            guard isSuppressed else {
+                throw KeychainError.writeFailed("Keychain UI could not be suppressed for a background update.")
+            }
+            return try body()
+        }
     }
 
     private func keychainWriteError(
@@ -616,8 +650,8 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
-        let status = KeychainUISuppression.withUISuppressed {
-            SecItemCopyMatching(query as CFDictionary, &item)
+        let status = KeychainUISuppression.withUISuppressed { isSuppressed in
+            isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed
         }
         switch status {
         case errSecSuccess:
@@ -657,7 +691,10 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
-        switch KeychainUISuppression.withUISuppressed({ SecItemCopyMatching(query as CFDictionary, nil) }) {
+        let status = KeychainUISuppression.withUISuppressed { isSuppressed in
+            isSuppressed ? SecItemCopyMatching(query as CFDictionary, nil) : errSecInteractionNotAllowed
+        }
+        switch status {
         case errSecSuccess: return true
         case errSecItemNotFound: return false
         default: return nil
@@ -713,8 +750,8 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ]
         var item: CFTypeRef?
-        let status = KeychainUISuppression.withUISuppressed {
-            SecItemCopyMatching(query as CFDictionary, &item)
+        let status = KeychainUISuppression.withUISuppressed { isSuppressed in
+            isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed
         }
         guard status == errSecSuccess,
               let attributes = item as? [String: Any]

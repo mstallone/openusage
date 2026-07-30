@@ -48,7 +48,9 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
         var result: CFTypeRef?
         let status = allowInteraction
             ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
-            : KeychainUISuppression.withUISuppressed { SecItemCopyMatching(query as CFDictionary, &result) }
+            : KeychainUISuppression.withUISuppressed { isSuppressed in
+                isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
+            }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data,
