@@ -12,7 +12,7 @@ import AppKit
 ///   — so it stays in sync, reopens in one click, and trips the controller's visibility reset
 ///   (cancelling edit mode + the jiggle).
 /// - **Return**: `onReturn` navigates into or back out of Customize (the same affordance the footer's
-///   Options ▸ Customize item carries). Consuming the key here is also what stops a bare
+///   gear options menu's Customize item carries). Consuming the key here is also what stops a bare
 ///   Return from falling through and dismissing the popover.
 struct PopoverKeyReader: NSViewRepresentable {
     /// Called first on Esc. Return `true` when the press was handled in-popover (Esc then does
@@ -22,7 +22,7 @@ struct PopoverKeyReader: NSViewRepresentable {
     /// `false` lets the key fall through to a focused control.
     var onReturn: @MainActor () -> Bool = { false }
     /// Called on ⌘, (Settings). Handled on this always-on monitor — the same one as Esc/Return — so it
-    /// works from every screen, including Settings, whose footer has no Settings action. The Options
+    /// works from every screen, including Settings, whose footer has no Settings action. The gear options
     /// menu's Settings item carries ⌘, only as a *label*: while that menu is open the item handles
     /// it, while it's closed this monitor does, so they never both fire.
     var onSettings: @MainActor () -> Bool = { false }
@@ -52,7 +52,7 @@ struct PopoverKeyReader: NSViewRepresentable {
 
     /// Whether a bare-key keyDown belongs to the popover: its key window must *be* the panel. The
     /// panel is a non-activating key window that takes focus the instant it opens, so a foreign key
-    /// window (an open About panel, a tracking `NSMenu` from the Options menu or a Settings picker) — or
+    /// window (an open About panel, a tracking `NSMenu` from the gear options menu or a Settings picker) — or
     /// no key window at all — is correctly *not* the popover's, and Esc/Return leave it alone instead
     /// of hijacking it. (An earlier build also claimed a nil key window, to paper over `NSPopover`'s
     /// activation race; the `NSPanel` removed that race, so the strict match is correct and safer.)
@@ -114,7 +114,7 @@ struct PopoverKeyReader: NSViewRepresentable {
                     guard let self, let window = self.window, window.isVisible else { return false }
                     // The key must target the popover — its key window must be the panel, so a key
                     // pressed while a menu / About panel owns focus is left alone (see `keyTargetsPopover`).
-                    // This is also what hands ⌘, to an open Options menu's own item instead of here.
+                    // This is also what hands ⌘, to an open options menu's own item instead of here.
                     guard PopoverKeyReader.keyTargetsPopover(
                         eventWindowID: eventWindowID,
                         popoverWindowID: ObjectIdentifier(window)

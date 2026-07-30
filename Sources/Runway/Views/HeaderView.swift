@@ -1,16 +1,17 @@
 import AppKit
 import SwiftUI
 
-/// The dashboard footer's trailing control: a single **Options ⌄** menu button in Liquid Glass. The
-/// earlier split button ("Customize" + separate chevron) confused people — two tap targets in one
-/// capsule read as one — so everything now lives in one obvious menu: Customize / Settings / Share
-/// Screenshot / Check for Updates / About / Quit. Customize leads the menu because it's the screen
-/// users reach for most; Settings stays one click away (and always via ⌘,).
+/// The dashboard footer's trailing control: a single **gear** menu button in Liquid Glass. An earlier
+/// split button ("Customize" + separate chevron) confused people, and the "Options ⌄" capsule that
+/// replaced it claimed more footer than one control deserved — so everything lives in one compact,
+/// obvious gear menu: Customize / Settings / Share Screenshot / Check for Updates / About / Quit.
+/// Customize leads the menu because it's the screen users reach for most; Settings stays one click
+/// away (and always via ⌘,).
 ///
-/// The capsule is a `.buttonStyle(.plain)` `Menu` with one `interactiveGlass(in: Capsule())` treatment
+/// The gear is a `.buttonStyle(.plain)` `Menu` with one `interactiveGlass(in: Circle())` treatment
 /// behind it — the system `.buttonStyle(.glass)` renders flat on a `Menu` (its own button chrome wins),
 /// so the treatment goes on the container. Increase Transparency adds an adaptive frosted base beneath
-/// the glass for contrast; macOS 15 uses that frosted capsule as its fallback. The menu renders in its
+/// the glass for contrast; macOS 15 uses that frosted circle as its fallback. The menu renders in its
 /// own `NSMenu`-backed window, which the panel's outside-click policy keeps the popover open for.
 ///
 /// Only the dashboard shows this; the Customize and Settings screens carry their own top-leading back
@@ -33,48 +34,43 @@ struct HeaderView: View {
     /// per-page), so this control shows only when that's `.dashboard` and swaps in place on a switch.
     let screen: PopoverScreen
 
-    /// Control height, so the capsule matches the footer's other chrome.
+    /// Control diameter, so the gear matches the footer's other chrome.
     private static let controlHeight: CGFloat = 28
 
     var body: some View {
         leadingControl
     }
 
-    /// On the dashboard, the Options menu button on one glass capsule.
+    /// On the dashboard, the gear menu button on one glass circle.
     @ViewBuilder
     private var leadingControl: some View {
         if screen == .dashboard {
             optionsButton
                 .fixedSize()
                 .interactiveGlass(
-                    in: Capsule(),
+                    in: Circle(),
                     reinforced: transparency.effectiveStyle.needsChromeLegibilityBacking
                 )
         }
     }
 
-    /// The Options pull-down: label plus its own chevron glyph. `.menuStyle(.button)` +
-    /// `.buttonStyle(.plain)` strip the menu chrome so `interactiveGlass` owns the surface;
-    /// `.menuIndicator(.hidden)` drops the built-in arrow in favor of our styled chevron.
+    /// The options pull-down: a bare gear glyph. `.menuStyle(.button)` + `.buttonStyle(.plain)` strip
+    /// the menu chrome so `interactiveGlass` owns the surface; `.menuIndicator(.hidden)` drops the
+    /// built-in arrow — the gear alone is the affordance.
     private var optionsButton: some View {
         Menu {
             menuItems
         } label: {
-            HStack(spacing: 5) {
-                Text("Options")
-                    .font(.system(size: 13, weight: .semibold))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .padding(.leading, 14)
-            .padding(.trailing, 12)
-            .frame(height: Self.controlHeight)
-            .contentShape(Rectangle())
+            Image(systemName: "gearshape")
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: Self.controlHeight, height: Self.controlHeight)
+                .contentShape(Circle())
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+        .accessibilityLabel("Options")
     }
 
     /// The menu's items, mirroring their in-popover entry points. Customize leads, then Settings.
