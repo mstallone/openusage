@@ -102,9 +102,16 @@ struct PopoverFooter: View {
             } else {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 9, weight: .semibold))
-                Text(countdownText(now: now))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
+                // The countdown must sit perfectly still: no rolling-digit transition, and a slot
+                // reserved for the widest value ("59s") so a tick that drops a digit can't nudge the
+                // glyph or the gear sideways. The text just swaps in place each second.
+                ZStack(alignment: .leading) {
+                    Text("59s")
+                        .monospacedDigit()
+                        .hidden()
+                    Text(countdownText(now: now))
+                        .monospacedDigit()
+                }
             }
         }
         .font(.caption2)
