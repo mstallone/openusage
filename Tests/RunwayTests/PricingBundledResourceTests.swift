@@ -86,19 +86,18 @@ final class PricingBundledResourceTests: XCTestCase {
         XCTAssertEqual(fable.outputPerMillion, opus48.outputPerMillion * 2)
     }
 
-    /// Claude Sonnet 5: same API pool rates as Claude 4.6 Sonnet; thinking/effort slugs resolve to
-    /// one canonical entry.
+    /// Claude Sonnet 5: current API pool rates, with thinking/effort slugs resolving to one
+    /// canonical entry.
     func testClaudeSonnet5PricingAndAliases() throws {
         let pricing = Self.pricing
         let sonnet5 = try XCTUnwrap(pricing.resolve(model: "claude-sonnet-5-thinking-high"))
-        XCTAssertEqual(sonnet5.inputPerMillion, 3.0)
-        XCTAssertEqual(sonnet5.outputPerMillion, 15.0)
-        XCTAssertEqual(sonnet5.cacheWritePerMillion, 3.75)
-        XCTAssertEqual(sonnet5.cacheReadPerMillion, 0.3)
+        XCTAssertEqual(sonnet5.inputPerMillion, 2.0)
+        XCTAssertEqual(sonnet5.outputPerMillion, 10.0)
+        XCTAssertEqual(sonnet5.cacheWritePerMillion, 2.5)
+        XCTAssertEqual(sonnet5.cacheReadPerMillion, 0.2, accuracy: 0.000_001)
 
-        let sonnet46 = try XCTUnwrap(pricing.resolve(model: "claude-4.6-sonnet"))
-        XCTAssertEqual(sonnet5.inputPerMillion, sonnet46.inputPerMillion)
-        XCTAssertEqual(sonnet5.outputPerMillion, sonnet46.outputPerMillion)
+        let canonical = try XCTUnwrap(pricing.resolve(model: "claude-sonnet-5"))
+        XCTAssertEqual(sonnet5, canonical)
     }
 
     func testGPT56PricingAndAliases() throws {
