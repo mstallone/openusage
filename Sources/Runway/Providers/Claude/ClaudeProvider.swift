@@ -74,17 +74,9 @@ final class ClaudeProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Scoped cards answer from footprints only (file existence / keychain attributes) so the
-        // every-launch seeding probe can never raise a keychain dialog for an account the user
-        // hasn't granted yet. The secret read happens on the first refresh.
-        if authStore.scope != .standard {
-            return await loadOffMainActor { [authStore] in authStore.hasCredentialFootprint() }
-        }
-        // Never trigger another app's Keychain prompt during first-run detection. Encrypted Desktop
-        // material still counts as a local login; the first manual refresh requests access if needed.
-        let load = await loadOffMainActor { [authStore] in authStore.loadCredentialSet() }
-        if load.candidates.contains(where: \.hasUsableAccessToken) { return true }
-        return load.desktopStatus == .permissionRequired || load.desktopStatus == .stale
+        // Detection validates local files, environment, Keychain attributes, and Desktop material with
+        // Keychain interaction forbidden. It can never raise a launch-time password dialog.
+        await loadOffMainActor { [authStore] in authStore.hasCredentialFootprint() }
     }
 
     func refresh() async -> ProviderSnapshot {
@@ -102,16 +94,29 @@ final class ClaudeProvider: ProviderRuntime {
         forceDesktopFallback: Bool,
         previousFallbackError: ClaudeAuthError?
     ) async -> ProviderSnapshot {
-        let allowDesktopInteraction = ProviderRefreshContext.isManual
+        let allowInteraction = ProviderRefreshContext.isManual
         let credentialLoad = await loadOffMainActor { [authStore] in
             authStore.loadCredentialSet(
-                allowDesktopInteraction: allowDesktopInteraction,
+                allowKeychainInteraction: allowInteraction,
+                allowDesktopInteraction: allowInteraction,
                 forceDesktopFallback: forceDesktopFallback
             )
         }
         let storedCandidates = credentialLoad.candidates
         let candidates = storedCandidates.filter {
             $0.hasUsableAccessToken && (!forceDesktopFallback || $0.source == .desktop)
+        }
+        // Keychain is Claude Code's source of truth on macOS. If its item cannot be read — or its
+        // existence cannot be determined — never publish a lower-priority file/Desktop/environment
+        // login that may be stale or belong to another account. Automatic refresh remains
+        // non-interactive; a manual refresh performs the explicit in-process approval read.
+        switch credentialLoad.keychainAccessStatus {
+        case .permissionRequired:
+            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.codePermissionRequired)
+        case .unavailable:
+            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.codeCredentialsUnavailable)
+        case .resolved:
+            break
         }
         if forceDesktopFallback {
             switch credentialLoad.desktopStatus {
@@ -168,7 +173,10 @@ final class ClaudeProvider: ProviderRuntime {
         // through to the next rather than failing the whole refresh; any non-auth error (rate limit,
         // request/transport failure) surfaces immediately so a real outage is never masked as a retry.
         var lastFallbackError: ClaudeAuthError?
-        var credentialGeneration = ClaudeCredentialGeneration(storedCandidates)
+        var credentialGeneration = ClaudeCredentialGeneration(
+            storedCandidates,
+            keychainAccessStatus: credentialLoad.keychainAccessStatus
+        )
         for state in candidates {
             // The environment token cannot read subscription usage. If a CLI login was rejected, try
             // Desktop before this spend-only fallback can turn the refresh into a false success.
@@ -187,7 +195,8 @@ final class ClaudeProvider: ProviderRuntime {
                 let snapshot = try await probe(
                     state: state,
                     credentialGeneration: &credentialGeneration,
-                    fallbackWarning: desktopFallbackWarning
+                    fallbackWarning: desktopFallbackWarning,
+                    allowKeychainInteraction: allowInteraction
                 )
                 AppLog.info(LogTag.plugin("claude"), "refresh end (\(Int(Date().timeIntervalSince(start) * 1000))ms)")
                 return snapshot
@@ -226,7 +235,8 @@ final class ClaudeProvider: ProviderRuntime {
     private func probe(
         state initialState: ClaudeCredentialState,
         credentialGeneration: inout ClaudeCredentialGeneration,
-        fallbackWarning: String?
+        fallbackWarning: String?,
+        allowKeychainInteraction: Bool
     ) async throws -> ProviderSnapshot {
         var state = initialState
         var mapped = ClaudeMappedUsage(
@@ -242,7 +252,8 @@ final class ClaudeProvider: ProviderRuntime {
         case .available:
             mapped = try await fetchLiveUsage(
                 state: &state,
-                credentialGeneration: &credentialGeneration
+                credentialGeneration: &credentialGeneration,
+                allowKeychainInteraction: allowKeychainInteraction
             )
             // A rate-limited fetch rides its "Updates blocked by Anthropic" notice on the mapped usage so
             // it reaches the header triangle even when the badge/note lines aren't in the user's layout.
@@ -304,7 +315,8 @@ final class ClaudeProvider: ProviderRuntime {
 
     private func fetchLiveUsage(
         state: inout ClaudeCredentialState,
-        credentialGeneration: inout ClaudeCredentialGeneration
+        credentialGeneration: inout ClaudeCredentialGeneration,
+        allowKeychainInteraction: Bool
     ) async throws -> ClaudeMappedUsage {
         var expectedGeneration = credentialGeneration
         defer { credentialGeneration = expectedGeneration }
@@ -323,7 +335,8 @@ final class ClaudeProvider: ProviderRuntime {
             let refreshed = try await refreshAccessToken(
                 state: &state,
                 refreshToken: refreshToken,
-                expectedGeneration: expectedGeneration
+                expectedGeneration: expectedGeneration,
+                allowKeychainInteraction: allowKeychainInteraction
             )
             state.oauth.accessToken = refreshed.accessToken
             if refreshed.persisted { expectedGeneration = expectedGeneration.replacing(state) }
@@ -344,7 +357,8 @@ final class ClaudeProvider: ProviderRuntime {
                 let refreshed = try await self.refreshAccessToken(
                     state: &working,
                     refreshToken: refreshToken,
-                    expectedGeneration: expectedGeneration
+                    expectedGeneration: expectedGeneration,
+                    allowKeychainInteraction: allowKeychainInteraction
                 )
                 if refreshed.persisted {
                     expectedGeneration = expectedGeneration.replacing(working)
@@ -357,7 +371,10 @@ final class ClaudeProvider: ProviderRuntime {
 
         let forceDesktopGeneration = working.source == .desktop
         let currentGeneration = await loadOffMainActor { [authStore] in
-            authStore.credentialGeneration(forceDesktopFallback: forceDesktopGeneration)
+            authStore.credentialGeneration(
+                allowKeychainInteraction: allowKeychainInteraction,
+                forceDesktopFallback: forceDesktopGeneration
+            )
         }
         guard currentGeneration == expectedGeneration else { throw ClaudeAuthError.credentialsChanged }
 
@@ -415,7 +432,8 @@ final class ClaudeProvider: ProviderRuntime {
     private func refreshAccessToken(
         state: inout ClaudeCredentialState,
         refreshToken: String,
-        expectedGeneration: ClaudeCredentialGeneration
+        expectedGeneration: ClaudeCredentialGeneration,
+        allowKeychainInteraction: Bool
     ) async throws -> RefreshedAccess {
         AppLog.info(LogTag.auth("claude"), "token refresh attempt")
         let response = try await usageClient.refreshToken(refreshToken, config: authStore.oauthConfig())
@@ -451,7 +469,11 @@ final class ClaudeProvider: ProviderRuntime {
         let persisted: Bool
         do {
             guard try await Task.detached(priority: .utility, operation: { [authStore, state] in
-                try authStore.save(state, ifUnchanged: expectedGeneration)
+                try authStore.save(
+                    state,
+                    ifUnchanged: expectedGeneration,
+                    allowKeychainInteraction: allowKeychainInteraction
+                )
             }).value else {
                 throw ClaudeAuthError.credentialsChanged
             }

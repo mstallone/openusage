@@ -29,10 +29,23 @@ Claude Desktop support is read-only. Runway decrypts its currently valid access 
 never changes Desktop's config, cookies, or Keychain entry. This prevents Runway from invalidating
 Claude Desktop's session.
 
-macOS asks once before Runway can access that Keychain item. Background refreshes never open the
-password dialog: Runway first asks you to refresh manually, and choosing **Always Allow** makes later
-refreshes silent. If Desktop's short-lived token expires, open Claude Desktop so it can renew the login,
-then refresh Runway.
+macOS may ask once before Runway can access a Claude Code or Claude Desktop Keychain item. Launch-time
+and background refreshes never open the password dialog: Runway first asks you to refresh manually, and
+choosing **Always Allow** makes later reads and OAuth-token updates silent. If Desktop's short-lived
+token expires, open Claude Desktop so it can renew the login, then refresh Runway.
+
+A Claude Code Keychain item remains higher priority than a home-file or Desktop login even before access
+is approved. Runway reports that approval is needed instead of silently showing usage from a potentially
+stale home file or a different Desktop account. If macOS cannot even determine whether the item exists
+(for example, while the login keychain is locked), Runway asks you to unlock the keychain instead of
+guessing or prompting in the background.
+
+First-run detection validates Claude Desktop's cache with Keychain interaction disabled. Leftover or
+corrupt Desktop files—and readable but malformed Claude Code Keychain entries—do not enable Claude by
+themselves.
+
+If you cancel or deny a Claude Code approval prompt during a manual refresh, Runway stops there. It does
+not repeat the same Code prompt through a broader lookup or open an unrelated Claude Desktop prompt.
 
 A `CLAUDE_CODE_OAUTH_TOKEN` — usually a long-lived `claude setup-token` — can run the model but can't read your Session and Weekly limits, and it often lingers in your shell environment. So when a real keychain or file login is present, Runway uses that login for the live meters and keeps the environment token only as a fallback; the Session/Weekly meters no longer go blank just because that token is set. If the environment token is your *only* credential (a headless setup), it's used on its own and the spend tiles still load from local logs.
 
@@ -71,6 +84,8 @@ In the [CLI](../cli.md) and [local API](../local-http-api.md), extra cards appea
 ## Troubleshooting
 
 - **"Not logged in"** — run `claude` and sign in, then refresh.
+- **"Claude Code login found"** — refresh manually and choose **Always Allow** when macOS asks for access to `Claude Code-credentials`.
+- **"Claude Code credentials couldn't be checked"** — unlock your login keychain, then refresh Runway.
 - **"Claude Desktop login found"** — refresh manually and choose **Always Allow** when macOS asks for access to `Claude Safe Storage`.
 - **"Claude Desktop login is stale"** — open Claude Desktop so it can renew the login, then refresh Runway.
 - **"Re-login for live usage"** (an amber warning on the Claude header) — your saved login can authenticate for inference but can't read your subscription limits, because it lacks the `user:profile` access (this is what an inference-only token from `claude setup-token` carries). Run `claude` and sign in again with your Claude account, then refresh; the spend tiles keep working in the meantime.

@@ -64,6 +64,28 @@ struct ClaudeCredentialState: Hashable, Sendable {
     }
 }
 
+/// Whether Claude Code's higher-priority Keychain sources were conclusively checked. Automatic
+/// callers never interact with Keychain UI: a protected item is reported as `.permissionRequired`,
+/// while a locked/denied attributes probe is `.unavailable` because item existence is unknown.
+enum ClaudeKeychainAccessStatus: Equatable, Sendable {
+    case resolved
+    case permissionRequired
+    case unavailable
+
+    mutating func recordUnreadableItem(exists: Bool?) {
+        switch exists {
+        case true:
+            self = .permissionRequired
+        case false:
+            break
+        case nil:
+            if self == .resolved {
+                self = .unavailable
+            }
+        }
+    }
+}
+
 /// Token-bearing credential candidates in their effective probe order. Environment-only inference
 /// tokens are excluded because they never fetch live usage; every stored candidate that can affect
 /// selection remains, including an earlier source that the current refresh already tried and rejected.
@@ -79,11 +101,16 @@ struct ClaudeCredentialGeneration: Equatable, Sendable {
     }
 
     var candidates: [Candidate]
+    var keychainAccessStatus: ClaudeKeychainAccessStatus
 
-    init(_ states: [ClaudeCredentialState]) {
+    init(
+        _ states: [ClaudeCredentialState],
+        keychainAccessStatus: ClaudeKeychainAccessStatus = .resolved
+    ) {
         candidates = states
             .filter { $0.hasUsableAccessToken && !$0.inferenceOnly }
             .map(Candidate.init)
+        self.keychainAccessStatus = keychainAccessStatus
     }
 
     func replacing(_ state: ClaudeCredentialState) -> Self {
@@ -99,10 +126,15 @@ struct ClaudeCredentialGeneration: Equatable, Sendable {
 struct ClaudeCredentialLoad: Sendable {
     var candidates: [ClaudeCredentialState]
     var desktopStatus: ClaudeDesktopCredentialStatus
+    /// Automatic refreshes carry protected or inconclusive Keychain state to the provider instead of
+    /// opening a macOS password dialog or silently selecting a lower-priority credential.
+    var keychainAccessStatus: ClaudeKeychainAccessStatus
 }
 
 enum ClaudeAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
+    case codePermissionRequired
+    case codeCredentialsUnavailable
     case desktopPermissionRequired
     case desktopTokenExpired
     case desktopCredentialsUnavailable
@@ -115,6 +147,10 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .notLoggedIn:
             return "Not logged in. Run `claude` to authenticate."
+        case .codePermissionRequired:
+            return "Claude Code login found. Refresh manually and choose Always Allow to connect it."
+        case .codeCredentialsUnavailable:
+            return "Claude Code credentials couldn't be checked. Unlock your login keychain, then refresh."
         case .desktopPermissionRequired:
             return "Claude Desktop login found. Refresh once and choose Always Allow to connect it."
         case .desktopTokenExpired:
@@ -142,8 +178,8 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .sessionExpired, .tokenExpired, .desktopTokenExpired:
             return true
-        case .notLoggedIn, .desktopPermissionRequired, .desktopCredentialsUnavailable,
-             .credentialsChanged, .invalidOAuthURL:
+        case .notLoggedIn, .codePermissionRequired, .codeCredentialsUnavailable, .desktopPermissionRequired,
+             .desktopCredentialsUnavailable, .credentialsChanged, .invalidOAuthURL:
             return false
         }
     }
@@ -209,12 +245,15 @@ struct ClaudeAuthStore: Sendable {
     /// refresh loop to try in order. The provider probes each and — on an auth-expiry error
     /// (`ClaudeAuthError.allowsAuthFallback`) — falls through to the next, so an external `claude`
     /// re-login is picked up no matter which source it lands in, even when a stale/locked-out token still
-    /// sits in another. Re-read on every refresh; nothing is cached in memory.
+    /// sits in another. Re-read on every refresh; nothing is cached in memory. Keychain interaction is
+    /// opt-in so a new caller cannot accidentally introduce a launch-time password dialog.
     func loadCredentialSet(
+        allowKeychainInteraction: Bool = false,
         allowDesktopInteraction: Bool = false,
         forceDesktopFallback: Bool = false
     ) -> ClaudeCredentialLoad {
-        var stored = orderedStoredCandidates()
+        let storedLoad = orderedStoredCandidates(allowKeychainInteraction: allowKeychainInteraction)
+        var stored = storedLoad.candidates
         var desktopStatus: ClaudeDesktopCredentialStatus = .notChecked
         // A working CLI login remains the source of truth and avoids a second Keychain prompt. Desktop
         // is a fallback for people who only use the native app (or whose stored CLI login lacks profile
@@ -229,7 +268,13 @@ struct ClaudeAuthStore: Sendable {
         let hasUsableCLILogin = stored.contains {
             $0.hasUsableAccessToken && liveUsageAvailability($0) == .available
         }
-        if desktopAllowed, forceDesktopFallback || !hasUsableCLILogin {
+        // Once Claude Code access is unresolved, its higher-priority result will win in the provider.
+        // Do not continue into Desktop: on a manual refresh that could open a second, irrelevant
+        // Safe Storage dialog after the user just denied or cancelled the Claude Code prompt.
+        if storedLoad.keychainAccessStatus == .resolved,
+           desktopAllowed,
+           forceDesktopFallback || !hasUsableCLILogin
+        {
             let result = desktop.load(allowInteraction: allowDesktopInteraction)
             desktopStatus = result.status
             if let oauth = result.oauth {
@@ -243,21 +288,44 @@ struct ClaudeAuthStore: Sendable {
         }
 
         let candidates = applyingEnvironmentToken(to: stored)
-        return ClaudeCredentialLoad(candidates: candidates, desktopStatus: desktopStatus)
+        return ClaudeCredentialLoad(
+            candidates: candidates,
+            desktopStatus: desktopStatus,
+            keychainAccessStatus: storedLoad.keychainAccessStatus
+        )
     }
 
     func loadCredentialCandidates() -> [ClaudeCredentialState] {
         loadCredentialSet().candidates
     }
 
-    /// Whether this scoped card's login leaves any local footprint, checked without ever reading a
-    /// keychain secret — safe for the every-launch seeding probe (`NewProviderSeeder`), which must
-    /// never raise a permission dialog. The `.standard` card keeps its richer
-    /// `loadCredentialSet`-based probe in `ClaudeProvider.hasLocalCredentials`.
+    /// Whether this scoped card has a credential refresh can actually start with. Standard detection
+    /// uses the same loaders and usability filters as refresh, with all Keychain interaction forbidden.
     func hasCredentialFootprint() -> Bool {
         switch scope {
         case .standard:
-            return !loadCredentialSet().candidates.isEmpty
+            let load = loadCredentialSet()
+            switch load.keychainAccessStatus {
+            case .permissionRequired:
+                // The attributes probe confirmed a protected Claude Code item. It is a real footprint
+                // even though only an explicit manual refresh may ask the user to approve it.
+                return true
+            case .unavailable:
+                // Item existence is unknown, so do not enable from a lower-priority source that refresh
+                // would refuse to use.
+                return false
+            case .resolved:
+                break
+            }
+            if load.candidates.contains(where: \.hasUsableAccessToken) {
+                return true
+            }
+            switch load.desktopStatus {
+            case .available, .permissionRequired, .stale:
+                return true
+            case .notChecked, .notFound, .invalid:
+                return false
+            }
         case .configDir:
             if files.exists(credentialsPath()) { return true }
             return keychainServiceCandidates().contains {
@@ -305,15 +373,31 @@ struct ClaudeAuthStore: Sendable {
         return expiresAt - now().timeIntervalSince1970 * 1000 <= 5 * 60 * 1000
     }
 
-    func credentialGeneration(forceDesktopFallback: Bool = false) -> ClaudeCredentialGeneration {
-        ClaudeCredentialGeneration(loadCredentialSet(forceDesktopFallback: forceDesktopFallback).candidates)
+    func credentialGeneration(
+        allowKeychainInteraction: Bool = false,
+        forceDesktopFallback: Bool = false
+    ) -> ClaudeCredentialGeneration {
+        let load = loadCredentialSet(
+            allowKeychainInteraction: allowKeychainInteraction,
+            forceDesktopFallback: forceDesktopFallback
+        )
+        return ClaudeCredentialGeneration(
+            load.candidates,
+            keychainAccessStatus: load.keychainAccessStatus
+        )
     }
 
     /// Save an OAuth rotation only if the ordered effective candidate set is unchanged. Checking the
     /// whole generation catches a newly added higher-priority source as well as replacement in place.
     /// The underlying stores provide no atomic compare-and-swap, so this remains best-effort.
-    func save(_ state: ClaudeCredentialState, ifUnchanged expected: ClaudeCredentialGeneration) throws -> Bool {
-        guard credentialGeneration() == expected else { return false }
+    func save(
+        _ state: ClaudeCredentialState,
+        ifUnchanged expected: ClaudeCredentialGeneration,
+        allowKeychainInteraction: Bool = false
+    ) throws -> Bool {
+        guard credentialGeneration(allowKeychainInteraction: allowKeychainInteraction) == expected else {
+            return false
+        }
         var fullData = state.fullData ?? ClaudeCredentialsFile()
         fullData.claudeAiOauth = state.oauth
         let data = try JSONEncoder().encode(fullData)
@@ -323,9 +407,17 @@ struct ClaudeAuthStore: Sendable {
         case .file:
             try files.writeText(credentialsPath(), text)
         case .keychainCurrentUser(let service):
-            try keychain.writeGenericPasswordForCurrentUser(service: service, value: text)
+            try keychain.updateGenericPasswordForCurrentUser(
+                service: service,
+                value: text,
+                allowUserInteraction: allowKeychainInteraction
+            )
         case .keychainLegacy(let service):
-            try keychain.writeGenericPassword(service: service, value: text)
+            try keychain.updateGenericPassword(
+                service: service,
+                value: text,
+                allowUserInteraction: allowKeychainInteraction
+            )
         case .desktop:
             return false
         case .environment:
@@ -502,9 +594,15 @@ struct ClaudeAuthStore: Sendable {
     /// up (#687) WITHOUT letting a stale file outrank the live keychain just because its token carries a
     /// later expiry (the #738 regression from ranking purely by expiry). The source kind (never the
     /// token) is logged so a "locked out" report can be diagnosed from which source was chosen.
-    private func orderedStoredCandidates() -> [ClaudeCredentialState] {
+    private struct StoredCandidateLoad {
+        var candidates: [ClaudeCredentialState]
+        var keychainAccessStatus: ClaudeKeychainAccessStatus
+    }
+
+    private func orderedStoredCandidates(allowKeychainInteraction: Bool) -> StoredCandidateLoad {
         var candidates: [ClaudeCredentialState] = []
-        if let keychain = loadKeychainCredentials() { candidates.append(keychain) }
+        let keychainLoad = loadKeychainCredentials(allowInteraction: allowKeychainInteraction)
+        if let keychain = keychainLoad.state { candidates.append(keychain) }
         if let file = loadFileCredentials() { candidates.append(file) }
 
         if candidates.count > 1 {
@@ -513,7 +611,10 @@ struct ClaudeAuthStore: Sendable {
         } else if let only = candidates.first {
             AppLog.debug(LogTag.auth("claude"), "credential source: \(only.source.label)")
         }
-        return candidates
+        return StoredCandidateLoad(
+            candidates: candidates,
+            keychainAccessStatus: keychainLoad.accessStatus
+        )
     }
 
     private func loadFileCredentials() -> ClaudeCredentialState? {
@@ -528,24 +629,91 @@ struct ClaudeAuthStore: Sendable {
         return ClaudeCredentialState(oauth: oauth, source: .file, fullData: parsed, inferenceOnly: false)
     }
 
-    private func loadKeychainCredentials() -> ClaudeCredentialState? {
+    private struct KeychainCredentialLoad {
+        var state: ClaudeCredentialState?
+        var accessStatus: ClaudeKeychainAccessStatus
+    }
+
+    private func loadKeychainCredentials(allowInteraction: Bool) -> KeychainCredentialLoad {
         // The service name is safe to log; NEVER log the returned credential blob / OAuth tokens.
+        var accessStatus: ClaudeKeychainAccessStatus = .resolved
         for service in keychainServiceCandidates() {
+            var serviceReadUnavailable = false
+            let currentUserValue: String?
+            if allowInteraction {
+                do {
+                    currentUserValue = try keychain
+                        .readGenericPasswordForCurrentUserAllowingUserInteraction(service: service)
+                } catch {
+                    currentUserValue = nil
+                    serviceReadUnavailable = true
+                }
+            } else {
+                switch keychain.readGenericPasswordForCurrentUserWithoutUserInteraction(service: service) {
+                case .value(let value):
+                    currentUserValue = value
+                case .missing:
+                    currentUserValue = nil
+                case .unavailable:
+                    currentUserValue = nil
+                    serviceReadUnavailable = true
+                }
+            }
+            if serviceReadUnavailable {
+                accessStatus.recordUnreadableItem(
+                    exists: keychain.genericPasswordExists(service: service)
+                )
+                if allowInteraction {
+                    return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
+                }
+            }
+
             if let state = credentialState(
-                from: try? keychain.readGenericPasswordForCurrentUser(service: service),
-                service: service, source: .keychainCurrentUser(service: service)
+                from: currentUserValue,
+                service: service,
+                source: .keychainCurrentUser(service: service)
             ) {
-                return state
+                return KeychainCredentialLoad(state: state, accessStatus: accessStatus)
+            }
+
+            serviceReadUnavailable = false
+            let legacyValue: String?
+            if allowInteraction {
+                do {
+                    legacyValue = try keychain.readGenericPasswordAllowingUserInteraction(service: service)
+                } catch {
+                    legacyValue = nil
+                    serviceReadUnavailable = true
+                }
+            } else {
+                switch keychain.readGenericPasswordWithoutUserInteraction(service: service) {
+                case .value(let value):
+                    legacyValue = value
+                case .missing:
+                    legacyValue = nil
+                case .unavailable:
+                    legacyValue = nil
+                    serviceReadUnavailable = true
+                }
+            }
+            if serviceReadUnavailable {
+                accessStatus.recordUnreadableItem(
+                    exists: keychain.genericPasswordExists(service: service)
+                )
+                if allowInteraction {
+                    return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
+                }
             }
             if let state = credentialState(
-                from: try? keychain.readGenericPassword(service: service),
-                service: service, source: .keychainLegacy(service: service)
+                from: legacyValue,
+                service: service,
+                source: .keychainLegacy(service: service)
             ) {
-                return state
+                return KeychainCredentialLoad(state: state, accessStatus: accessStatus)
             }
             AppLog.debug(.keychain, "read miss service=\(service)")
         }
-        return nil
+        return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
     }
 
     /// Parse one keychain hit into a credential state, or `nil` if it's absent / malformed / tokenless.
