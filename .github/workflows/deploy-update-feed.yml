@@ -35,10 +35,10 @@ jobs:
     # Deploy after a successful publish; a failed Release never touched update-feed, so skip.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    # actions/deploy-pages recommends this environment name even when the backing branch has a
-    # product-specific name.
+    # Use the product-facing environment name so GitHub's repository homepage identifies these
+    # deployments by purpose instead of by their Pages transport.
     environment:
-      name: github-pages
+      name: Update Feed
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
