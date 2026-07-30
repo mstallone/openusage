@@ -105,20 +105,6 @@ struct DashboardView: View {
             // The easter egg's visuals hug the visual panel (and get clipped to its rounded shape
             // below), so party/drunk layers can't paint into the window's transparent remainder.
             .tooMuchTransparency(transparency.effectiveStyle)
-            // The footer, glued to the animated panel frame's bottom edge. As an overlay on the height
-            // frame its position derives from the same animated bounds that define the visible panel
-            // edge — one layout, one spring, so it cannot detach from the bottom during a morph. Inside
-            // the clip below so the glass bar keeps the panel's rounded corners; a clear spacer in each
-            // screen's `pinnedFooter` reserves its space in the scroll view.
-            .overlay(alignment: .bottom) {
-                PopoverFooter(
-                    screen: layout.screen,
-                    layout: layout,
-                    dataStore: dataStore,
-                    horizontalPadding: Self.footerHorizontalPadding,
-                    height: Self.footerHeight
-                )
-            }
             // Inside the clip below, so a drag that wanders past the panel's bottom edge clips the
             // floating chip at the edge (as the window bounds used to) instead of rendering it into
             // the fixed window's transparent remainder. Same origin as the outer fill — the panel is
@@ -416,13 +402,21 @@ struct DashboardView: View {
                 )
             }
             .pinnedFooter(spacing: 0) {
-                // A clear spacer stands in for the footer inside the scroll view's safe area: it keeps
-                // the content inset and the native bottom scroll-edge blur exactly as a visible bar
-                // would. The visible footer itself is a bottom-aligned overlay on the animated panel
-                // frame (see `body`), so it stays glued to the panel's bottom edge through every morph
-                // instead of depending on the scroll view's safe-area layout.
-                Color.clear
-                    .frame(height: screen == .customize ? 0 : Self.footerHeight)
+                // The footer lives in the safe-area bar, NOT as a bottom-aligned overlay on the height
+                // frame: the bar's position is re-derived from the per-frame layout of the animated
+                // frame, so it hugs the panel's bottom edge on every interpolated frame of a morph. An
+                // overlay's position animates as its own attribute instead — when a content change
+                // lands in one transaction and the height retargets in a second (a provider appears, a
+                // caret estimate gets corrected), the overlay's spring runs phase-shifted from the
+                // frame growth and the footer visibly trails the edge, sliding over content to catch
+                // up (verified frame-by-frame; the safe-area bar shows no such detach).
+                PopoverFooter(
+                    screen: layout.screen,
+                    layout: layout,
+                    dataStore: dataStore,
+                    horizontalPadding: Self.footerHorizontalPadding,
+                    height: Self.footerHeight
+                )
             }
     }
 

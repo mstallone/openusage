@@ -4,11 +4,12 @@ import SwiftUI
 /// countdown, and the gear options menu (plus the transient copy confirmation and pin-limit notice).
 /// It uses the destination screen so both pages mounted during a slide draw the same footer.
 ///
-/// The footer is a **fixed-height bar rendered as a bottom-aligned overlay on the animated panel
-/// frame** (see `DashboardView.body`), not a bar inside the scroll view's safe area — so its position
-/// derives from the same frame whose bottom edge is the visible panel edge, and it stays glued to
-/// that edge through every height morph by construction. A clear spacer of the same height inside
-/// `pinnedFooter` keeps the scroll inset and the native bottom scroll-edge blur.
+/// The footer is a **fixed-height safe-area bar** (`pinnedFooter` in `DashboardView.screenView`):
+/// the bar's position is re-derived from the per-frame layout of the animated panel frame, which is
+/// what keeps it hugging the panel's bottom edge on every interpolated frame of a height morph. (A
+/// bottom-aligned overlay on the height frame was tried and reverted — an overlay's position animates
+/// as its own attribute, and when content changes land in one transaction with the height retarget in
+/// a second, that spring runs phase-shifted and the footer visibly trails the moving edge.)
 struct PopoverFooter: View {
     let screen: PopoverScreen
     let layout: LayoutStore
