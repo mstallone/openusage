@@ -42,7 +42,7 @@ extension View {
     }
 
     /// A single interactive Liquid Glass surface (in the given shape) drawn behind a *whole control* —
-    /// the footer's Options menu button wraps its plain-styled label in one
+    /// the footer's gear options menu button wraps its plain-styled label in one
     /// `interactiveGlass(in: Capsule())` so it sits on one continuous capsule. Apply it to the
     /// container, and keep the control `.buttonStyle(.plain)` so this modifier owns the surface — the
     /// system `.buttonStyle(.glass)` renders flat on a `Menu` (its own button chrome wins), and per-segment

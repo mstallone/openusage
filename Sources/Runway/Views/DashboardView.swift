@@ -13,7 +13,7 @@ import SwiftUI
 /// `.scrollEdgeEffectStyle(.soft)`, macOS 26+) — Apple's blurred boundary, not a custom gradient or a
 /// material bar. On macOS 15 the footer/top bar still pin via `safeAreaInset`, just without the blur
 /// (content scrolls flush). The panel **auto-fits its content**: each screen publishes its intrinsic
-/// height (`ScrollContentHeightKey` + the measured footer), and the visual panel — a height-framed,
+/// height (`ScrollContentHeightKey` + the fixed chrome heights), and the visual panel — a height-framed,
 /// corner-clipped card pinned to the top of a fixed-size transparent window (see
 /// `PanelHeightController`) — animates to that on SwiftUI's clock, with the AppKit backdrop following
 /// via `drivesPanelHeight` / `PanelHeightModifier`. The destination is the only live screen tree
@@ -39,7 +39,10 @@ struct DashboardView: View {
     /// morph target (`heightCoordinator.measuredIdeal` / `.target(for:)`). Written from the geometry
     /// actions below. The animation itself — `animatedHeight`, the slide, the `withAnimation` spring —
     /// stays in this view; the coordinator holds only the deterministic measurement.
-    @State private var heightCoordinator = PanelHeightCoordinator(topBarHeight: Self.topBarHeight)
+    @State private var heightCoordinator = PanelHeightCoordinator(
+        topBarHeight: Self.topBarHeight,
+        footerHeight: Self.footerHeight
+    )
     /// Horizontal screen-switch slide: 0 shows the outgoing screen, 1 the incoming one. Drives the
     /// page offset so the screens slide between modes on one spring.
     @State private var slideProgress: CGFloat = 1
@@ -75,6 +78,10 @@ struct DashboardView: View {
     private static let popoverWidth: CGFloat = 320
     /// Fixed height of the Customize / Settings back nav bar — the bar pins itself to exactly this height.
     private static let topBarHeight: CGFloat = 44
+    /// Fixed height of the footer bar (Dashboard and Settings; Customize shows none). Like the top
+    /// bar, the footer is fixed-height chrome: the height coordinator sums this constant into each
+    /// screen's morph target, the scroll spacer reserves it, and the overlay bar fills it.
+    private static let footerHeight: CGFloat = 40
     /// A compact directional entrance communicates hierarchy without keeping a second full screen tree
     /// alive. The opaque popover surface fills the small uncovered strip while the page settles.
     private static let screenEntranceDistance: CGFloat = 36
@@ -98,6 +105,20 @@ struct DashboardView: View {
             // The easter egg's visuals hug the visual panel (and get clipped to its rounded shape
             // below), so party/drunk layers can't paint into the window's transparent remainder.
             .tooMuchTransparency(transparency.effectiveStyle)
+            // The footer, glued to the animated panel frame's bottom edge. As an overlay on the height
+            // frame its position derives from the same animated bounds that define the visible panel
+            // edge — one layout, one spring, so it cannot detach from the bottom during a morph. Inside
+            // the clip below so the glass bar keeps the panel's rounded corners; a clear spacer in each
+            // screen's `pinnedFooter` reserves its space in the scroll view.
+            .overlay(alignment: .bottom) {
+                PopoverFooter(
+                    screen: layout.screen,
+                    layout: layout,
+                    dataStore: dataStore,
+                    horizontalPadding: Self.footerHorizontalPadding,
+                    height: Self.footerHeight
+                )
+            }
             // Inside the clip below, so a drag that wanders past the panel's bottom edge clips the
             // floating chip at the edge (as the window bounds used to) instead of rendering it into
             // the fixed window's transparent remainder. Same origin as the outer fill — the panel is
@@ -120,7 +141,7 @@ struct DashboardView: View {
             .background(
                 // Esc backs out of Customize / Settings first; only from the dashboard does it close
                 // the popover. Return opens Customize from the dashboard (the same affordance the
-                // footer's Options ▸ Customize menu item carries) and returns to the
+                // footer's gear options menu's Customize item carries) and returns to the
                 // dashboard from Customize or Settings — matching Esc and the back navigation,
                 // never jumping Settings → Customize. Always consumed, so a bare Return can't fall
                 // through and dismiss the popover.
@@ -149,7 +170,7 @@ struct DashboardView: View {
                     },
                     // ⌘, toggles Settings, on this always-on monitor so it fires from every screen —
                     // including Settings, whose footer has no Settings action. Handling it here (and
-                    // consuming it) also lets the Options menu's Settings item carry ⌘, as a label
+                    // consuming it) also lets the gear options menu's Settings item carry ⌘, as a label
                     // without a second SwiftUI registration fighting it.
                     onSettings: {
                         withAnimation(Motion.modeSwitch) {
@@ -395,14 +416,13 @@ struct DashboardView: View {
                 )
             }
             .pinnedFooter(spacing: 0) {
-                PopoverFooter(
-                    screen: layout.screen,
-                    layout: layout,
-                    dataStore: dataStore,
-                    horizontalPadding: Self.footerHorizontalPadding
-                ) { screen, height in
-                    heightCoordinator.setFooter(height, for: screen)
-                }
+                // A clear spacer stands in for the footer inside the scroll view's safe area: it keeps
+                // the content inset and the native bottom scroll-edge blur exactly as a visible bar
+                // would. The visible footer itself is a bottom-aligned overlay on the animated panel
+                // frame (see `body`), so it stays glued to the panel's bottom edge through every morph
+                // instead of depending on the scroll view's safe-area layout.
+                Color.clear
+                    .frame(height: screen == .customize ? 0 : Self.footerHeight)
             }
     }
 

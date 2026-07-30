@@ -275,7 +275,7 @@ final class StatusItemController: NSObject {
     }
 
     /// Right-click / control-click on the status item: a native menu mirroring the Settings and Quit
-    /// items in the popover footer's Options menu (same titles, symbols, and ⌘ shortcuts). Assigning
+    /// items in the popover footer's gear options menu (same titles, symbols, and ⌘ shortcuts). Assigning
     /// `statusItem.menu` for the span of one `performClick` shows the menu anchored under the item and
     /// highlights the button, then clearing it restores the left-click toggle behavior.
     private func showContextMenu() {

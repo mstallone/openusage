@@ -1,44 +1,47 @@
 import SwiftUI
 
-/// Fixed popover footer chrome: app identity, refresh status, dashboard actions, and copy confirmation.
+/// Fixed popover footer chrome: a single compact line with the app identity, the next-update
+/// countdown, and the gear options menu (plus the transient copy confirmation and pin-limit notice).
 /// It uses the destination screen so both pages mounted during a slide draw the same footer.
+///
+/// The footer is a **fixed-height bar rendered as a bottom-aligned overlay on the animated panel
+/// frame** (see `DashboardView.body`), not a bar inside the scroll view's safe area — so its position
+/// derives from the same frame whose bottom edge is the visible panel edge, and it stays glued to
+/// that edge through every height morph by construction. A clear spacer of the same height inside
+/// `pinnedFooter` keeps the scroll inset and the native bottom scroll-edge blur.
 struct PopoverFooter: View {
     let screen: PopoverScreen
     let layout: LayoutStore
     let dataStore: WidgetDataStore
     let horizontalPadding: CGFloat
-    let onHeightChange: (PopoverScreen, CGFloat) -> Void
+    /// The bar's fixed height — `DashboardView.footerHeight`, the same constant the height
+    /// coordinator sums into each screen's morph target and the scroll spacer reserves.
+    let height: CGFloat
 
     @Environment(\.popoverIsVisible) private var popoverIsVisible
 
     @ViewBuilder
     var body: some View {
-        Group {
-            if screen == .customize {
-                EmptyView()
-            } else {
-                HStack(alignment: .center, spacing: 8) {
-                    footerIdentity
-                    Spacer(minLength: 8)
-                    HeaderView(screen: screen)
+        if screen != .customize {
+            HStack(alignment: .center, spacing: 10) {
+                footerIdentity
+                Spacer(minLength: 8)
+                nextUpdateButton
+                HeaderView(screen: screen)
+            }
+            .padding(.horizontal, horizontalPadding)
+            .frame(height: height)
+            .frame(maxWidth: .infinity)
+            .barGlass()
+            .overlay(alignment: .top) {
+                if screen == .dashboard, layout.shareConfirmation {
+                    shareCopiedPill
+                        .offset(y: -34)
                 }
             }
+            .animation(Motion.spring, value: layout.shareConfirmation)
+            .animation(Motion.spring, value: layout.shareConfirmationTrigger)
         }
-        .padding(.horizontal, horizontalPadding)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .barGlass()
-        .onGeometryChange(for: CGFloat.self) { proxy in proxy.size.height } action: { height in
-            onHeightChange(screen, height)
-        }
-        .overlay(alignment: .top) {
-            if screen == .dashboard, layout.shareConfirmation {
-                shareCopiedPill
-                    .offset(y: -34)
-            }
-        }
-        .animation(Motion.spring, value: layout.shareConfirmation)
-        .animation(Motion.spring, value: layout.shareConfirmationTrigger)
     }
 
     private var shareCopiedPill: some View {
@@ -50,22 +53,26 @@ struct PopoverFooter: View {
         )
     }
 
+    /// The leading identity line — the app version, swapped for the transient pin-limit notice while
+    /// one is showing.
     private var footerIdentity: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Runway \(AppInfo.version)")
+        Group {
             if let notice = layout.pinLimitNotice {
                 Text(notice)
                     .foregroundStyle(Theme.notice)
                     .denyShake(trigger: layout.pinNoticeShakeTrigger, shakeOnAppear: true)
             } else {
-                nextUpdateButton
+                Text("Runway \(AppInfo.version)")
             }
         }
         .font(.caption2)
         .foregroundStyle(.secondary)
+        .lineLimit(1)
         .animation(Motion.spring, value: layout.pinLimitNotice)
     }
 
+    /// The compact countdown — a small refresh glyph plus "3m" / "45s" until the next update, swapped
+    /// for a mini spinner while a refresh is in flight. Clicking it (or ⌘R) refreshes immediately.
     private var nextUpdateButton: some View {
         Button {
             refreshNow()
@@ -88,15 +95,20 @@ struct PopoverFooter: View {
     }
 
     private func updateStatusLabel(now: Date) -> some View {
-        HStack(spacing: 5) {
-            Text(updateStatusText(now: now))
-                .monospacedDigit()
-                .contentTransition(.numericText())
+        HStack(spacing: 4) {
             if isUpdating {
                 ProgressView()
                     .controlSize(.mini)
+            } else {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(countdownText(now: now))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
             }
         }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
     }
 
     private var isUpdating: Bool {
@@ -108,15 +120,14 @@ struct PopoverFooter: View {
         Task { await dataStore.refreshAll(force: true) }
     }
 
-    private func updateStatusText(now: Date) -> String {
-        if isUpdating { return "Updating…" }
+    private func countdownText(now: Date) -> String {
         let base = dataStore.lastRefreshAt ?? now
         let remaining = max(0, base.addingTimeInterval(RefreshSetting.interval).timeIntervalSince(now))
         let totalSeconds = Int(remaining.rounded(.up))
         if totalSeconds >= 60 {
             let minutes = Int((Double(totalSeconds) / 60).rounded(.up))
-            return "Next update in \(minutes)m"
+            return "\(minutes)m"
         }
-        return "Next update in \(totalSeconds)s"
+        return "\(totalSeconds)s"
     }
 }
