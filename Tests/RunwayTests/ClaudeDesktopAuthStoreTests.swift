@@ -175,6 +175,73 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(fixture.keyReader.calls, [false])
     }
 
+    func testDesktopFootprintDetectionNeverAllowsKeychainInteraction() throws {
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)],
+            requiresInteraction: true
+        )
+        let now = now
+        let authStore = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: fixture.files,
+            keychain: FakeKeychain(),
+            desktop: fixture.store,
+            now: { now }
+        )
+
+        XCTAssertTrue(authStore.hasCredentialFootprint())
+        XCTAssertEqual(fixture.keyReader.calls, [false])
+    }
+
+    func testCorruptDesktopMaterialDoesNotCountAsCredentialFootprint() throws {
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
+        )
+        let configPath = home
+            .appendingPathComponent("Library/Application Support/Claude/config.json")
+            .path
+        fixture.files.files[configPath] = #"{"oauth:tokenCacheV2":"not-base64"}"#
+        let now = now
+        let authStore = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: fixture.files,
+            keychain: FakeKeychain(),
+            desktop: fixture.store,
+            now: { now }
+        )
+
+        XCTAssertFalse(authStore.hasCredentialFootprint())
+        XCTAssertEqual(fixture.keyReader.calls, [false])
+    }
+
+    func testManualCodeDenialStopsBeforeLegacyAndDesktopPrompts() throws {
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
+        )
+        let keychain = DenyingClaudeCodeKeychain()
+        let now = now
+        let authStore = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: fixture.files,
+            keychain: keychain,
+            desktop: fixture.store,
+            now: { now }
+        )
+
+        let load = authStore.loadCredentialSet(
+            allowKeychainInteraction: true,
+            allowDesktopInteraction: true
+        )
+
+        XCTAssertEqual(load.keychainAccessStatus, .permissionRequired)
+        XCTAssertEqual(keychain.currentUserInteractiveReads, 1)
+        XCTAssertEqual(keychain.legacyInteractiveReads, 0)
+        XCTAssertTrue(fixture.keyReader.calls.isEmpty)
+    }
+
     @MainActor
     func testDesktopPermissionIsNotMaskedByScopedCLIToken() async throws {
         let fixture = try makeFixture(
@@ -491,6 +558,31 @@ private struct DesktopFixture {
     var store: ClaudeDesktopAuthStore
     var files: FakeFiles
     var keyReader: FakeClaudeDesktopKeyReader
+}
+
+private final class DenyingClaudeCodeKeychain: KeychainAccessing, @unchecked Sendable {
+    private(set) var currentUserInteractiveReads = 0
+    private(set) var legacyInteractiveReads = 0
+
+    func readGenericPassword(service: String) throws -> String? {
+        nil
+    }
+
+    func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
+        currentUserInteractiveReads += 1
+        throw KeychainError.readFailed("denied")
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        legacyInteractiveReads += 1
+        return nil
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
 }
 
 private final class FakeClaudeDesktopKeyReader: ClaudeDesktopSafeStorageKeyReading, @unchecked Sendable {
