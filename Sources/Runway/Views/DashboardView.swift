@@ -52,11 +52,13 @@ struct DashboardView: View {
     /// Measured expanded-section height per provider, learned from the first expand's measurement.
     /// Lets later caret toggles co-animate the panel height in the SAME transaction as the row change
     /// (one spring clock — no footer catch-up); a provider's first toggle uses a row-count estimate
-    /// and the measurement that follows issues a small same-spring correction.
+    /// and the measurement that follows issues a small same-spring correction. Keyed by the
+    /// provider's expanded-section *composition* (`expansionDeltaKey`), so customizing what sits
+    /// behind the caret misses the cache and re-learns instead of retargeting by a stale height.
     @State private var expansionDeltas: [String: CGFloat] = [:]
-    /// The provider whose caret toggle is awaiting its measurement, with the pre-toggle target the
-    /// actual delta is derived from. Cleared when the next dashboard measurement lands.
-    @State private var pendingExpansion: (providerID: String, fromTarget: CGFloat)?
+    /// The composition key whose caret toggle is awaiting its measurement, with the pre-toggle target
+    /// the actual delta is derived from. Cleared when the next dashboard measurement lands.
+    @State private var pendingExpansion: (cacheKey: String, fromTarget: CGFloat)?
     /// Drives the macOS-native confirmation sheet for the Customize "reset all" button. The alert
     /// attaches to this panel as a sheet (see `StatusItemController`'s attached-sheet guard), so a
     /// click on its buttons can't be misread as an outside click that dismisses the popover.
@@ -237,7 +239,7 @@ struct DashboardView: View {
                 // height so the NEXT toggle co-animates with zero correction.
                 if let pending = pendingExpansion, layout.screen == .dashboard,
                    let ideal = heightCoordinator.measuredIdeal[.dashboard] {
-                    expansionDeltas[pending.providerID] = abs(ideal - pending.fromTarget)
+                    expansionDeltas[pending.cacheKey] = abs(ideal - pending.fromTarget)
                     pendingExpansion = nil
                 }
                 if !didEstablishHeight {
@@ -257,8 +259,9 @@ struct DashboardView: View {
                 MenuBarPopover.coAnimateExpansion = { providerID, expanding in
                     guard didEstablishHeight, animatedHeight > 0, layout.screen == .dashboard else { return }
                     let fromIdeal = heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight
-                    let delta = expansionDeltas[providerID] ?? estimatedExpansionDelta(for: providerID)
-                    pendingExpansion = (providerID, fromIdeal)
+                    let key = expansionDeltaKey(for: providerID)
+                    let delta = expansionDeltas[key] ?? estimatedExpansionDelta(for: providerID)
+                    pendingExpansion = (key, fromIdeal)
                     let ideal = fromIdeal + (expanding ? delta : -delta)
                     // Plain assignment: this runs inside the caret's `withAnimation(Motion.spring)`, so
                     // the change rides that same transaction. The measurement that follows only issues
@@ -277,6 +280,19 @@ struct DashboardView: View {
             // Sourced from the controller's show/hide chokepoints (`popoverShown`), not occlusion — a
             // `.canJoinAllSpaces` panel is briefly occluded mid Space-switch while still on-screen.
             .environment(\.popoverIsVisible, transparency.popoverShown)
+    }
+
+    /// Ties a learned delta to the provider's current expanded-section composition: the ordered On
+    /// Demand metric IDs (order matters — adjacent text rows condense) plus quick-links presence.
+    /// Customizing what sits behind the caret changes the key, so a stale height can't retarget the
+    /// first post-customization toggle; the estimate covers that toggle and the measurement re-learns.
+    private func expansionDeltaKey(for providerID: String) -> String {
+        guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
+            return providerID
+        }
+        let metricIDs = group.expandedWidgets.compactMap { layout.descriptor(for: $0)?.id }
+        let links = group.provider.visibleLinks.isEmpty ? "" : "|links"
+        return "\(providerID)|\(metricIDs.joined(separator: ","))\(links)"
     }
 
     /// First-toggle guess for a provider's expanded-section height: its On Demand rows at the compact
