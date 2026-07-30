@@ -1,7 +1,7 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>OpenUsage</title>
+        <title>Runway</title>
         <item>
             <title>0.8.1</title>
             <pubDate>Thu, 30 Jul 2026 02:05:32 +0000</pubDate>
