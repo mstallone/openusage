@@ -16,11 +16,11 @@ on:
 permissions:
   contents: write
 
-# Serialize releases: each run reads appcast.xml from gh-pages, regenerates it with generate_appcast,
-# and force-publishes the branch. Without this, two tags pushed close together could race and drop a
-# feed entry.
+# Serialize update-feed publishers: each release reads the existing appcast, regenerates it with
+# generate_appcast, and force-publishes the backing branch. Without this, two publishers could race
+# and drop a feed entry.
 concurrency:
-  group: release-appcast
+  group: update-feed-publish
   cancel-in-progress: false
 
 jobs:
@@ -144,17 +144,17 @@ jobs:
           # versions are preserved (verified: items whose archive isn't in the folder keep their original
           # enclosure URLs untouched).
           mkdir -p feed
-          # Distinguish "no gh-pages yet" (first release -> fresh feed) from "couldn't read it"
+          # Distinguish "no update-feed yet" (first release -> fresh feed) from "couldn't read it"
           # (transient failure). Only start fresh when the branch genuinely doesn't exist; otherwise
           # abort so a network blip can't replace the live feed's full history with a single item.
           set +e
-          git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1
+          git ls-remote --exit-code --heads origin update-feed >/dev/null 2>&1
           rc=$?
           set -e
           if [ "$rc" -eq 0 ]; then
-            git fetch origin gh-pages
-            if git show origin/gh-pages:appcast.xml > feed/appcast.xml; then
-              echo "Loaded existing appcast from gh-pages."
+            git fetch origin update-feed
+            if git show origin/update-feed:appcast.xml > feed/appcast.xml; then
+              echo "Loaded existing appcast from update-feed."
             else
               # `git show > file` creates an empty file even when the source path is absent. Remove it
               # so generate_appcast genuinely starts fresh in the two safe bootstrap states below.
@@ -162,7 +162,7 @@ jobs:
 
               # Two tags are enough to distinguish an empty fork / first-release retry from real
               # history. A rerun after action-gh-release published the current tag but before the
-              # appcast reached gh-pages must be recoverable; any other release history still fails
+              # appcast reached update-feed must be recoverable; any other release history still fails
               # closed so a missing feed can never silently discard prior Sparkle entries.
               release_state="$(
                 gh release list --limit 2 --json tagName --jq '.[].tagName' \
@@ -176,7 +176,7 @@ jobs:
                   echo "Only the partial release for $RELEASE_TAG exists — rebuilding its first appcast."
                   ;;
                 history)
-                  echo "gh-pages has no appcast but prior release history exists — aborting to protect the feed." >&2
+                  echo "update-feed has no appcast but prior release history exists — aborting to protect the feed." >&2
                   exit 1
                   ;;
                 *)
@@ -186,9 +186,9 @@ jobs:
               esac
             fi
           elif [ "$rc" -eq 2 ]; then
-            echo "No gh-pages branch yet — starting a fresh feed."
+            echo "No update-feed branch yet — starting a fresh feed."
           else
-            echo "Could not reach origin to check for gh-pages — aborting to protect the feed." >&2
+            echo "Could not reach origin to check for update-feed — aborting to protect the feed." >&2
             exit 1
           fi
 
@@ -235,6 +235,7 @@ jobs:
             --download-url-prefix "$DOWNLOAD_PREFIX" \
             --maximum-versions 0 \
             feed
+          "$GITHUB_WORKSPACE/script/normalize_appcast_title.sh" feed/appcast.xml Runway
 
           # Fail loudly if the merge went wrong. The new DMG's enclosure must exist AND carry an EdDSA
           # signature on the same line (generate_appcast silently omits it if SUPublicEDKey doesn't match
@@ -245,18 +246,18 @@ jobs:
           [ "$after" -ge "$before" ] || { echo "Appcast item count dropped ($before -> $after) — aborting." >&2; exit 1; }
           echo "Appcast OK: $before -> $after items."
 
-      - name: Assemble Pages directory
+      - name: Assemble update feed
         run: |
           mkdir -p public
           cp feed/appcast.xml public/appcast.xml
 
-      - name: Publish appcast to GitHub Pages
+      - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
+          publish_branch: update-feed
           publish_dir: ./public
-          # gh-pages also hosts pricing_supplement.json (see pricing-supplement.yml). Without
+          # update-feed also hosts pricing_supplement.json (see pricing-supplement.yml). Without
           # keep_files, publishing the appcast would delete it from the branch.
           keep_files: true
 

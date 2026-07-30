@@ -102,7 +102,7 @@ Export the NextByte Developer ID Application cert (with its private key) from Ke
 
 For iCloud Sync, store the original development and Developer ID provisioning profiles in 1Password as secure documents. Install the development profile on each registered Mac; base64-encode the Developer ID profile and store it only in the `APPLE_DEVELOPER_ID_ICLOUD_PROFILE` Actions secret. See [iCloud Sync](docs/icloud-sync.md#development-and-release-setup) for the container identifiers, build command, and file-inspection command.
 
-The repository must be public (Sparkle fetches the DMG and appcast anonymously), and the appcast is served from GitHub Pages. Set Settings → Pages → Build and deployment → Source to **GitHub Actions**; the publishing workflows create and maintain the `gh-pages` branch.
+The repository must be public (Sparkle fetches the DMG and appcast anonymously), and the update feed is served through GitHub Pages. Set Settings → Pages → Build and deployment → Source to **GitHub Actions**; the publishing workflows create and maintain the `update-feed` branch. The deployment job keeps GitHub's recommended `github-pages` environment name, but all owner-controlled workflow and branch names use update-feed terminology.
 
 ## Contributing
 
