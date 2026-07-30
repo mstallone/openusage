@@ -88,6 +88,16 @@ final class ClaudeAuthStoreTests: XCTestCase {
         XCTAssertEqual(store.loadCredentialCandidates().first?.oauth.accessToken, "keychain-token")
     }
 
+    func testMalformedReadableKeychainItemDoesNotCountAsCredentialFootprint() {
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: FakeFiles(),
+            keychain: FakeKeychain(#"{"claudeAiOauth":{"accessToken":"   "}}"#)
+        )
+
+        XCTAssertFalse(store.hasCredentialFootprint())
+    }
+
     func testEnvironmentTokenIsInferenceOnly() {
         let store = ClaudeAuthStore(
             environment: FakeEnvironment(["CLAUDE_CODE_OAUTH_TOKEN": "env-token"]),
@@ -361,6 +371,222 @@ final class ClaudeUsageMapperTests: XCTestCase {
 
 @MainActor
 final class ClaudeProviderTests: XCTestCase {
+    func testLaunchDetectionAndAutomaticRefreshNeverReadKeychainInteractively() async {
+        let keychain = InteractionTrackingKeychain()
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles(),
+                keychain: keychain
+            ),
+            usageClient: ClaudeUsageClient(httpClient: FakeHTTPClient(
+                response: HTTPResponse(statusCode: 200, headers: [:], body: Data())
+            )),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let detected = await provider.hasLocalCredentials()
+        XCTAssertTrue(detected, "attributes-only detection should see the login")
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(
+            badge(snapshot.lines, "Error"),
+            ClaudeAuthError.codePermissionRequired.localizedDescription
+        )
+        XCTAssertEqual(keychain.interactiveReadCount, 0)
+        XCTAssertGreaterThan(keychain.nonInteractiveReadCount, 0)
+    }
+
+    func testManualRefreshUsesRunwayInteractiveReadInsteadOfSecurityHelper() async {
+        let keychain = InteractionTrackingKeychain(
+            approvedValue: #"""
+            {"claudeAiOauth":{"accessToken":"keychain-token","subscriptionType":"pro","scopes":["user:profile"]}}
+            """#
+        )
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles(),
+                keychain: keychain
+            ),
+            usageClient: ClaudeUsageClient(httpClient: FakeHTTPClient(
+                response: HTTPResponse(
+                    statusCode: 200,
+                    headers: [:],
+                    body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+                )
+            )),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await ProviderRefreshContext.$isManual.withValue(true) {
+            await provider.refresh()
+        }
+
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertGreaterThan(keychain.runwayInteractiveReadCount, 0)
+        XCTAssertEqual(
+            keychain.interactiveReadCount,
+            0,
+            "manual approval must not be delegated to /usr/bin/security"
+        )
+    }
+
+    func testAutomaticRefreshDoesNotMaskUnreadableKeychainWithFileFallback() async {
+        let keychain = InteractionTrackingKeychain()
+        let httpClient = FakeHTTPClient(response: HTTPResponse(
+            statusCode: 200,
+            headers: [:],
+            body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+        ))
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles([
+                    "~/.claude/.credentials.json":
+                        #"""
+                        {"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"pro","scopes":["user:profile"]}}
+                        """#
+                ]),
+                keychain: keychain
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(
+            badge(snapshot.lines, "Error"),
+            ClaudeAuthError.codePermissionRequired.localizedDescription
+        )
+        XCTAssertEqual(keychain.interactiveReadCount, 0)
+        XCTAssertGreaterThan(keychain.nonInteractiveReadCount, 0)
+        XCTAssertTrue(httpClient.requests.isEmpty)
+    }
+
+    func testAutomaticRefreshBlocksFallbackWhenKeychainExistenceIsUnknown() async {
+        let keychain = InteractionTrackingKeychain(existence: nil)
+        let httpClient = FakeHTTPClient(response: HTTPResponse(
+            statusCode: 200,
+            headers: [:],
+            body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+        ))
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles([
+                    "~/.claude/.credentials.json":
+                        #"""
+                        {"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"pro","scopes":["user:profile"]}}
+                        """#
+                ]),
+                keychain: keychain
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(
+            badge(snapshot.lines, "Error"),
+            ClaudeAuthError.codeCredentialsUnavailable.localizedDescription
+        )
+        XCTAssertEqual(keychain.interactiveReadCount, 0)
+        XCTAssertGreaterThan(keychain.nonInteractiveReadCount, 0)
+        XCTAssertTrue(httpClient.requests.isEmpty)
+    }
+
+    func testUnreadableKeychainAppearingDuringRequestInvalidatesFileGeneration() async {
+        let keychain = AppearingUnreadableKeychain()
+        let httpClient = RoutingHTTPClient { request in
+            XCTAssertTrue(request.url.absoluteString.hasSuffix("/api/oauth/usage"))
+            keychain.makeExistenceUnknown()
+            return HTTPResponse(
+                statusCode: 200,
+                headers: [:],
+                body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+            )
+        }
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles([
+                    "~/.claude/.credentials.json":
+                        #"""
+                        {"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"pro","scopes":["user:profile"]}}
+                        """#
+                ]),
+                keychain: keychain
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(
+            badge(snapshot.lines, "Error"),
+            ClaudeAuthError.codeCredentialsUnavailable.localizedDescription
+        )
+        XCTAssertEqual(httpClient.requests.count, 1)
+        XCTAssertEqual(keychain.interactiveReadCount, 0)
+    }
+
+    func testAutomaticKeychainRotationUsesNonInteractiveRunwayUpdate() async {
+        let keychain = RotationTrackingKeychain(
+            value: #"""
+            {"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":1,"subscriptionType":"pro","scopes":["user:profile"]}}
+            """#
+        )
+        let httpClient = RoutingHTTPClient { request in
+            if request.url.absoluteString.hasSuffix("/api/oauth/usage") {
+                guard request.headers["Authorization"]?.contains("fresh-token") == true else {
+                    return HTTPResponse(statusCode: 401, headers: [:], body: Data())
+                }
+                return HTTPResponse(
+                    statusCode: 200,
+                    headers: [:],
+                    body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+                )
+            }
+            return HTTPResponse(
+                statusCode: 200,
+                headers: [:],
+                body: Data(#"{"access_token":"fresh-token","refresh_token":"refresh-2","expires_in":3600}"#.utf8)
+            )
+        }
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles(),
+                keychain: keychain
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Session" }))
+        XCTAssertEqual(keychain.runwayUpdateInteractionValues, [false])
+        XCTAssertEqual(
+            keychain.helperWriteCount,
+            0,
+            "background rotation must not delegate persistence to /usr/bin/security"
+        )
+        XCTAssertTrue(keychain.storedValue.contains("fresh-token"))
+        XCTAssertTrue(keychain.storedValue.contains("refresh-2"))
+    }
+
     func testRefreshFetchesLiveUsageAndScansConfigDirLogs() async throws {
         let now = RunwayISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let httpClient = FakeHTTPClient(response: HTTPResponse(
@@ -792,6 +1018,203 @@ final class ClaudeProviderTests: XCTestCase {
             return nil
         }
         return (used, limit, resetsAt, periodDurationMs)
+    }
+}
+
+/// Models an existing Claude Code item that Runway has not been authorized to read yet. The launch
+/// path may inspect its attributes and attempt an interaction-forbidden read, but must never call either
+/// interactive secret API — those are what cause macOS to present the password dialog.
+private final class InteractionTrackingKeychain: KeychainAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private let approvedValue: String?
+    private let existence: Bool?
+    private var interactiveReads = 0
+    private var runwayInteractiveReads = 0
+    private var nonInteractiveReads = 0
+
+    init(approvedValue: String? = nil, existence: Bool? = true) {
+        self.approvedValue = approvedValue
+        self.existence = existence
+    }
+
+    var interactiveReadCount: Int {
+        lock.withLock { interactiveReads }
+    }
+
+    var runwayInteractiveReadCount: Int {
+        lock.withLock { runwayInteractiveReads }
+    }
+
+    var nonInteractiveReadCount: Int {
+        lock.withLock { nonInteractiveReads }
+    }
+
+    func readGenericPassword(service: String) throws -> String? {
+        lock.withLock { interactiveReads += 1 }
+        return nil
+    }
+
+    func readGenericPasswordForCurrentUser(service: String) throws -> String? {
+        lock.withLock { interactiveReads += 1 }
+        return nil
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { runwayInteractiveReads += 1 }
+        return nil
+    }
+
+    func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { runwayInteractiveReads += 1 }
+        return approvedValue
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { nonInteractiveReads += 1 }
+        return .unavailable
+    }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { nonInteractiveReads += 1 }
+        return .unavailable
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        existence
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
+
+    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {}
+}
+
+/// Starts with no Claude Code item, then models a Keychain that becomes unreadable while the file
+/// credential request is in flight. The generation marker must force a reload before that response
+/// can be published, and every automatic read remains interaction-forbidden.
+private final class AppearingUnreadableKeychain: KeychainAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var existenceUnknown = false
+    private var interactiveReads = 0
+
+    var interactiveReadCount: Int {
+        lock.withLock { interactiveReads }
+    }
+
+    func makeExistenceUnknown() {
+        lock.withLock { existenceUnknown = true }
+    }
+
+    func readGenericPassword(service: String) throws -> String? {
+        lock.withLock { interactiveReads += 1 }
+        return nil
+    }
+
+    func readGenericPasswordForCurrentUser(service: String) throws -> String? {
+        lock.withLock { interactiveReads += 1 }
+        return nil
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactiveReads += 1 }
+        return nil
+    }
+
+    func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactiveReads += 1 }
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { existenceUnknown ? .unavailable : .missing }
+    }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { existenceUnknown ? .unavailable : .missing }
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        lock.withLock { existenceUnknown ? nil : false }
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
+
+    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {}
+}
+
+/// Models a readable Claude Code item whose OAuth token rotates during an automatic refresh. Helper
+/// writes represent `/usr/bin/security`; Runway updates represent the in-process Security.framework
+/// operation and record whether the caller allowed UI.
+private final class RotationTrackingKeychain: KeychainAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String
+    private var helperWrites = 0
+    private var runwayUpdateInteractions: [Bool] = []
+
+    init(value: String) {
+        self.value = value
+    }
+
+    var helperWriteCount: Int {
+        lock.withLock { helperWrites }
+    }
+
+    var runwayUpdateInteractionValues: [Bool] {
+        lock.withLock { runwayUpdateInteractions }
+    }
+
+    var storedValue: String {
+        lock.withLock { value }
+    }
+
+    func readGenericPassword(service: String) throws -> String? {
+        nil
+    }
+
+    func readGenericPasswordForCurrentUser(service: String) throws -> String? {
+        lock.withLock { value }
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .missing
+    }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { .value(value) }
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {
+        lock.withLock { helperWrites += 1 }
+    }
+
+    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
+        lock.withLock { helperWrites += 1 }
+    }
+
+    func updateGenericPassword(
+        service: String,
+        value: String,
+        allowUserInteraction: Bool
+    ) throws {
+        lock.withLock {
+            runwayUpdateInteractions.append(allowUserInteraction)
+            self.value = value
+        }
+    }
+
+    func updateGenericPasswordForCurrentUser(
+        service: String,
+        value: String,
+        allowUserInteraction: Bool
+    ) throws {
+        try updateGenericPassword(
+            service: service,
+            value: value,
+            allowUserInteraction: allowUserInteraction
+        )
     }
 }
 
