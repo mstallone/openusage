@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ReorderLift {
     enum Payload {
-        case dashboardProvider(provider: Provider, plan: String?, rows: [WidgetData])
+        case dashboardProvider(provider: Provider, plan: String?, rows: [WidgetData], errorMessage: String? = nil)
         case dashboardMetric(data: WidgetData)
         case customizeProviderRow(provider: Provider, isEnabled: Bool, metricCount: Int)
         case customizeMetric(title: String)
@@ -60,8 +60,8 @@ struct ReorderLiftPreview: View {
     @ViewBuilder
     private var preview: some View {
         switch lift.payload {
-        case .dashboardProvider(let provider, let plan, let rows):
-            dashboardProviderPreview(provider: provider, plan: plan, rows: rows)
+        case .dashboardProvider(let provider, let plan, let rows, let errorMessage):
+            dashboardProviderPreview(provider: provider, plan: plan, rows: rows, errorMessage: errorMessage)
         case .dashboardMetric(let data):
             dashboardMetricPreview(data)
         case .customizeProviderRow(let provider, let isEnabled, let metricCount):
@@ -71,16 +71,27 @@ struct ReorderLiftPreview: View {
         }
     }
 
-    private func dashboardProviderPreview(provider: Provider, plan: String?, rows: [WidgetData]) -> some View {
+    private func dashboardProviderPreview(
+        provider: Provider,
+        plan: String?,
+        rows: [WidgetData],
+        errorMessage: String?
+    ) -> some View {
         // Same anatomy as the live dashboard section (`WidgetGroupedListView.section` + `container`):
-        // Header over the shared metric card, at the compact layout's header→card spacing.
+        // Header over the shared metric card, at the compact layout's header→card spacing. When the
+        // live card shows the error prompt instead of rows, the lifted chip shows it too (inert —
+        // the whole preview is non-interactive).
         VStack(alignment: .leading, spacing: density.headerToCardSpacing) {
             ProviderSectionHeader(provider: provider, plan: plan)
                 .padding(.horizontal, 8)
 
             DashboardMetricCard {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    WidgetRowView(data: row)
+                if let errorMessage {
+                    ProviderErrorCardView(message: errorMessage, isRefreshing: false, onRefresh: {})
+                } else {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        WidgetRowView(data: row)
+                    }
                 }
             }
         }

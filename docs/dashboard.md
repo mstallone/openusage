@@ -43,6 +43,8 @@ For Claude, Codex, Cursor, Grok, and OpenCode spend rows, the value gently highl
 
 **Usage Trend** (Claude, Codex, Cursor, Grok, OpenCode, and Sakana Fugu) is a small bar chart of the last 30 days of token usage — one bar per day, drawn from the same source as that provider's spend rows (local logs for Claude, Codex, Grok, OpenCode, and Sakana Fugu; Cursor's usage export for Cursor). **Hover it** for the peak day, the date range, and the source. It's on by default; turn it off or reorder it from Customize like any other metric. It can't be starred for the menu bar — the strip shows single values, not a chart.
 
+**When a provider can't load at all** — its refresh failed and there's no earlier data to keep showing (say, a Claude Code login still waiting for Keychain approval, or a provider that isn't signed in) — the card replaces its metric rows with the reason and a **Refresh** button. The provider's quick links (Status, Dashboard, …) stay available behind the card's caret, since those pages are often what resolves the problem. That button is the deliberate action that may show a macOS permission prompt; background refreshes never do. Once a provider has loaded at least once, a later failure keeps the last-good rows on screen and reports the problem with the amber triangle next to the provider's name instead.
+
 With [iCloud Sync](icloud-sync.md) on, the machine-local providers' spend rows, trends, warnings, and
 model breakdowns are rebuilt from all synced Macs. Cursor stays unchanged because its export is already
 account-wide. Quotas, plans, balances, and provider errors always describe this Mac's refresh.

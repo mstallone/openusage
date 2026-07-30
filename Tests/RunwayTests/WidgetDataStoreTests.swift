@@ -114,6 +114,176 @@ final class WidgetDataStoreTests: XCTestCase {
         XCTAssertEqual(store.headerNotice(for: provider.id), "Token expired. Run `claude` to log in again.")  // error wins
     }
 
+    func testEmptyStateErrorShowsOnlyWhileNoLastGoodDataExists() async {
+        // A provider that has never refreshed successfully (a Keychain item awaiting approval, a
+        // fresh not-signed-in install) surfaces its error as the card body via `emptyStateError`.
+        // Once any last-good data exists, a later failure keeps the rows on screen — the error moves
+        // to the header triangle only and `emptyStateError` stays nil.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let permissionMessage = ClaudeAuthError.codePermissionRequired.localizedDescription
+        let runtime = TogglingProviderRuntime(
+            provider: provider,
+            descriptors: [meter],
+            first: ProviderSnapshot.error(provider: provider, message: permissionMessage),
+            second: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Session", used: 42, limit: 100, format: .percent)]
+            )
+        )
+        // Isolated cache: the default file/defaults-backed cache could seed `snapshots` with a prior
+        // run's "test" snapshot, which would hide the empty state this test is about.
+        let defaults = makeUserDefaults("empty-state-error")
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [runtime],
+            cache: ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots"),
+            defaults: defaults
+        )
+
+        await store.refreshAll(force: true)  // failure with nothing to fall back on
+        XCTAssertEqual(store.emptyStateError(for: provider.id, placedDescriptors: [meter]), permissionMessage)
+        XCTAssertEqual(store.errorMessage(for: provider.id), permissionMessage)
+
+        await store.refreshAll(force: true)  // success: real data arrives
+        XCTAssertNil(store.emptyStateError(for: provider.id, placedDescriptors: [meter]))
+        XCTAssertNil(store.errorMessage(for: provider.id))
+        XCTAssertTrue(store.data(for: meter).hasData)
+    }
+
+    func testEmptyStateErrorStaysNilWhileLastGoodRowsRemainOnScreen() async {
+        // Success first, then a failure: the store keeps the last-good snapshot, so the card keeps
+        // its rows and only the header triangle reports the error — never the empty-state body.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let runtime = TogglingProviderRuntime(
+            provider: provider,
+            descriptors: [meter],
+            first: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Session", used: 42, limit: 100, format: .percent)]
+            ),
+            second: ProviderSnapshot.error(provider: provider, message: "Token expired. Run `claude` to log in again.")
+        )
+        let defaults = makeUserDefaults("empty-state-error-stale")
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [runtime],
+            cache: ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots"),
+            defaults: defaults
+        )
+
+        await store.refreshAll(force: true)  // success
+        await store.refreshAll(force: true)  // failure, last-good rows retained
+
+        XCTAssertEqual(store.errorMessage(for: provider.id), "Token expired. Run `claude` to log in again.")
+        XCTAssertNil(store.emptyStateError(for: provider.id, placedDescriptors: [meter]))
+        XCTAssertTrue(store.data(for: meter).hasData)
+    }
+
+    func testEmptyStateErrorTreatsPlaceholderOnlySnapshotAsEmpty() async {
+        // A "successful" refresh can produce nothing that fills a metric row: the `noUsageData`
+        // placeholder (an inference-only login with no local logs yet) or a status badge no
+        // descriptor renders (a rate-limited first refresh). That is not data worth keeping: when
+        // the next refresh fails, the error card must still replace the wall of empty rows.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let permissionMessage = ClaudeAuthError.codePermissionRequired.localizedDescription
+        let runtime = TogglingProviderRuntime(
+            provider: provider,
+            descriptors: [meter],
+            first: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [
+                    .noUsageData,
+                    .badge(label: "Status", text: "Updates blocked by Anthropic", colorHex: "#F59E0B"),
+                ]
+            ),
+            second: ProviderSnapshot.error(provider: provider, message: permissionMessage)
+        )
+        let defaults = makeUserDefaults("empty-state-error-placeholder")
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [runtime],
+            cache: ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots"),
+            defaults: defaults
+        )
+
+        await store.refreshAll(force: true)  // "success" that carried only the placeholder badge
+        await store.refreshAll(force: true)  // failure
+
+        XCTAssertEqual(store.emptyStateError(for: provider.id, placedDescriptors: [meter]), permissionMessage)
+    }
+
+    func testEmptyStateErrorIsNotMaskedByDataBelongingOnlyToHiddenMetrics() async {
+        // The judgment sees only the card's PLACED rows. A last-good line that backs a metric the
+        // user has hidden (a cached Weekly line while just Session is enabled) must not keep the
+        // visible "No data" wall — the error card still replaces it. Re-placing the hidden metric
+        // (both descriptors) flips the judgment back to keeping the rows.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let session = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let weekly = WidgetDescriptor(
+            id: "test.weekly",
+            providerID: provider.id,
+            metricLabel: "Weekly",
+            sample: WidgetData(title: "Weekly", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let permissionMessage = ClaudeAuthError.codePermissionRequired.localizedDescription
+        let runtime = TogglingProviderRuntime(
+            provider: provider,
+            descriptors: [session, weekly],
+            first: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Weekly", used: 12, limit: 100, format: .percent)]
+            ),
+            second: ProviderSnapshot.error(provider: provider, message: permissionMessage)
+        )
+        let defaults = makeUserDefaults("empty-state-error-hidden-metric")
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [session, weekly]),
+            providers: [runtime],
+            cache: ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots"),
+            defaults: defaults
+        )
+
+        await store.refreshAll(force: true)  // success: only the (hidden) Weekly line
+        await store.refreshAll(force: true)  // failure
+
+        XCTAssertEqual(
+            store.emptyStateError(for: provider.id, placedDescriptors: [session]),
+            permissionMessage,
+            "data on a hidden metric must not suppress the error card"
+        )
+        XCTAssertNil(
+            store.emptyStateError(for: provider.id, placedDescriptors: [session, weekly]),
+            "with the Weekly row placed, its stale data stays on screen instead"
+        )
+    }
+
     func testRemainingProgressWithoutResetUsesPeriodDurationLabel() {
         let session = WidgetData(
             title: "Session",

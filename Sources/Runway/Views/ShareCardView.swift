@@ -24,6 +24,9 @@ struct ShareCardView: View {
     /// land mid-session). Passed explicitly — this view renders in an `ImageRenderer`, outside the
     /// app's environment, so it can't read the account registry itself.
     var displayNameOverride: String? = nil
+    /// The dashboard's empty-state error when the live card is showing the error prompt instead of
+    /// metric rows. The export mirrors it (without the Refresh button — dead chrome in a PNG).
+    var errorMessage: String? = nil
 
     /// Authored card width in points. The renderer multiplies this by `ShareCardRenderer.scale` for the
     /// PNG's pixel width; the height is whatever the rows add up to (flexible).
@@ -68,7 +71,16 @@ struct ShareCardView: View {
     /// provider falls back to a quiet placeholder so the card never renders blank.
     @ViewBuilder
     private var metricsCard: some View {
-        if rows.isEmpty {
+        if let errorMessage {
+            DashboardMetricCard {
+                ProviderErrorCardView(
+                    message: errorMessage,
+                    isRefreshing: false,
+                    showsRefreshAction: false,
+                    onRefresh: {}
+                )
+            }
+        } else if rows.isEmpty {
             DashboardMetricCard {
                 Text("No metrics to show")
                     .font(.system(size: 14))

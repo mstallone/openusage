@@ -99,7 +99,22 @@ enum ShareCardRenderer {
             rows: rows,
             appearance: appearance,
             expandBoundaryIndex: isExpanded ? alwaysRows.count : nil,
-            displayNameOverride: displayName
+            displayNameOverride: displayName,
+            // When the live card shows the empty-state error prompt instead of rows, the export
+            // mirrors it — otherwise the shared PNG would be a wall of "No data" rows with the
+            // on-screen reason missing. Judged against the same placed, applicable descriptors the
+            // dashboard card uses.
+            errorMessage: dataStore.emptyStateError(
+                for: group.provider.id,
+                placedDescriptors: (group.alwaysShownWidgets + group.expandedWidgets).compactMap { widget in
+                    guard let descriptor = layout.descriptor(for: widget),
+                          dataStore.isMetricApplicable(descriptor)
+                    else {
+                        return nil
+                    }
+                    return descriptor
+                }
+            )
         )
         return renderAndCopy(view, label: group.provider.id, layout: layout)
     }
