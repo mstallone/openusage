@@ -124,7 +124,7 @@ struct HeaderView: View {
     /// a navigation toggle would — the share card reads the same live stores the dashboard does.
     @ViewBuilder
     private var shareScreenshotMenu: some View {
-        let groups = layout.displayGroups
+        let groups = layout.displayGroups(matching: dataStore.isMetricApplicable)
         Menu {
             if groups.isEmpty {
                 // No provider is showing anything to screenshot — grey the item out instead of offering

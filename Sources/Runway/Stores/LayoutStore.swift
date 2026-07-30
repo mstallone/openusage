@@ -46,7 +46,8 @@ final class LayoutStore {
 
     /// Descriptor ids pinned to the menu bar. Membership only — display order is derived from the
     /// provider + metric order above, so pins follow the same sequence shown in Customize. Capped via
-    /// `canPin` to at most `maxPinsPerProvider` per provider (the strip stacks a provider's values in pairs).
+    /// `canPin` to at most `maxPinsPerProvider` applicable pins per provider (the strip stacks a
+    /// provider's values in pairs). Dormant pins for another account type remain in this persisted set.
     private(set) var pinnedMetricIDs: Set<String>
 
     /// Descriptor ids that sit below the per-provider "Shown on expand" divider: the dashboard hides
@@ -277,8 +278,8 @@ final class LayoutStore {
 
     // MARK: - Menu bar pins
 
-    /// Per-provider cap is a rendering constraint — the Text strip stacks a provider's values two to a
-    /// column, so a third would not fit the menu bar height.
+    /// Per-provider applicable-pin cap is a rendering constraint — the Text strip stacks a provider's
+    /// values two to a column, so a third live value would not fit the menu bar height.
     static let maxPinsPerProvider = 2
 
     func isPinned(_ descriptorID: String) -> Bool {
@@ -286,24 +287,56 @@ final class LayoutStore {
     }
 
     func pinnedCount(forProvider providerID: String) -> Int {
-        pinnedMetricIDs.count { registry.descriptor(id: $0)?.providerID == providerID }
+        pinnedCount(forProvider: providerID, matching: { _ in true })
+    }
+
+    /// Count only pins that can render for the current account. Dormant pins remain persisted so an
+    /// account/plan change can restore them, but they must not consume one of the current account's
+    /// two usable menu-bar slots.
+    func pinnedCount(
+        forProvider providerID: String,
+        matching isApplicable: (WidgetDescriptor) -> Bool
+    ) -> Int {
+        pinnedMetricIDs.count { descriptorID in
+            guard let descriptor = registry.descriptor(id: descriptorID) else { return false }
+            return descriptor.providerID == providerID && isApplicable(descriptor)
+        }
     }
 
     /// Whether `descriptorID` can be newly pinned without breaking a cap. Already-pinned ids return
     /// `true`, so the toggle stays active for unpinning.
     func canPin(_ descriptorID: String) -> Bool {
+        canPin(descriptorID, matching: { _ in true })
+    }
+
+    func canPin(
+        _ descriptorID: String,
+        matching isApplicable: (WidgetDescriptor) -> Bool
+    ) -> Bool {
         if pinnedMetricIDs.contains(descriptorID) { return true }
-        guard let descriptor = registry.descriptor(id: descriptorID), descriptor.pinnable else { return false }
-        if pinnedCount(forProvider: descriptor.providerID) >= Self.maxPinsPerProvider { return false }
+        guard let descriptor = registry.descriptor(id: descriptorID),
+              descriptor.pinnable,
+              isApplicable(descriptor)
+        else { return false }
+        if pinnedCount(forProvider: descriptor.providerID, matching: isApplicable) >= Self.maxPinsPerProvider {
+            return false
+        }
         return true
     }
 
     /// Why `descriptorID` can't be pinned right now, or `nil` when it can. The single source for the
     /// pin button's tooltip and the denied-click feedback, so both always state the same rule.
     func pinDenialReason(_ descriptorID: String) -> String? {
-        guard !canPin(descriptorID) else { return nil }
+        pinDenialReason(descriptorID, matching: { _ in true })
+    }
+
+    func pinDenialReason(
+        _ descriptorID: String,
+        matching isApplicable: (WidgetDescriptor) -> Bool
+    ) -> String? {
+        guard !canPin(descriptorID, matching: isApplicable) else { return nil }
         if let providerID = registry.descriptor(id: descriptorID)?.providerID,
-           pinnedCount(forProvider: providerID) >= Self.maxPinsPerProvider {
+           pinnedCount(forProvider: providerID, matching: isApplicable) >= Self.maxPinsPerProvider {
             return "Up to \(Self.maxPinsPerProvider) stars per provider"
         }
         return nil
@@ -312,7 +345,14 @@ final class LayoutStore {
     /// Record a denied pin attempt so the footer can explain the cap (shown for a few seconds,
     /// with a deny shake on every attempt).
     func notePinDenied(_ descriptorID: String) {
-        guard let reason = pinDenialReason(descriptorID) else { return }
+        notePinDenied(descriptorID, matching: { _ in true })
+    }
+
+    func notePinDenied(
+        _ descriptorID: String,
+        matching isApplicable: (WidgetDescriptor) -> Bool
+    ) {
+        guard let reason = pinDenialReason(descriptorID, matching: isApplicable) else { return }
         pinNotice.present(reason)
     }
 
@@ -343,13 +383,24 @@ final class LayoutStore {
         customizeNotice.clear()
     }
 
-    /// Pin or unpin a metric for the menu bar. Pinning is a no-op when it would exceed a cap, so callers
-    /// can gate the control on `canPin` and trust this never over-pins. Undoable like the other layout
-    /// actions — the no-op guards mean a denied or redundant pin records no step.
+    /// Pin or unpin a metric for the menu bar. Pinning is a no-op when it would exceed the applicable
+    /// cap, so callers can gate the control on the corresponding `canPin` overload and trust this never
+    /// over-pins the current account. Undoable like the other layout actions — the no-op guards mean a
+    /// denied or redundant pin records no step.
     func setPinned(_ pinned: Bool, for descriptorID: String) {
+        setPinned(pinned, for: descriptorID, matching: { _ in true })
+    }
+
+    func setPinned(
+        _ pinned: Bool,
+        for descriptorID: String,
+        matching isApplicable: (WidgetDescriptor) -> Bool
+    ) {
         recordingUndoStep {
             if pinned {
-                guard canPin(descriptorID), registry.descriptor(id: descriptorID) != nil else { return }
+                guard canPin(descriptorID, matching: isApplicable),
+                      registry.descriptor(id: descriptorID) != nil
+                else { return }
                 guard pinnedMetricIDs.insert(descriptorID).inserted else { return }
             } else {
                 guard pinnedMetricIDs.remove(descriptorID) != nil else { return }
@@ -359,7 +410,14 @@ final class LayoutStore {
     }
 
     func togglePin(_ descriptorID: String) {
-        setPinned(!isPinned(descriptorID), for: descriptorID)
+        togglePin(descriptorID, matching: { _ in true })
+    }
+
+    func togglePin(
+        _ descriptorID: String,
+        matching isApplicable: (WidgetDescriptor) -> Bool
+    ) {
+        setPinned(!isPinned(descriptorID), for: descriptorID, matching: isApplicable)
     }
 
     func persistPins() {

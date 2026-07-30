@@ -35,6 +35,9 @@ enum ValueSelection: Hashable, Sendable {
     case all
     /// Only the values of one kind: `.dollars` for a cost-only tile, `.count` for a tokens-only tile.
     case kind(MetricKind)
+    /// One specifically labeled value of a kind. Useful when one row carries several counts of the
+    /// same kind, such as total, included, and additional AI credits.
+    case labeled(MetricKind, String)
 
     func apply(to values: [MetricValue]) -> [MetricValue] {
         switch self {
@@ -42,6 +45,8 @@ enum ValueSelection: Hashable, Sendable {
             return values
         case .kind(let kind):
             return values.filter { $0.kind == kind }
+        case .labeled(let kind, let label):
+            return values.filter { $0.kind == kind && $0.label == label }
         }
     }
 }

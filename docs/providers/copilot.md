@@ -8,21 +8,33 @@ Tracks your GitHub Copilot quota using a GitHub token that Copilot tooling alrea
 |---|---|
 | Credits | Share of your monthly AI-credit allotment used (the headline meter) |
 | Extra Usage | Premium interactions used beyond your included credits, once extra spend is enabled |
-| Org Credits | AI credits your whole organization used this month (org-managed Business/Enterprise seats) |
-| Org Spend | Dollars your organization was billed for AI credits beyond the included pool |
+| AI Credits Used | Total AI credits your organization used this month, with included/additional breakdown |
+| Additional Spend | Dollars your organization was billed beyond its included AI credits |
 | Chat | Chat-message quota used |
 | Completions | Code-completion quota used |
 
-Credits and Extra Usage are Always Visible by default; Org Credits, Org Spend, Chat, and Completions start in On Demand behind the card's caret. Each meter shows percent used and, when the response includes one, a countdown to the next reset. The plan name (Pro, Business, Free, …) shows next to the provider.
+Runway adapts the card to the account instead of showing every possible Copilot metric as "No data":
+
+- **Individual paid plans** show Credits and, when enabled, Extra Usage.
+- **Individual free plans** show Chat and Completions.
+- **Business and Enterprise seats** show AI Credits Used and Additional Spend.
+
+Metrics that GitHub does not expose for the current account type are hidden. The applicable usage rows are Always Visible; none of the organization metrics are pinned to the menu bar by default. Percentage meters show percent used and, when the response includes one, a countdown to the next reset. The plan name (Pro, Business, Free, …) shows next to the provider.
 
 Since June 2026 GitHub Copilot bills all plans by **AI credits**, so what each account shows differs by plan:
 
-- **Paid plans** meter the credit pool — so you see Credits (and Extra Usage if you've turned on additional spend). Chat and completions are unlimited on paid plans, so those rows read "No data".
-- **Free plans** have no credits, so Credits reads "No data"; instead you see your fixed Chat and Completions counts under the caret.
-- **Org-managed seats (Copilot Business / Enterprise assigned by an organization)** return no per-seat quota, so the personal meters have nothing to show. Runway then looks the usage up in the organization's billing instead: it lists your organizations, finds the one whose billing reports Copilot AI-credit usage, and shows **Org Credits** (credits the whole org used this month) and **Org Spend** (dollars billed beyond the included pool). Two caveats:
+- **Paid plans** meter the credit pool — so you see Credits (and Extra Usage if you've turned on additional spend). Chat and completions are unlimited on paid plans, so those inapplicable rows are hidden.
+- **Free plans** have no credits; instead you see the fixed Chat and Completions quotas GitHub reports.
+  Both rows remain available if a refresh temporarily omits one bucket; the omitted metric shows No data
+  until GitHub reports it again.
+- **Org-managed seats (Copilot Business / Enterprise assigned by an organization)** return no per-seat quota, so the personal meters have nothing to show. Runway then looks the usage up at the seat's billing entity—its organization, or its enterprise when billing is consolidated—and shows **AI Credits Used** (total organization usage, broken into included and additional credits) and **Additional Spend** (dollars billed beyond the included pool). Caveats:
   - The numbers are **organization-wide**, not your personal share — GitHub doesn't expose per-seat usage.
-  - Reading an org's billing requires you to be an **org owner or billing manager**. Regular members keep the previous behavior: the plan shows, the meters read "No data".
-- Org Credits is shown as a plain count, not a percentage: the billing API reports usage only, never the org's credit allotment, and Runway doesn't fabricate a denominator.
+  - Reading an org's billing requires you to be an **org owner or billing manager**. Regular members see a clear managed-account message instead of personal "No data" placeholders.
+  - When Copilot identifies the seat's organization, Runway checks its enterprise before accepting an
+    empty organization report, because consolidated usage is billed at the enterprise level. Zero is
+    shown only after every associated billing path has been resolved; a target that remains inaccessible
+    keeps the managed-account state. An unrelated empty report is never attributed to the seat.
+- AI Credits Used is shown as a plain count, not a percentage. The API reports total, discounted/included, and additional usage, but not the organization's full available pool; Runway doesn't fabricate a denominator.
 
 A dollar credit figure (e.g. "$12 of $15 used") isn't shown: GitHub only exposes that through its logged-in web billing page, which would require reading browser cookies — Runway does not do that. Editors like VS Code show the same credit *percentage* from this endpoint, not a dollar amount.
 
@@ -33,6 +45,14 @@ Checked in this order (prompt-free files first, Keychain last):
 1. Copilot editor token: `~/.config/github-copilot/apps.json` (older `hosts.json`) — written by the VS Code / JetBrains / Neovim Copilot plugins.
 2. GitHub CLI config: `~/.config/gh/hosts.yml` (`oauth_token`), when `gh` stores its token in a file.
 3. GitHub CLI Keychain item (service `gh:github.com`), when `gh` stores its token in the system keyring.
+
+The editor token stays preferred for the Copilot quota endpoint. For organization and enterprise
+billing, Runway tries the GitHub CLI credential first when Copilot identifies the seat organization,
+because it can carry the required organization or enterprise permissions, then falls back to the editor
+token if necessary. An empty report remains provisional until both credentials have been tried, so a
+credential with consolidated enterprise access can still supply the actual totals. When the seat
+organization is unknown, Runway keeps membership discovery on the same credential that produced the
+Copilot card so another local GitHub account cannot be mixed in.
 
 ### Setup
 
@@ -49,10 +69,10 @@ Using Copilot in a supported editor is enough on its own — the editor writes t
 
 - **"Sign in to GitHub Copilot…"** — no token was found. Sign in to Copilot in your editor, or run `gh auth login`.
 - **"GitHub token invalid or expired"** — the token was rejected (401/403). Re-authenticate with `gh auth login`.
-- **Meters show "No data" but the plan is shown** — expected on an org-managed Copilot Business/Enterprise seat when you aren't an owner or billing manager of the org (GitHub doesn't expose per-seat quota, and org billing is admin-only). If you *are* an org admin and still see no Org Credits, make sure your token can list your orgs — the GitHub CLI token from `gh auth login` can; some editor-plugin tokens can't.
+- **"Managed by Your Organization"** — GitHub doesn't expose a live per-seat quota for Business/Enterprise, and none of the locally available credentials could read the relevant organization or enterprise billing. Organization reporting requires organization billing access; consolidated reporting also requires enterprise read and billing access. Some editor-plugin and GitHub CLI tokens do not carry those scopes.
 
 ## Under the hood
 
 `GET https://api.github.com/copilot_internal/user` with the standard Copilot client headers (API version `2025-04-01`). The response reports each bucket as percent *remaining*; the meters show percent *used*.
 
-For org-managed seats (identified by the token-based-billing placeholder in that response), the provider additionally calls the public REST billing API: `GET /user/orgs` to list your organizations, then `GET /orgs/{org}/settings/billing/usage/summary` per org until one reports Copilot AI-credit usage. The matching org is remembered, so steady-state refreshes make a single extra call; it's re-discovered automatically if it stops answering.
+For org-managed seats (identified by the token-based-billing placeholder in that response), Runway first uses the Copilot account response's organization list to query `GET /organizations/{org}/settings/billing/ai_credit/usage?product=Copilot`. GitHub defaults that endpoint to the current year and month. If an associated organization returns 403, 404, or an empty report, Runway resolves all enterprises visible to the token through GitHub GraphQL, verifies which enterprise owns that seat organization, and queries the enterprise AI-credit endpoint filtered to that organization and Copilot. This lets an authorized enterprise billing manager see consolidated totals even when they do not administer the seat organization. Rate-limited and other retryable REST or GraphQL failures show a temporary-unavailability state; only explicit access errors show the managed-account state. If the Copilot response has no organization association, Runway falls back to `GET /user/orgs`, but only positive Copilot usage—not an empty current or cached report—can identify the seat's organization. Other AI products are excluded at the API boundary and ignored by the mapper. An org is remembered only after it reports Copilot usage.

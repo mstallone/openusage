@@ -14,6 +14,11 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
     /// Raw normalized daily history used to build spend rows. This always belongs to this Mac; peer
     /// history is combined only in the in-memory rendered view and is never written into the cache.
     var usageHistory: ProviderUsageHistory?
+    /// The metrics that apply to the account represented by this snapshot. `nil` preserves the
+    /// provider's traditional behavior (every declared descriptor is applicable); a non-nil set lets
+    /// account-type-aware providers hide rows the upstream service does not offer for this plan,
+    /// instead of presenting those rows as misleading "No data" placeholders.
+    var applicableMetricIDs: Set<String>?
     /// A soft, non-blocking notice carried on a *successful* snapshot — e.g. Claude's "Re-login for live
     /// usage" when the saved login lacks the `user:profile` scope. The refresh succeeded and partial data
     /// (spend tiles) still loads, so this surfaces as the provider header's amber triangle rather than
@@ -27,6 +32,7 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         lines: [MetricLine],
         refreshedAt: Date = Date(),
         usageHistory: ProviderUsageHistory? = nil,
+        applicableMetricIDs: Set<String>? = nil,
         warning: String? = nil
     ) {
         self.providerID = providerID
@@ -35,6 +41,7 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         self.lines = lines
         self.refreshedAt = refreshedAt
         self.usageHistory = usageHistory
+        self.applicableMetricIDs = applicableMetricIDs
         self.warning = warning
     }
 
@@ -51,6 +58,7 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         lines: [MetricLine],
         refreshedAt: Date,
         usageHistory: ProviderUsageHistory? = nil,
+        applicableMetricIDs: Set<String>? = nil,
         warning: String? = nil
     ) -> ProviderSnapshot {
         ProviderSnapshot(
@@ -60,6 +68,7 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
             lines: lines,
             refreshedAt: refreshedAt,
             usageHistory: usageHistory,
+            applicableMetricIDs: applicableMetricIDs,
             warning: warning
         )
     }

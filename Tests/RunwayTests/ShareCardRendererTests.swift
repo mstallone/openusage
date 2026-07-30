@@ -74,6 +74,29 @@ final class ShareCardRendererTests: XCTestCase {
         }
     }
 
+    func testTextRowAfterSubtitleKeepsNormalTopSpacing() {
+        var credits = WidgetData(
+            title: "AI Credits Used",
+            icon: .providerMark("copilot"),
+            kind: .count,
+            used: 16_204,
+            limit: nil
+        )
+        credits.subtitleOverride = "3K included · 13.2K additional"
+        let spend = WidgetData(
+            title: "Additional Spend",
+            icon: .providerMark("copilot"),
+            kind: .dollars,
+            used: 132.05,
+            limit: nil
+        )
+
+        XCTAssertFalse(
+            WidgetData.condensedTextRowOffsets(in: [credits, spend]).contains(1),
+            "a second line needs the normal inter-row gap beneath it"
+        )
+    }
+
     // MARK: - Clipboard write result
 
     /// `copyToPasteboard` reports `false` when the image can't be PNG-encoded, so `share` can gate the
