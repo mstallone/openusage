@@ -89,6 +89,30 @@ extension LayoutStore {
         }
     }
 
+    /// The dashboard projection after a provider has declared which metrics apply to its current
+    /// account. Filtering happens before the empty-group decision and the Always Visible promotion,
+    /// so account-aware providers follow the same invariants as the persisted layout: no card when
+    /// none of its enabled metrics apply, and at least one visible row when any do.
+    func displayGroups(matching isApplicable: (WidgetDescriptor) -> Bool) -> [ProviderGroup] {
+        displayGroups.compactMap { group in
+            let alwaysShown = group.alwaysShownWidgets.filter { widget in
+                descriptor(for: widget).map(isApplicable) ?? false
+            }
+            let expanded = group.expandedWidgets.filter { widget in
+                descriptor(for: widget).map(isApplicable) ?? false
+            }
+            guard !alwaysShown.isEmpty || !expanded.isEmpty else { return nil }
+            if alwaysShown.isEmpty {
+                return ProviderGroup(provider: group.provider, alwaysShownWidgets: expanded, expandedWidgets: [])
+            }
+            return ProviderGroup(
+                provider: group.provider,
+                alwaysShownWidgets: alwaysShown,
+                expandedWidgets: expanded
+            )
+        }
+    }
+
     /// Every enabled provider with *all* the metrics it supports, in its saved metric order. Enabled and
     /// disabled rows stay in-place; the switch only controls visibility.
     var customizeGroups: [ProviderMetrics] {
@@ -136,6 +160,31 @@ extension LayoutStore {
             provider: provider,
             alwaysShownMetrics: metrics.filter { !expandedMetricIDs.contains($0.id) },
             expandedMetrics: metrics.filter { expandedMetricIDs.contains($0.id) }
+        )
+    }
+
+    /// Account-aware Customize projection. It mirrors the dashboard's promotion rule without
+    /// rewriting the persisted divider membership: when filtering leaves only On Demand metrics,
+    /// those rows are presented as Always Visible because that is how the dashboard actually renders
+    /// them. The next explicit drag persists the user's chosen split as usual.
+    func customizeDetail(
+        for providerID: String,
+        matching isApplicable: (WidgetDescriptor) -> Bool
+    ) -> ProviderMetrics? {
+        guard let group = customizeDetail(for: providerID) else { return nil }
+        let alwaysShown = group.alwaysShownMetrics.filter(isApplicable)
+        let expanded = group.expandedMetrics.filter(isApplicable)
+        if alwaysShown.isEmpty, !expanded.isEmpty {
+            return ProviderMetrics(
+                provider: group.provider,
+                alwaysShownMetrics: expanded,
+                expandedMetrics: []
+            )
+        }
+        return ProviderMetrics(
+            provider: group.provider,
+            alwaysShownMetrics: alwaysShown,
+            expandedMetrics: expanded
         )
     }
 

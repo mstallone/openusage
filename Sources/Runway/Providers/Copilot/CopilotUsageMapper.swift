@@ -3,6 +3,13 @@ import Foundation
 struct CopilotMappedUsage: Equatable, Sendable {
     var plan: String?
     var lines: [MetricLine]
+    /// True when the response carries a finite Chat or Completions bucket without a paid Credits pool.
+    /// Both free-tier rows remain applicable even if GitHub temporarily omits one bucket.
+    var usesFreeTierQuotas: Bool = false
+    /// Organizations associated with this Copilot account, as reported by `/copilot_internal/user`.
+    /// Unlike `/user/orgs`, this is the seat-association signal needed to attribute an empty billing
+    /// report without guessing from all of the user's memberships.
+    var organizationLogins: [String] = []
     /// True for an org-managed (token-based-billing) seat whose response carried no usable per-seat
     /// meters — the signal that the real usage lives in *organization* billing, where the provider
     /// should look next. Kept as an explicit flag so the org lookup is never gated on the incidental
@@ -32,6 +39,7 @@ enum CopilotUsageMapper {
 
     static func map(body: [String: Any]) throws -> CopilotMappedUsage {
         let plan = planLabel(body["copilot_plan"])
+        let organizationLogins = organizationLogins(body)
         let resetsAt = parseResetDate(body["quota_reset_date"])
             ?? parseResetDate(body["limited_user_reset_date"])
 
@@ -66,18 +74,42 @@ enum CopilotUsageMapper {
             appendIfPresent(&lines, limitedLine(label: "Completions", remaining: limited?["completions"], total: monthly?["completions"], resetsAt: resetsAt))
         }
 
+        let isExplicitFreeTier = (body["access_type_sku"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == "free_limited_copilot"
+        let usesFreeTierQuotas = isExplicitFreeTier
+            || (creditsLine == nil && lines.contains { $0.label == "Chat" || $0.label == "Completions" })
+
         // Copilot Business / token-based-billing seats expose no per-seat quota — a legitimate empty
         // state, not a failure. Surface the plan with empty meters (the tiles read "No data") so the
         // dashboard still identifies the plan, instead of a loud error that drops it. A genuinely empty
         // or garbled payload (no token-based-billing marker) is a real problem and fails loudly.
         guard !lines.isEmpty else {
+            if usesFreeTierQuotas {
+                return CopilotMappedUsage(
+                    plan: plan,
+                    lines: [],
+                    usesFreeTierQuotas: true,
+                    organizationLogins: organizationLogins
+                )
+            }
             if ProviderParse.bool(body["token_based_billing"]) == true {
-                return CopilotMappedUsage(plan: plan, lines: [], isOrgManagedSeat: true)
+                return CopilotMappedUsage(
+                    plan: plan,
+                    lines: [],
+                    organizationLogins: organizationLogins,
+                    isOrgManagedSeat: true
+                )
             }
             throw CopilotUsageError.quotaUnavailable
         }
 
-        return CopilotMappedUsage(plan: plan, lines: lines)
+        return CopilotMappedUsage(
+            plan: plan,
+            lines: lines,
+            usesFreeTierQuotas: usesFreeTierQuotas,
+            organizationLogins: organizationLogins
+        )
     }
 
     // MARK: - Lines
@@ -162,6 +194,23 @@ enum CopilotUsageMapper {
             return nil
         }
         return raw.titleCased(separator: { $0 == "_" || $0 == " " || $0 == "-" }, lowercasingTail: true)
+    }
+
+    private static func organizationLogins(_ body: [String: Any]) -> [String] {
+        var candidates = (body["organization_login_list"] as? [Any])?.compactMap { $0 as? String } ?? []
+        if let organizations = body["organization_list"] as? [[String: Any]] {
+            candidates.append(contentsOf: organizations.compactMap { $0["login"] as? String })
+        }
+
+        var seen: Set<String> = []
+        return candidates.compactMap { candidate in
+            guard let login = candidate.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
+                return nil
+            }
+            let normalized = login.lowercased()
+            guard seen.insert(normalized).inserted else { return nil }
+            return login
+        }
     }
 
     /// Parse a reset timestamp. Paid tier sends an ISO-8601 datetime (`quota_reset_date`, sometimes with

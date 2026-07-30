@@ -67,6 +67,10 @@ struct WidgetData: Hashable {
     /// Which of `values` this widget renders — cost-only, tokens-only, or the combined `.all`. Set by
     /// the descriptor factory, so one provider row can back several tiles and the mapper stays oblivious.
     var selection: ValueSelection = .all
+    /// Labels of additional typed values rendered on the secondary line of an unbounded row. The
+    /// primary value still comes from `selection`; this is a compact breakdown for related values
+    /// carried by the same normalized metric line.
+    var subtitleValueLabels: [String] = []
     /// True only for the Today / Yesterday / Last 30 Days spend tiles, where the row's values accumulate
     /// over a time window so an all-zero reading means "nothing was used." Balance/availability rows
     /// (Codex Rate Limit Resets, an exhausted Extra Usage credit) read zero when *depleted*, not idle, so
@@ -394,7 +398,14 @@ struct WidgetData: Hashable {
     /// Secondary line under an unbounded row's detail (e.g. "on-device estimate"); nil with no real data.
     var unboundedSubtitle: String? {
         guard hasData else { return nil }
-        return subtitleOverride
+        if let subtitleOverride { return subtitleOverride }
+        let subtitleValues = subtitleValueLabels.compactMap { label in
+            values.first { $0.label == label }
+        }
+        guard !subtitleValues.isEmpty else { return nil }
+        return subtitleValues
+            .map { MetricFormatter.string(for: $0, style: .row) }
+            .joined(separator: " · ")
     }
 
     /// Full, un-abbreviated values for the row's hover tooltip — the exact numbers the compact row
@@ -616,12 +627,18 @@ extension WidgetData {
 extension WidgetData {
     /// The neighbor-aware condensing rule, in one place: within a single run of rows (a run never spans
     /// the expand caret — callers segment at that boundary and scan each segment separately), the offsets
-    /// of text-only rows that sit directly under another text-only row. A text-only row has no meter fill
-    /// (`!isBounded`); a run of them (Today / Yesterday / Last 30 Days) pulls up into one cluster. The
-    /// dashboard maps these offsets back to descriptor IDs; the share-card export maps them to flat indices.
+    /// of single-line text rows that sit directly under another single-line text row. A qualifying row
+    /// has no meter fill (`!isBounded`) and no subtitle; a run of them (Today / Yesterday / Last 30 Days)
+    /// pulls up into one cluster. A two-line row keeps the normal gap below its subtitle. The dashboard
+    /// maps these offsets back to descriptor IDs; the share-card export maps them to flat indices.
     static func condensedTextRowOffsets(in rows: [WidgetData]) -> Set<Int> {
         var offsets = Set<Int>()
-        for index in rows.indices.dropFirst() where !rows[index - 1].isBounded && !rows[index].isBounded {
+        for index in rows.indices.dropFirst()
+            where !rows[index - 1].isBounded
+                && rows[index - 1].unboundedSubtitle == nil
+                && !rows[index].isBounded
+                && rows[index].unboundedSubtitle == nil
+        {
             offsets.insert(index)
         }
         return offsets

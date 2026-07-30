@@ -11,7 +11,10 @@ Right-click (or control-click) the menu bar icon for a quick menu with **Setting
 Star a metric from any row's right-click menu, or from the always-visible star beside a metric in Customize.
 
 - On first launch the app ships with a default set of stars (Antigravity Session/Weekly, Claude Session/Weekly, Codex Weekly, Cursor Auto Usage/API Usage, Copilot Credits, OpenRouter Credits, Z.ai Session/Weekly) so the strip shows numbers right away. Each discovered Claude or Codex account card gets its family's same default stars, with values from that account; a secondary card discovered later receives them once and then keeps your changes. Change them anytime; a provider's Reset restores its defaults, and Reset All restores the full set. Only providers that are turned on render in the strip — and a fresh install starts with just the providers detected on your Mac (see [Dashboard § First launch](dashboard.md#first-launch)) — so the default stars don't crowd the menu bar with tools you don't use.
-- At most **2 stars per provider**.
+- At most **2 applicable stars per provider**. If an account or plan change makes a starred metric
+  unavailable, Runway keeps that preference for a future switch back, but the dormant star does not
+  consume one of the current account's two slots. If a later switch makes more than two saved stars
+  live at once, the strip renders the first two in Customize order without deleting the saved choices.
 - When a star isn't allowed, the star button stays clickable — clicking it shakes and shows the reason in a temporary pill over the bottom of Customize (for example, "Up to 2 stars per provider").
 
 ## Styles

@@ -84,6 +84,23 @@ final class MenuBarPinTests: XCTestCase {
         XCTAssertTrue(store.canPin("a.m3"))
     }
 
+    func testInapplicablePinIsRetainedWithoutConsumingCurrentAccountCap() {
+        let store = makeStore("dormantPin")
+        store.setPinned(true, for: "a.m1")
+        store.setPinned(true, for: "a.m2")
+        let isApplicable: (WidgetDescriptor) -> Bool = { $0.id != "a.m1" }
+
+        XCTAssertEqual(store.pinnedCount(forProvider: "a"), 2)
+        XCTAssertEqual(store.pinnedCount(forProvider: "a", matching: isApplicable), 1)
+        XCTAssertTrue(store.canPin("a.m3", matching: isApplicable))
+
+        store.setPinned(true, for: "a.m3", matching: isApplicable)
+
+        XCTAssertTrue(store.isPinned("a.m1"), "the dormant preference survives a future account switch")
+        XCTAssertTrue(store.isPinned("a.m3"))
+        XCTAssertEqual(store.pinnedCount(forProvider: "a", matching: isApplicable), 2)
+    }
+
     func testPinnedGroupsFollowCustomizeOrder() {
         let store = makeStore("order")
         // Pin out of order; expect provider order (a before b) and metric order (m1 before m2).

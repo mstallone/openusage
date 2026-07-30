@@ -18,7 +18,7 @@ enum DefaultLayout {
         "cursor.usage", "cursor.auto", "cursor.api", "cursor.trend",
         "cursor.onDemand", "cursor.today", "cursor.yesterday", "cursor.last30",
 
-        "copilot.premium", "copilot.extra", "copilot.orgCredits", "copilot.orgSpend",
+        "copilot.premium", "copilot.extra", "copilot.orgCredits", "copilot.orgSpend", "copilot.orgManaged",
         "copilot.chat", "copilot.completions",
 
         "devin.daily", "devin.weekly", "devin.extra",
@@ -107,11 +107,9 @@ enum DefaultLayout {
         "codex.rateLimitResets", "codex.trend", "codex.today", "codex.yesterday", "codex.last30",
         "cursor.onDemand", "cursor.requests", "cursor.credits",
         "cursor.today", "cursor.yesterday", "cursor.last30",
-        // Copilot: Credits (the metered premium pool) + Extra Usage stay above the fold; the org
-        // billing pair (org-managed Business/Enterprise seats) and Chat + Completions sit below the
-        // caret. Chat/Completions carry real counts on free only — on paid they're unlimited
-        // (suppressed), so they read "No data" there.
-        "copilot.orgCredits", "copilot.orgSpend", "copilot.chat", "copilot.completions",
+        // Copilot adapts its visible rows to the account: personal Credits/Extra Usage or org-wide
+        // credits/spend stay above the fold; free-tier Chat + Completions sit below the caret.
+        "copilot.chat", "copilot.completions",
         "devin.extra",
         // Grok: Weekly stays above the fold; local history sits below the caret.
         "grok.trend", "grok.today", "grok.yesterday", "grok.last30",

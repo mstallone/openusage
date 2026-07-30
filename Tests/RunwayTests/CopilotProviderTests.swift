@@ -56,6 +56,27 @@ final class CopilotAuthStoreTests: XCTestCase {
         XCTAssertEqual(store.loadToken()?.value, "gho_editor")
     }
 
+    func testBillingTokensPreferGitHubCLIAndDeduplicateUsageToken() throws {
+        let wrappedBillingToken = "go-keyring-base64:"
+            + Data("gho_billing".utf8).base64EncodedString()
+        let store = CopilotAuthStore(
+            files: FakeFiles([
+                CopilotAuthStore.editorAppsPath: #"{ "github.com": { "oauth_token": "gho_editor" } }"#
+            ]),
+            keychain: FakeKeychain(wrappedBillingToken)
+        )
+        let usageToken = try XCTUnwrap(store.loadToken())
+
+        XCTAssertEqual(
+            store.loadBillingTokenCandidates(usageToken: usageToken).map(\.value),
+            ["gho_billing", "gho_editor"]
+        )
+        XCTAssertEqual(
+            store.loadBillingTokenCandidates(usageToken: CopilotToken(value: "gho_billing")).map(\.value),
+            ["gho_billing"]
+        )
+    }
+
     func testReturnsNilWhenNoCredentials() {
         let store = CopilotAuthStore(files: FakeFiles(), keychain: FakeKeychain())
         XCTAssertNil(store.loadToken())
@@ -269,6 +290,8 @@ final class CopilotUsageMapperTests: XCTestCase {
         let body: [String: Any] = [
             "copilot_plan": "business",
             "token_based_billing": true,
+            "organization_login_list": ["seat-org"],
+            "organization_list": [["login": "seat-org", "name": "Seat Org"]],
             "quota_snapshots": [
                 "premium_interactions": ["entitlement": 0, "remaining": 0, "quota_id": "premium"]
             ]
@@ -277,6 +300,18 @@ final class CopilotUsageMapperTests: XCTestCase {
         let mapped = try CopilotUsageMapper.map(body: body)
 
         XCTAssertEqual(mapped.plan, "Business")
+        XCTAssertTrue(mapped.lines.isEmpty)
+        XCTAssertEqual(mapped.organizationLogins, ["seat-org"])
+        XCTAssertTrue(mapped.isOrgManagedSeat)
+    }
+
+    func testEnterpriseTokenBillingUsesOrganizationScope() throws {
+        var body = makeBusinessPlaceholderBody()
+        body["copilot_plan"] = "enterprise"
+
+        let mapped = try CopilotUsageMapper.map(body: body)
+
+        XCTAssertEqual(mapped.plan, "Enterprise")
         XCTAssertTrue(mapped.lines.isEmpty)
         XCTAssertTrue(mapped.isOrgManagedSeat)
     }
@@ -338,29 +373,118 @@ final class CopilotOrgBillingMapperTests: XCTestCase {
         XCTAssertEqual(CopilotOrgBillingMapper.orgLogins(response), [])
     }
 
+    func testEnterpriseMembershipPageIncludesOnlyEnterpriseOwningSeatOrganization() throws {
+        let response = ok(makeEnterpriseMembershipBody(
+            enterprises: [
+                ("octo-enterprise", ["acme", "other"]),
+                ("unrelated-enterprise", ["unrelated"])
+            ]
+        ))
+
+        XCTAssertEqual(
+            CopilotOrgBillingMapper.enterpriseMembershipPage(response, organization: "ACME"),
+            .init(
+                targets: [.init(enterprise: "octo-enterprise", organization: "acme")],
+                organizationContinuations: [],
+                nextEnterpriseCursor: nil
+            )
+        )
+    }
+
+    func testEnterpriseMembershipPageReturnsBothConnectionCursors() throws {
+        let response = ok(makeEnterpriseMembershipBody(
+            enterprises: [("octo-enterprise", ["other"])],
+            nextEnterpriseCursor: "enterprise-page-2",
+            nextOrganizationCursors: ["octo-enterprise": "organization-page-2"]
+        ))
+
+        XCTAssertEqual(
+            CopilotOrgBillingMapper.enterpriseMembershipPage(response, organization: "acme"),
+            .init(
+                targets: [],
+                organizationContinuations: [
+                    .init(enterprise: "octo-enterprise", cursor: "organization-page-2")
+                ],
+                nextEnterpriseCursor: "enterprise-page-2"
+            )
+        )
+    }
+
+    func testEnterpriseOrganizationPageFindsSeatOrganizationAndCursor() throws {
+        let response = ok(makeEnterpriseOrganizationBody(
+            organizations: ["acme"],
+            nextCursor: "organization-page-3"
+        ))
+
+        XCTAssertEqual(
+            CopilotOrgBillingMapper.enterpriseOrganizationPage(
+                response,
+                enterprise: "octo-enterprise",
+                organization: "ACME"
+            ),
+            .init(
+                target: .init(enterprise: "octo-enterprise", organization: "acme"),
+                nextCursor: "organization-page-3"
+            )
+        )
+    }
+
+    func testEnterpriseMembershipPageRejectsGraphQLErrors() {
+        let response = ok(["errors": [["message": "Resource not accessible"]]])
+        XCTAssertNil(CopilotOrgBillingMapper.enterpriseMembershipPage(response, organization: "acme"))
+    }
+
     func testMapsAICreditUsageFromSummary() throws {
         // The exact shape reported in issue #839: one Copilot AI-unit item, fully covered by included
         // credits (netAmount 0).
         let lines = try XCTUnwrap(CopilotOrgBillingMapper.usageLines(body: makeOrgSummaryBody()))
 
         XCTAssertEqual(orgCount(lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertEqual(orgCount(lines, "Org Credits", valueLabel: "included") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertEqual(orgCount(lines, "Org Credits", valueLabel: "additional"), 0)
         XCTAssertEqual(orgDollars(lines, "Org Spend"), 0)
     }
 
     func testSumsMultipleCreditItemsAndBilledSpend() throws {
         var body = makeOrgSummaryBody()
         body["usageItems"] = [
-            ["product": "Copilot", "sku": "copilot_ai_unit", "unitType": "ai-units", "grossQuantity": 100.5, "netAmount": 1.25],
-            ["product": "Copilot", "sku": "Copilot AI Credits", "unitType": "ai-credits", "grossQuantity": 50, "netAmount": 0.5]
+            [
+                "product": "Copilot", "sku": "copilot_ai_unit", "unitType": "ai-units",
+                "grossQuantity": 100.5, "discountQuantity": 100, "netQuantity": 0.5, "netAmount": 1.25
+            ],
+            [
+                "product": "Copilot", "sku": "Copilot AI Credits", "unitType": "credits",
+                "grossQuantity": 50, "discountQuantity": 20, "netQuantity": 30, "netAmount": 0.5
+            ]
         ]
 
         let lines = try XCTUnwrap(CopilotOrgBillingMapper.usageLines(body: body))
 
         XCTAssertEqual(orgCount(lines, "Org Credits") ?? -1, 150.5, accuracy: 0.0001)
+        XCTAssertEqual(orgCount(lines, "Org Credits", valueLabel: "included"), 120)
+        XCTAssertEqual(orgCount(lines, "Org Credits", valueLabel: "additional"), 30.5)
         XCTAssertEqual(orgDollars(lines, "Org Spend") ?? -1, 1.75, accuracy: 0.0001)
     }
 
-    func testNilWhenNoCopilotCreditItems() {
+    @MainActor
+    func testCreditDescriptorShowsGrossTotalWithIncludedAndAdditionalSubtitle() throws {
+        let lines = try XCTUnwrap(CopilotOrgBillingMapper.usageLines(body: makeOrgSummaryBody()))
+        let descriptor = try XCTUnwrap(
+            CopilotProvider().widgetDescriptors.first { $0.id == "copilot.orgCredits" }
+        )
+        guard case .values(_, let values, _, _, _, _) = lines.first(where: { $0.label == "Org Credits" }) else {
+            return XCTFail("expected organization credit values")
+        }
+        var data = descriptor.sample
+        data.values = values
+
+        XCTAssertEqual(data.title, "AI Credits Used")
+        XCTAssertEqual(data.selectedValues.map(\.label), ["credits"])
+        XCTAssertEqual(data.unboundedDetail, "298.7 credits")
+        XCTAssertEqual(data.unboundedSubtitle, "298.7 included · 0 additional")
+    }
+
+    func testNilWhenReportContainsOnlyNonAICreditItems() {
         // Actions minutes and Copilot seat fees (non-credit units) must not produce org meters.
         var body = makeOrgSummaryBody()
         body["usageItems"] = [
@@ -371,8 +495,42 @@ final class CopilotOrgBillingMapperTests: XCTestCase {
         XCTAssertNil(CopilotOrgBillingMapper.usageLines(body: body))
     }
 
+    func testPremiumRequestRowsDoNotEnterAICreditMetrics() {
+        // GitHub exposes legacy premium-request usage through a separate endpoint. A request row must
+        // not be relabeled as AI credits or folded into the usage-based Additional Spend figure.
+        let body: [String: Any] = [
+            "usageItems": [[
+                "product": "Copilot",
+                "sku": "Copilot Premium Request",
+                "unitType": "requests",
+                "grossQuantity": 100,
+                "netAmount": 4
+            ]]
+        ]
+
+        XCTAssertNil(CopilotOrgBillingMapper.usageLines(body: body))
+    }
+
     func testNilWhenSummaryHasNoUsageItems() {
         XCTAssertNil(CopilotOrgBillingMapper.usageLines(body: ["organization": "acme"]))
+    }
+
+    func testEmptyUsageItemsMapsToZeroTotals() throws {
+        let report = try XCTUnwrap(CopilotOrgBillingMapper.usageReport(body: ["usageItems": []]))
+
+        XCTAssertFalse(report.hasUsage)
+        XCTAssertEqual(orgCount(report.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgCount(report.lines, "Org Credits", valueLabel: "included"), 0)
+        XCTAssertEqual(orgCount(report.lines, "Org Credits", valueLabel: "additional"), 0)
+        XCTAssertEqual(orgDollars(report.lines, "Org Spend"), 0)
+    }
+
+    func testOtherAICreditProductsMapToZeroCopilotTotals() throws {
+        let report = try XCTUnwrap(CopilotOrgBillingMapper.usageReport(body: makeOtherAICreditBody()))
+
+        XCTAssertFalse(report.hasUsage)
+        XCTAssertEqual(orgCount(report.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(report.lines, "Org Spend"), 0)
     }
 }
 
@@ -412,14 +570,19 @@ final class CopilotProviderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.plan, "Pro")
         XCTAssertEqual(snapshot.line(label: "Credits")?.label, "Credits")
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.premium", "copilot.chat"])
         XCTAssertEqual(http.requests.first?.headers["Authorization"], "token gho_editor")
     }
 
-    func testTokenBasedBillingShowsPlanWithoutError() async {
+    func testFreeAccountExposesOnlyFreeQuotaMetrics() async {
         let body: [String: Any] = [
-            "copilot_plan": "business",
+            "copilot_plan": "individual",
             "token_based_billing": true,
-            "quota_snapshots": ["premium_interactions": ["entitlement": 0, "remaining": 0]]
+            "quota_snapshots": [
+                "premium_interactions": ["entitlement": 0, "remaining": 0],
+                "chat": ["entitlement": 200, "remaining": 180],
+                "completions": ["entitlement": 2000, "remaining": 1500]
+            ]
         ]
         let provider = CopilotProvider(
             authStore: editorTokenStore(),
@@ -428,15 +591,75 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
+        XCTAssertEqual(snapshot.plan, "Individual")
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.chat", "copilot.completions"])
+    }
+
+    func testPartialFreeResponseKeepsBothFreeQuotaMetricsApplicable() async {
+        let body: [String: Any] = [
+            "copilot_plan": "individual",
+            "access_type_sku": "free_limited_copilot",
+            "token_based_billing": true,
+            "quota_snapshots": [
+                "premium_interactions": ["entitlement": 0, "remaining": 0],
+                "chat": ["entitlement": 200, "remaining": 180]
+            ]
+        ]
+        let provider = CopilotProvider(
+            authStore: editorTokenStore(),
+            usageClient: CopilotUsageClient(http: FakeHTTPClient(response: ok(body)))
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertNotNil(snapshot.line(label: "Chat"))
+        XCTAssertNil(snapshot.line(label: "Completions"))
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.chat", "copilot.completions"])
+    }
+
+    func testFreeAccountWithAllQuotaBucketsOmittedShowsBothAsNoData() async {
+        let body: [String: Any] = [
+            "copilot_plan": "individual",
+            "access_type_sku": "free_limited_copilot",
+            "token_based_billing": true,
+            "quota_snapshots": [:]
+        ]
+        let provider = CopilotProvider(
+            authStore: editorTokenStore(),
+            usageClient: CopilotUsageClient(http: FakeHTTPClient(response: ok(body)))
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertFalse(snapshot.lines.contains { $0.label == "Organization Usage" })
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.chat", "copilot.completions"])
+    }
+
+    func testTokenBasedBillingShowsPlanWithoutError() async {
+        let body: [String: Any] = [
+            "copilot_plan": "business",
+            "token_based_billing": true,
+            "quota_snapshots": ["premium_interactions": ["entitlement": 0, "remaining": 0]]
+        ]
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let provider = CopilotProvider(
+            authStore: editorTokenStore(),
+            usageClient: CopilotUsageClient(http: FakeHTTPClient(response: ok(body))),
+            orgBillingClient: CopilotOrgBillingClient(http: FakeHTTPClient(response: forbidden))
+        )
+
+        let snapshot = await provider.refresh()
+
         XCTAssertEqual(snapshot.plan, "Business")
-        XCTAssertTrue(snapshot.lines.isEmpty)
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgManaged"])
     }
 
     func testOrgManagedSeatShowsOrgBillingLines() async {
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
             ("/user/orgs", okJSON([["login": "acme"]])),
-            ("/orgs/acme/settings/billing/usage/summary", ok(makeOrgSummaryBody()))
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
         ])
         let defaults = freshDefaults()
         let provider = makeOrgProvider(http: http, defaults: defaults)
@@ -446,9 +669,159 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.plan, "Business")
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
         // The placeholder's `overage_permitted: true` must not leave a meaningless Extra Usage row.
         XCTAssertNil(snapshot.lines.first(where: { $0.label == "Extra Usage" }))
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
+        let billingRequest = http.requests.first {
+            $0.url.path == "/organizations/acme/settings/billing/ai_credit/usage"
+        }
+        XCTAssertEqual(billingRequest?.headers["X-GitHub-Api-Version"], "2026-03-10")
+    }
+
+    func testOrgBillingPrefersGitHubCLITokenOverEditorUsageToken() async {
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(makeOrgSummaryBody())
+                    : HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertEqual(http.requests.first?.headers["Authorization"], "token gho_editor")
+        let billingRequests = http.requests.filter {
+            $0.url.path == "/organizations/acme/settings/billing/ai_credit/usage"
+        }
+        XCTAssertEqual(billingRequests.map { $0.headers["Authorization"] }, ["token gho_billing"])
+    }
+
+    func testOrgBillingFallsBackToEditorWhenGitHubCLITokenLacksAccess() async {
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return request.headers["Authorization"] == "token gho_editor"
+                    ? ok(makeOrgSummaryBody())
+                    : HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            case "/graphql":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        let billingRequests = http.requests.filter {
+            $0.url.path == "/organizations/acme/settings/billing/ai_credit/usage"
+        }
+        XCTAssertEqual(
+            billingRequests.map { $0.headers["Authorization"] },
+            ["token gho_billing", "token gho_editor"]
+        )
+    }
+
+    func testOrgBillingContinuesPastGitHubCLIEmptyReportToEditorEnterpriseUsage() async {
+        let http = RoutingHTTPClient { request in
+            let authorization = request.headers["Authorization"]
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return authorization == "token gho_editor"
+                    ? ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])]
+                    ))
+                    : ok(makeEnterpriseMembershipBody(enterprises: []))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return ok(makeOrgSummaryBody())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertEqual(
+            http.requests.filter { $0.url.path == "/graphql" }
+                .map { $0.headers["Authorization"] },
+            ["token gho_billing", "token gho_editor"]
+        )
+        XCTAssertEqual(
+            http.requests.first {
+                $0.url.path == "/enterprises/octo-enterprise/settings/billing/ai_credit/usage"
+            }?.headers["Authorization"],
+            "token gho_editor"
+        )
+    }
+
+    func testUnknownSeatOrgDoesNotUseAnotherAccountsGitHubCLIToken() async {
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = RoutingHTTPClient { request in
+            let authorization = request.headers["Authorization"]
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody())
+            case "/user/orgs":
+                return authorization == "token gho_editor"
+                    ? okJSON([["login": "seat-org"]])
+                    : okJSON([["login": "unrelated"]])
+            case "/organizations/seat-org/settings/billing/ai_credit/usage":
+                return forbidden
+            case "/organizations/unrelated/settings/billing/ai_credit/usage":
+                return ok(makeOrgSummaryBody())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+        XCTAssertFalse(http.requests.contains {
+            $0.url.path.contains("/organizations/unrelated/")
+        })
+        XCTAssertTrue(http.requests.dropFirst().allSatisfy {
+            $0.headers["Authorization"] == "token gho_editor"
+        })
     }
 
     func testOrgBillingForbiddenKeepsPlanOnlyCard() async {
@@ -458,7 +831,7 @@ final class CopilotProviderTests: XCTestCase {
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
             ("/user/orgs", okJSON([["login": "acme"]])),
-            ("/orgs/acme/settings/billing/usage/summary", forbidden)
+            ("/organizations/acme/settings/billing/ai_credit/usage", forbidden)
         ])
         let defaults = freshDefaults()
         let provider = makeOrgProvider(http: http, defaults: defaults)
@@ -466,14 +839,301 @@ final class CopilotProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(snapshot.plan, "Business")
-        XCTAssertTrue(snapshot.lines.isEmpty)
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgManaged"])
         XCTAssertNil(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey))
+    }
+
+    func testConsolidatedEnterpriseBillingFallsBackFromOrganization404() async {
+        let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", notFound),
+            ("/graphql", ok(makeEnterpriseMembershipBody(
+                enterprises: [("octo-enterprise", ["acme"])]
+            ))),
+            ("/enterprises/octo-enterprise/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        let graphqlRequest = http.requests.first { $0.url.path == "/graphql" }
+        XCTAssertEqual(graphqlRequest?.method, "POST")
+        XCTAssertNotNil(graphqlRequest?.body)
+        let enterpriseRequest = http.requests.first {
+            $0.url.path == "/enterprises/octo-enterprise/settings/billing/ai_credit/usage"
+        }
+        XCTAssertEqual(
+            URLComponents(url: try! XCTUnwrap(enterpriseRequest?.url), resolvingAgainstBaseURL: false)?
+                .queryItems?
+                .reduce(into: [:]) { $0[$1.name] = $1.value },
+            ["organization": "acme", "product": "Copilot"]
+        )
+    }
+
+    func testConsolidatedEnterpriseBillingOverridesEmptyOrganizationReport() async {
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", ok(makeEnterpriseMembershipBody(
+                enterprises: [("octo-enterprise", ["acme"])]
+            ))),
+            ("/enterprises/octo-enterprise/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertTrue(http.requests.contains {
+            $0.url.path == "/enterprises/octo-enterprise/settings/billing/ai_credit/usage"
+        })
+    }
+
+    func testEnterpriseBillingManagerFallsBackFromOrganization403() async {
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", forbidden),
+            ("/graphql", ok(makeEnterpriseMembershipBody(
+                enterprises: [("octo-enterprise", ["acme"])]
+            ))),
+            ("/enterprises/octo-enterprise/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        XCTAssertTrue(http.requests.contains {
+            $0.url.path == "/enterprises/octo-enterprise/settings/billing/ai_credit/usage"
+        })
+    }
+
+    func testTransientGraphQLErrorShowsOrganizationUsageUnavailable() async {
+        var rateLimited = ok([
+            "errors": [[
+                "type": "RATE_LIMITED",
+                "message": "Something went wrong while executing your query."
+            ]]
+        ])
+        rateLimited.headers["x-ratelimit-remaining"] = "0"
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", rateLimited)
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testRateLimitedGraphQL403ShowsOrganizationUsageUnavailable() async {
+        let rateLimited = HTTPResponse(
+            statusCode: 403,
+            headers: ["x-ratelimit-remaining": "0"],
+            body: Data()
+        )
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", rateLimited)
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testRateLimitedGraphQLOrganizationPageShowsOrganizationUsageUnavailable() async {
+        let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
+        let rateLimited = HTTPResponse(
+            statusCode: 403,
+            headers: ["retry-after": "60"],
+            body: Data()
+        )
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return notFound
+            case "/graphql":
+                return graphQLVariables(request)["organizationCursor"] as? String == "next-org-page"
+                    ? rateLimited
+                    : ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["unrelated"])],
+                        nextOrganizationCursors: ["octo-enterprise": "next-org-page"]
+                    ))
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertEqual(http.requests.filter { $0.url.path == "/graphql" }.count, 2)
+    }
+
+    func testGraphQLAuthorizationErrorKeepsManagedOrganizationState() async {
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", ok([
+                "errors": [[
+                    "type": "FORBIDDEN",
+                    "message": "Resource not accessible by integration"
+                ]]
+            ]))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testEnterpriseDiscoveryPaginatesViewerEnterprises() async {
+        let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                notFound
+            case "/graphql":
+                if graphQLVariables(request)["enterpriseCursor"] as? String == "enterprise-page-2" {
+                    ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])]
+                    ))
+                } else {
+                    ok(makeEnterpriseMembershipBody(
+                        enterprises: [("unrelated-enterprise", ["unrelated"])],
+                        nextEnterpriseCursor: "enterprise-page-2"
+                    ))
+                }
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                ok(makeOrgSummaryBody())
+            default:
+                HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        let graphqlRequests = http.requests.filter { $0.url.path == "/graphql" }
+        XCTAssertEqual(graphqlRequests.count, 2)
+        XCTAssertEqual(
+            graphQLVariables(graphqlRequests[1])["enterpriseCursor"] as? String,
+            "enterprise-page-2"
+        )
+    }
+
+    func testEnterpriseDiscoveryPaginatesOrganizationsWithinEnterprise() async {
+        let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                notFound
+            case "/graphql":
+                if graphQLVariables(request)["organizationCursor"] as? String == "organization-page-2" {
+                    ok(makeEnterpriseOrganizationBody(organizations: ["acme"]))
+                } else {
+                    ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["unrelated"])],
+                        nextOrganizationCursors: ["octo-enterprise": "organization-page-2"]
+                    ))
+                }
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                ok(makeOrgSummaryBody())
+            default:
+                HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        let graphqlRequests = http.requests.filter { $0.url.path == "/graphql" }
+        XCTAssertEqual(graphqlRequests.count, 2)
+        XCTAssertEqual(
+            graphQLVariables(graphqlRequests[1])["organizationCursor"] as? String,
+            "organization-page-2"
+        )
+    }
+
+    func testConsolidatedEnterpriseEmptyReportShowsZeroUsage() async {
+        let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", notFound),
+            ("/graphql", ok(makeEnterpriseMembershipBody(
+                enterprises: [("octo-enterprise", ["acme"])]
+            ))),
+            ("/enterprises/octo-enterprise/settings/billing/ai_credit/usage", ok(["usageItems": []]))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+    }
+
+    func testOrganizationBillingRequestsOnlyCopilotProduct() async {
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        _ = await provider.refresh()
+
+        guard let request = http.requests.first(where: {
+            $0.url.path == "/organizations/acme/settings/billing/ai_credit/usage"
+        }) else {
+            return XCTFail("expected organization AI-credit request")
+        }
+        XCTAssertEqual(
+            URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems,
+            [URLQueryItem(name: "product", value: "Copilot")]
+        )
     }
 
     func testUsesCachedOrgWithoutReprobing() async {
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
-            ("/orgs/acme/settings/billing/usage/summary", ok(makeOrgSummaryBody()))
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
         ])
         let defaults = freshDefaults()
         defaults.set("acme", forKey: CopilotProvider.billingOrgDefaultsKey)
@@ -485,14 +1145,179 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
     }
 
+    func testCachedOrgWithEmptyUsageRediscoversAnotherOrgWithActualUsage() async {
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
+            ("/organizations/emptyorg/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/user/orgs", okJSON([["login": "emptyorg"], ["login": "acme"]])),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
+        ])
+        let defaults = freshDefaults()
+        defaults.set("emptyorg", forKey: CopilotProvider.billingOrgDefaultsKey)
+        let provider = makeOrgProvider(http: http, defaults: defaults)
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
+        XCTAssertTrue(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
+        XCTAssertEqual(
+            http.requests.filter {
+                $0.url.path == "/organizations/emptyorg/settings/billing/ai_credit/usage"
+            }.count,
+            1
+        )
+    }
+
+    func testUnknownSeatOrgDoesNotPublishCachedOrgEmptyReportAsZero() async {
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
+            ("/organizations/oldorg/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/user/orgs", okJSON([["login": "oldorg"]]))
+        ])
+        let defaults = freshDefaults()
+        defaults.set("oldorg", forKey: CopilotProvider.billingOrgDefaultsKey)
+        let provider = makeOrgProvider(http: http, defaults: defaults)
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+        XCTAssertNil(snapshot.line(label: "Org Spend"))
+        XCTAssertNil(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey))
+        XCTAssertTrue(http.requests.contains { $0.url.path == "/user/orgs" })
+    }
+
+    func testDiscoveryUsesAccessibleEmptyReportAsZeroUsage() async {
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", ok(makeEnterpriseMembershipBody(enterprises: [])))
+        ])
+        let defaults = freshDefaults()
+        let provider = makeOrgProvider(http: http, defaults: defaults)
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        XCTAssertNil(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey))
+        XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
+        XCTAssertTrue(http.requests.contains { $0.url.path == "/graphql" })
+    }
+
+    func testAssociatedEmptyDoesNotHideAnotherUnreadableOrganization() async {
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = routedClient([
+            (
+                "/copilot_internal/user",
+                ok(makeBusinessPlaceholderBody(seatOrgs: ["empty-org", "blocked-org"]))
+            ),
+            ("/organizations/empty-org/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/organizations/blocked-org/settings/billing/ai_credit/usage", forbidden),
+            ("/graphql", ok(makeEnterpriseMembershipBody(enterprises: [])))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testEnterpriseEmptyDoesNotHideAnotherUnreadableTarget() async {
+        let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return notFound
+            case "/graphql":
+                return ok(makeEnterpriseMembershipBody(enterprises: [
+                    ("empty-enterprise", ["acme"]),
+                    ("blocked-enterprise", ["acme"])
+                ]))
+            case "/enterprises/empty-enterprise/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/enterprises/blocked-enterprise/settings/billing/ai_credit/usage":
+                return forbidden
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testUnassociatedEmptyOrgDoesNotBecomeSeatUsage() async {
+        // The Copilot response identifies `seatorg` as the seat source. The user can read unrelated
+        // org billing but not seatorg billing, so unrelated's empty report must never become zero totals.
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["seatorg"]))),
+            ("/user/orgs", okJSON([["login": "unrelated"], ["login": "seatorg"]])),
+            ("/organizations/unrelated/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/organizations/seatorg/settings/billing/ai_credit/usage", forbidden)
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+        XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
+        XCTAssertFalse(http.requests.contains { $0.url.path.contains("/organizations/unrelated/") })
+    }
+
+    func testUnassociatedEmptyFallbackIsNotAuthoritative() async {
+        // Older Copilot responses may lack a seat-org signal. In that fallback mode, positive Copilot
+        // usage can identify an org, but an arbitrary accessible empty report cannot.
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
+            ("/user/orgs", okJSON([["login": "unrelated"], ["login": "seatorg"]])),
+            ("/organizations/unrelated/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/organizations/seatorg/settings/billing/ai_credit/usage", forbidden)
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(snapshot.line(label: "Organization Usage")?.label, "Organization Usage")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testDiscoveryPrefersActualUsageOverEarlierAccessibleEmptyOrg() async {
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
+            ("/user/orgs", okJSON([["login": "emptyorg"], ["login": "acme"]])),
+            ("/organizations/emptyorg/settings/billing/ai_credit/usage", ok(makeOtherAICreditBody())),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
+        ])
+        let defaults = freshDefaults()
+        let provider = makeOrgProvider(http: http, defaults: defaults)
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
+        XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
+    }
+
     func testEvictsStaleCachedOrgAndReprobes() async {
         // The cached org answers without Copilot usage (e.g. the user changed orgs) — it must be
         // forgotten and discovery re-run.
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
-            ("/orgs/oldorg/settings/billing/usage/summary", HTTPResponse(statusCode: 404, headers: [:], body: Data())),
+            ("/organizations/oldorg/settings/billing/ai_credit/usage", HTTPResponse(statusCode: 404, headers: [:], body: Data())),
             ("/user/orgs", okJSON([["login": "acme"]])),
-            ("/orgs/acme/settings/billing/usage/summary", ok(makeOrgSummaryBody()))
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
         ])
         let defaults = freshDefaults()
         defaults.set("oldorg", forKey: CopilotProvider.billingOrgDefaultsKey)
@@ -510,8 +1335,8 @@ final class CopilotProviderTests: XCTestCase {
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
             ("/user/orgs", okJSON([["login": "brokenorg"], ["login": "acme"]])),
-            ("/orgs/brokenorg/settings/billing/usage/summary", HTTPResponse(statusCode: 503, headers: [:], body: Data())),
-            ("/orgs/acme/settings/billing/usage/summary", ok(makeOrgSummaryBody()))
+            ("/organizations/brokenorg/settings/billing/ai_credit/usage", HTTPResponse(statusCode: 503, headers: [:], body: Data())),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(makeOrgSummaryBody()))
         ])
         let defaults = freshDefaults()
         let provider = makeOrgProvider(http: http, defaults: defaults)
@@ -524,10 +1349,10 @@ final class CopilotProviderTests: XCTestCase {
 
     func testTransientBillingFailureKeepsCachedOrg() async {
         // A 5xx from the cached org's billing endpoint is a brief outage, not a stale org: the cache
-        // must survive (no re-discovery), and the refresh degrades to the plan-only card.
+        // must survive (no re-discovery), and the card should describe the temporary failure.
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
-            ("/orgs/acme/settings/billing/usage/summary", HTTPResponse(statusCode: 503, headers: [:], body: Data()))
+            ("/organizations/acme/settings/billing/ai_credit/usage", HTTPResponse(statusCode: 503, headers: [:], body: Data()))
         ])
         let defaults = freshDefaults()
         defaults.set("acme", forKey: CopilotProvider.billingOrgDefaultsKey)
@@ -535,9 +1360,57 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertTrue(snapshot.lines.isEmpty)
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Organization Usage Unavailable")
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
+    }
+
+    func testRateLimitedBilling403KeepsCachedOrgAndShowsUnavailable() async {
+        let rateLimited = HTTPResponse(
+            statusCode: 403,
+            headers: ["x-ratelimit-remaining": "0"],
+            body: Data()
+        )
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
+            ("/organizations/acme/settings/billing/ai_credit/usage", rateLimited)
+        ])
+        let defaults = freshDefaults()
+        defaults.set("acme", forKey: CopilotProvider.billingOrgDefaultsKey)
+        let provider = makeOrgProvider(http: http, defaults: defaults)
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
+        XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
+    }
+
+    func testRateLimitedOrgList403ShowsOrganizationUsageUnavailable() async {
+        let rateLimited = HTTPResponse(
+            statusCode: 403,
+            headers: ["retry-after": "60"],
+            body: Data()
+        )
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
+            ("/user/orgs", rateLimited)
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
     func testPersonalPaidAccountMakesNoOrgCalls() async {
@@ -573,6 +1446,17 @@ final class CopilotProviderTests: XCTestCase {
             keychain: FakeKeychain()
         )
     }
+
+    private func editorAndGhTokenStore() -> CopilotAuthStore {
+        let wrappedBillingToken = "go-keyring-base64:"
+            + Data("gho_billing".utf8).base64EncodedString()
+        return CopilotAuthStore(
+            files: FakeFiles([
+                CopilotAuthStore.editorAppsPath: #"{ "github.com": { "oauth_token": "gho_editor" } }"#
+            ]),
+            keychain: FakeKeychain(wrappedBillingToken)
+        )
+    }
 }
 
 // MARK: - Helpers
@@ -590,7 +1474,7 @@ private func routedClient(_ routes: [(substring: String, response: HTTPResponse)
 /// plan is reported but every quota bucket is a zero-entitlement token-based-billing placeholder.
 /// Crucially, the premium bucket carries `overage_permitted: true` — the field that used to sneak an
 /// "Extra Usage: 0" row into the mapped lines and block the org-billing fallback.
-private func makeBusinessPlaceholderBody() -> [String: Any] {
+private func makeBusinessPlaceholderBody(seatOrgs: [String]? = nil) -> [String: Any] {
     func bucket(_ id: String, overagePermitted: Bool) -> [String: Any] {
         [
             "overage_count": 0, "overage_entitlement": 0, "overage_permitted": overagePermitted,
@@ -599,7 +1483,7 @@ private func makeBusinessPlaceholderBody() -> [String: Any] {
             "remaining": 0, "entitlement": 0
         ]
     }
-    return [
+    var body: [String: Any] = [
         "copilot_plan": "business",
         "token_based_billing": true,
         "quota_snapshots": [
@@ -608,6 +1492,10 @@ private func makeBusinessPlaceholderBody() -> [String: Any] {
             "premium_interactions": bucket("premium_interactions", overagePermitted: true)
         ]
     ]
+    if let seatOrgs {
+        body["organization_login_list"] = seatOrgs
+    }
+    return body
 }
 
 /// The org billing usage summary from issue #839: one Copilot AI-unit item, fully covered by the
@@ -633,23 +1521,105 @@ private func makeOrgSummaryBody() -> [String: Any] {
     ]
 }
 
+private func makeOtherAICreditBody() -> [String: Any] {
+    [
+        "usageItems": [
+            [
+                "product": "GitHub Models",
+                "sku": "Models AI Credits",
+                "unitType": "credits",
+                "grossQuantity": 25,
+                "netAmount": 0.25
+            ]
+        ]
+    ]
+}
+
+private func makeEnterpriseMembershipBody(
+    enterprises: [(slug: String, organizations: [String])],
+    nextEnterpriseCursor: String? = nil,
+    nextOrganizationCursors: [String: String] = [:]
+) -> [String: Any] {
+    [
+        "data": [
+            "viewer": [
+                "enterprises": [
+                    "nodes": enterprises.map { enterprise in
+                        [
+                            "slug": enterprise.slug,
+                            "organizations": [
+                                "nodes": enterprise.organizations.map { ["login": $0] },
+                                "pageInfo": makePageInfo(
+                                    nextCursor: nextOrganizationCursors[enterprise.slug]
+                                )
+                            ]
+                        ]
+                    },
+                    "pageInfo": makePageInfo(nextCursor: nextEnterpriseCursor)
+                ]
+            ]
+        ]
+    ]
+}
+
+private func makeEnterpriseOrganizationBody(
+    organizations: [String],
+    nextCursor: String? = nil
+) -> [String: Any] {
+    [
+        "data": [
+            "enterprise": [
+                "organizations": [
+                    "nodes": organizations.map { ["login": $0] },
+                    "pageInfo": makePageInfo(nextCursor: nextCursor)
+                ]
+            ]
+        ]
+    ]
+}
+
+private func makePageInfo(nextCursor: String?) -> [String: Any] {
+    [
+        "hasNextPage": nextCursor != nil,
+        "endCursor": nextCursor as Any? ?? NSNull()
+    ]
+}
+
+private func graphQLVariables(_ request: HTTPRequest) -> [String: Any] {
+    guard
+        let body = request.body,
+        let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+        let variables = payload["variables"] as? [String: Any]
+    else {
+        return [:]
+    }
+    return variables
+}
+
 private func okJSON(_ array: [[String: Any]]) -> HTTPResponse {
     HTTPResponse(statusCode: 200, headers: [:], body: try! JSONSerialization.data(withJSONObject: array))
 }
 
-private func orgCount(_ lines: [MetricLine], _ label: String) -> Double? {
-    value(lines, label: label, kind: .count)
+private func orgCount(_ lines: [MetricLine], _ label: String, valueLabel: String = "credits") -> Double? {
+    value(lines, label: label, kind: .count, valueLabel: valueLabel)
 }
 
 private func orgDollars(_ lines: [MetricLine], _ label: String) -> Double? {
     value(lines, label: label, kind: .dollars)
 }
 
-private func value(_ lines: [MetricLine], label: String, kind: MetricKind) -> Double? {
+private func value(
+    _ lines: [MetricLine],
+    label: String,
+    kind: MetricKind,
+    valueLabel: String? = nil
+) -> Double? {
     guard case .values(_, let values, _, _, _, _) = lines.first(where: { $0.label == label }) else {
         return nil
     }
-    return values.first(where: { $0.kind == kind })?.number
+    return values.first {
+        $0.kind == kind && (valueLabel == nil || $0.label == valueLabel)
+    }?.number
 }
 
 private func makePaidBody() -> [String: Any] {

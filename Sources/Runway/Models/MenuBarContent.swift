@@ -49,6 +49,8 @@ struct MenuBarContent: Equatable {
 enum MenuBarContentBuilder {
     /// Max bars the compact style renders (matches the original OpenUsage tray).
     static let maxBars = 4
+    /// The Text strip has room for two stacked values per provider.
+    static let maxMetricsPerGroup = 2
 
     /// Resolve pinned provider groups into menu-bar content. `groups` is `LayoutStore.pinnedGroups`
     /// (already ordered, disabled providers excluded); `data` resolves each descriptor to its live
@@ -66,7 +68,15 @@ enum MenuBarContentBuilder {
         title: (Provider) -> String = { $0.displayName }
     ) -> MenuBarContent {
         let resolvedGroups = groups.compactMap { group -> MenuBarContent.Group? in
-            let metrics = group.metrics.map { resolve($0, data($0)) }.filter(\.hasData)
+            // Applicability can change after dormant pins were retained. Resolve live values first so
+            // no-data pins consume no room, then reapply the renderer's two-row invariant without
+            // destructively changing the user's saved preferences.
+            let metrics = Array(
+                group.metrics
+                    .map { resolve($0, data($0)) }
+                    .filter(\.hasData)
+                    .prefix(maxMetricsPerGroup)
+            )
             guard !metrics.isEmpty else { return nil }
             return MenuBarContent.Group(
                 providerID: group.provider.id,

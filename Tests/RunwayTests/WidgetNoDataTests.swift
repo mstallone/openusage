@@ -36,13 +36,34 @@ final class WidgetNoDataTests: XCTestCase {
         XCTAssertNotEqual(store.data(for: present).valueText, WidgetData.noDataHeadline)
     }
 
+    func testSnapshotCanMarkAPlanMetricInapplicable() async {
+        let (store, present, missing) = await makeRefreshedStore(
+            suite: "applicability",
+            applicableMetricIDs: ["test.present"]
+        )
+
+        XCTAssertTrue(store.isMetricApplicable(present))
+        XCTAssertFalse(store.isMetricApplicable(missing))
+        // Applicability and fetch state stay independent: callers that intentionally resolve the
+        // inapplicable descriptor still receive the existing honest no-data representation.
+        XCTAssertFalse(store.data(for: missing).hasData)
+    }
+
+    func testSnapshotWithoutApplicabilityMetadataPreservesLegacyBehavior() async {
+        let (store, present, missing) = await makeRefreshedStore(suite: "legacy-applicability")
+
+        XCTAssertTrue(store.isMetricApplicable(present))
+        XCTAssertTrue(store.isMetricApplicable(missing))
+    }
+
     // Menu-bar ordering / no-data-skip / fallback are exercised on the real tray path
     // (MenuBarContentBuilder + LayoutStore.pinnedGroups) in MenuBarContentTests and MenuBarPinTests.
 
     // MARK: - Helpers
 
     private func makeRefreshedStore(
-        suite: String
+        suite: String,
+        applicableMetricIDs: Set<String>? = nil
     ) async -> (WidgetDataStore, WidgetDescriptor, WidgetDescriptor) {
         let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("cursor"))
         let present = boundedPercent(provider, id: "test.present", metric: "Present", sampleUsed: 40)
@@ -54,7 +75,8 @@ final class WidgetNoDataTests: XCTestCase {
             snapshot: ProviderSnapshot(
                 providerID: provider.id,
                 displayName: provider.displayName,
-                lines: [.progress(label: "Present", used: 40, limit: 100, format: .percent)]
+                lines: [.progress(label: "Present", used: 40, limit: 100, format: .percent)],
+                applicableMetricIDs: applicableMetricIDs
             )
         )
         let defaults = makeUserDefaults(suite)

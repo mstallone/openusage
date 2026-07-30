@@ -17,6 +17,7 @@ import SwiftUI
 struct CustomizeProviderDetailView: View {
     @Environment(LayoutStore.self) private var layout
     @Environment(AppContainer.self) private var container
+    @Environment(WidgetDataStore.self) private var dataStore
     let providerID: String
     let reorderSpaceName: String
     @Binding var reorderLift: ReorderLift?
@@ -26,7 +27,10 @@ struct CustomizeProviderDetailView: View {
     private let density = DensitySetting.compact
 
     var body: some View {
-        if let group = layout.customizeDetail(for: providerID) {
+        if let group = layout.customizeDetail(
+            for: providerID,
+            matching: dataStore.isMetricApplicable
+        ) {
             VStack(alignment: .leading, spacing: density.sectionSpacing) {
                 if container.canRename(providerID) {
                     CardNameSection(providerID: providerID)
@@ -160,7 +164,19 @@ struct CustomizeProviderDetailView: View {
     }
 
     private func reorderTargetIDs(for providerID: String) -> [String] {
-        layout.metricOrderWithDivider(for: providerID, dividerID: expandedDividerID(for: providerID))
+        let dividerID = expandedDividerID(for: providerID)
+        guard let group = layout.customizeDetail(
+            for: providerID,
+            matching: dataStore.isMetricApplicable
+        ) else {
+            return []
+        }
+        // Use the same promoted partition the two cards render. Reading the raw persisted divider
+        // order here would put the sentinel before rows that were promoted from On Demand, so a drag
+        // into the visually empty On Demand card would be interpreted in the opposite direction.
+        return group.alwaysShownMetrics.map(\.id)
+            + [dividerID]
+            + group.expandedMetrics.map(\.id)
     }
 
     private func expandedDividerID(for providerID: String) -> String {
@@ -168,7 +184,10 @@ struct CustomizeProviderDetailView: View {
     }
 
     private func makeLift(metricID: String, value: DragGesture.Value) -> ReorderLift? {
-        let title = layout.customizeDetail(for: providerID)?.metrics.first { $0.id == metricID }?.title ?? ""
+        let title = layout.customizeDetail(
+            for: providerID,
+            matching: dataStore.isMetricApplicable
+        )?.metrics.first { $0.id == metricID }?.title ?? ""
         return ReorderLift.make(id: metricID, payload: .customizeMetric(title: title), value: value, frames: rowFrames.frames)
     }
 }
@@ -224,18 +243,23 @@ private struct CardNameSection: View {
 private struct StarButton: View {
     let metric: WidgetDescriptor
     @Environment(LayoutStore.self) private var layout
+    @Environment(WidgetDataStore.self) private var dataStore
     @State private var shakeTrigger = 0
 
     var body: some View {
         if metric.pinnable {
             let pinned = layout.isPinned(metric.id)
             Button {
-                if layout.canPin(metric.id) {
-                    layout.togglePin(metric.id)
+                if layout.canPin(metric.id, matching: dataStore.isMetricApplicable) {
+                    layout.togglePin(metric.id, matching: dataStore.isMetricApplicable)
                     layout.presentCustomizationNotice(pinned ? "Removed from menu bar" : "Starred for menu bar")
                 } else {
                     shakeTrigger += 1
-                    layout.presentCustomizationNotice(layout.pinDenialReason(metric.id) ?? "Up to 2 stars per provider", tone: .notice)
+                    layout.presentCustomizationNotice(
+                        layout.pinDenialReason(metric.id, matching: dataStore.isMetricApplicable)
+                            ?? "Up to 2 stars per provider",
+                        tone: .notice
+                    )
                 }
             } label: {
                 Image(systemName: pinned ? "star.fill" : "star")
