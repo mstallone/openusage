@@ -1,20 +1,22 @@
-# Deploys the gh-pages branch content (appcast.xml, pricing_supplement.json) to the live Pages site.
+# Deploys the update-feed branch content (appcast.xml, pricing_supplement.json) to the live update
+# endpoint. GitHub Pages is the transport, but the workflow and backing branch use product-focused
+# names.
 #
 # The repo's Pages source is "GitHub Actions", not "Deploy from a branch": GitHub's legacy
 # branch-deploy pipeline repeatedly failed server-side ("Deployment failed, try again later",
 # deployments stuck in deployment_queued) in July 2026, leaving the live appcast stale while the
 # branch was current. This workflow replaces it.
 #
-# Trigger notes (why workflow_run and not `on: push branches: [gh-pages]`): the Release and
-# Publish pricing supplement workflows push to gh-pages with the built-in GITHUB_TOKEN, and GitHub
+# Trigger notes (why workflow_run and not `on: push branches: [update-feed]`): the Release and
+# Publish Pricing Supplement workflows push to update-feed with the built-in GITHUB_TOKEN, and GitHub
 # suppresses workflow triggers from GITHUB_TOKEN pushes. workflow_run on their completion is the
 # reliable signal — and it requires this file to live on the default branch, which also makes
 # manual dispatch work.
-name: Deploy Pages
+name: Deploy Update Feed
 
 on:
   workflow_run:
-    workflows: ["Release", "Publish pricing supplement"]
+    workflows: ["Release", "Publish Pricing Supplement"]
     types: [completed]
   workflow_dispatch:
 
@@ -24,27 +26,30 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages-deploy
+  group: update-feed-deploy
   cancel-in-progress: false
 
 jobs:
   deploy:
-    # Deploy after a successful publish; a failed Release never touched gh-pages, so skip.
+    name: Deploy Update Feed
+    # Deploy after a successful publish; a failed Release never touched update-feed, so skip.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    # actions/deploy-pages recommends this environment name even when the backing branch has a
+    # product-specific name.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: gh-pages
+          ref: update-feed
 
-      - name: Upload site artifact
+      - name: Upload update feed artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: .
 
-      - name: Deploy to GitHub Pages
+      - name: Deploy update feed
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5

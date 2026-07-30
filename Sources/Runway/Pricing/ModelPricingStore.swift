@@ -2,7 +2,7 @@ import Foundation
 
 /// Owns the app's model pricing data: bundled snapshots for offline first launch, on-disk caches in
 /// Application Support, and hourly refreshes from the live feeds (LiteLLM, models.dev, and the
-/// Runway pricing supplement on gh-pages). `current()` never blocks on the network — it serves
+/// Runway pricing supplement on the public update feed). `current()` never blocks on the network — it serves
 /// the freshest data on hand and revalidates in the background (stale-while-revalidate).
 actor ModelPricingStore {
     static let shared = ModelPricingStore()

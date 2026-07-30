@@ -73,14 +73,14 @@ Branch from `main`, commit (`fix(pricing): ...` or `feat(pricing): ...`), and op
 
 ### 6. Verify publication after merge
 
-Once merged, the `Publish pricing supplement` workflow runs. Confirm it landed:
+Once merged, the `Publish Pricing Supplement` workflow runs. Confirm it landed:
 
 ```sh
 gh run list --workflow=pricing-supplement.yml --limit 1
 curl -s https://mstallone.github.io/runway/pricing_supplement.json | python3 -c "import json,sys; print(json.load(sys.stdin)['updated_at'])"
 ```
 
-The `updated_at` served must match the merged file. Publishing is two hops: the supplement workflow pushes the file to the `gh-pages` branch, then `.github/workflows/deploy-pages.yml` on `main` deploys that branch to the live site (Pages source is "GitHub Actions"). If the URL is stale after ~10 minutes, check `gh run list --workflow=deploy-pages.yml` and re-run **`gh workflow run deploy-pages.yml --ref main`** (not `--ref gh-pages`).
+The `updated_at` served must match the merged file. Publishing is two hops: the supplement workflow pushes the file to the `update-feed` branch, then `.github/workflows/deploy-update-feed.yml` on `main` deploys that branch to the live site (Pages source is "GitHub Actions"). If the URL is stale after ~10 minutes, check `gh run list --workflow=deploy-update-feed.yml` and re-run **`gh workflow run deploy-update-feed.yml --ref main`** (not `--ref update-feed`).
 
 ## Optional: refresh bundled snapshots
 

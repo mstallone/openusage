@@ -1,13 +1,13 @@
-# Publishes the pricing supplement to GitHub Pages whenever it changes on main.
+# Publishes the pricing supplement to the update feed whenever it changes on main.
 #
 # Installed apps fetch https://mstallone.github.io/runway/pricing_supplement.json on their daily
 # pricing refresh, so merging a change to the supplement updates Cursor-native model pricing (auto,
 # composer-*, github_bugbot), fast multipliers, and model alias rules in the field within ~a day —
 # no tag, no release, no Sparkle involvement.
 #
-# Shares the release workflow's concurrency group: both publish to gh-pages with keep_files, so
+# Shares the release workflow's concurrency group: both publish to update-feed with keep_files, so
 # serializing them prevents lost updates from concurrent pushes to the branch.
-name: Publish pricing supplement
+name: Publish Pricing Supplement
 
 on:
   push:
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release-appcast
+  group: update-feed-publish
   cancel-in-progress: false
 
 permissions:
@@ -57,15 +57,15 @@ jobs:
                 f"{len(supplement['alias_rules'])} alias rules.")
           PY
 
-      - name: Assemble Pages directory
+      - name: Assemble update feed
         run: |
           mkdir -p public
           cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json
 
-      - name: Publish to GitHub Pages
+      - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
+          publish_branch: update-feed
           publish_dir: ./public
           keep_files: true
