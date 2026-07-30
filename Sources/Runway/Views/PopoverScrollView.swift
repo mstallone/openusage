@@ -13,7 +13,7 @@ import SwiftUI
 /// preferences — are applied by the caller on the returned view, since those differ per screen.
 ///
 /// It also publishes its inner content's ideal height as a `ScrollContentHeightKey` preference so the
-/// popover can auto-fit the window to its content (see `DashboardView`'s coordinated-morph resize). A
+/// popover can auto-fit the visual panel to its content (see `DashboardView`'s coordinated morph). A
 /// vertical `ScrollView` proposes `nil` height to its children, so the measured value is the content's
 /// intrinsic height — invariant to the window/viewport height, which is what keeps the auto-fit from
 /// feeding back on itself. The preference bubbles up past the `ScrollView` to the per-screen wrapper.

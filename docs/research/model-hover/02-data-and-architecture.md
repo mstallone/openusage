@@ -243,8 +243,8 @@ Usage trend hover:
 Popover constraints:
 
 - The app no longer relies on a stock `NSPopover`; `StatusItemController` owns a borderless non-activating `MenuBarPanel` (`NSPanel`) at `.popUpMenu` level.
-- The panel is fixed width (`320`) and dynamic height. `DashboardView` measures content height and forwards it through `PanelHeightModifier` / `PanelHeightBridge`.
-- `StatusItemController` opens the panel at a persisted/clamped height and applies SwiftUI-driven height morphs as content changes.
+- The panel window is fixed width (`320`) and opens at a fixed screen-clamped maximum height for the whole session; it never resizes while open. The *visual* panel (a height-framed, corner-clipped card pinned to the window top) animates inside it. `DashboardView` measures content height and forwards it through `PanelHeightModifier` / `PanelHeightBridge`, which sizes the AppKit backdrop and shadow — not the window.
+- `PanelHeightController` seeds the visual panel at a persisted/clamped opening height; height morphs are pure SwiftUI animations of the visual panel inside the fixed window.
 - A hover detail panel must not accidentally change the dashboard's measured content height unless that is intended. A SwiftUI `.popover` like the trend detail should not contribute to the main panel's content height, which is desirable here.
 - A pure in-window overlay risks clipping in the scroll view and root panel, as documented in `HoverTooltip.swift`.
 

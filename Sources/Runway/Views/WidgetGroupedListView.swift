@@ -18,7 +18,7 @@ struct WidgetGroupedListView: View {
     let reorderSpaceName: String
     @Binding var reorderLift: ReorderLift?
 
-    @State private var rowFrames: [String: CGRect] = [:]
+    @State private var rowFrames = ReorderFrameStore()
     @State private var activeProviderID: String?
     @State private var activeMetricID: String?
     /// The card the "Rename…" alert is currently editing; `nil` when the alert is closed.
@@ -35,7 +35,7 @@ struct WidgetGroupedListView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onPreferenceChange(ReorderFramePreferenceKey.self) { rowFrames = $0 }
+        .onPreferenceChange(ReorderFramePreferenceKey.self) { [rowFrames] in rowFrames.frames = $0 }
         .animation(Motion.spring, value: groups.map(\.provider.id))
         .alert("Rename Card", isPresented: isRenamePresented) {
             TextField("Name", text: $renameDraft)
@@ -244,6 +244,9 @@ struct WidgetGroupedListView: View {
     private func expandToggle(providerID: String, isExpanded: Bool) -> some View {
         Button {
             withAnimation(Motion.spring) {
+                // Same transaction as the row change, so the panel height (and the footer riding it)
+                // animates on the same spring clock as the unfolding rows — see `coAnimateExpansion`.
+                MenuBarPopover.coAnimateExpansion?(providerID, !isExpanded)
                 _ = layout.setProviderExpanded(!isExpanded, for: providerID)
             }
         } label: {
@@ -431,7 +434,7 @@ struct WidgetGroupedListView: View {
                 rows: visibleRows.map(\.data)
             ),
             value: value,
-            frames: rowFrames
+            frames: rowFrames.frames
         )
     }
 
@@ -440,7 +443,7 @@ struct WidgetGroupedListView: View {
             id: descriptor.id,
             payload: .dashboardMetric(data: dataStore.data(for: descriptor)),
             value: value,
-            frames: rowFrames
+            frames: rowFrames.frames
         )
     }
 }

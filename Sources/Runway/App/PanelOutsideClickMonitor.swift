@@ -6,6 +6,10 @@ final class PanelOutsideClickMonitor {
     private let panel: MenuBarPanel
     private let statusItem: NSStatusItem
     private let isMorphing: () -> Bool
+    /// The panel's current *visual* height. The window is a fixed-size transparent canvas taller than
+    /// the visible panel (see `PanelHeightController`), so inside/outside must be judged against the
+    /// visual rect — a click in the window's transparent remainder is an outside click.
+    private let visualHeight: () -> CGFloat
     private let onInsidePanelClick: () -> Void
     private let onDismiss: () -> Void
     private var monitors: [Any] = []
@@ -14,12 +18,14 @@ final class PanelOutsideClickMonitor {
         panel: MenuBarPanel,
         statusItem: NSStatusItem,
         isMorphing: @escaping () -> Bool,
+        visualHeight: @escaping () -> CGFloat,
         onInsidePanelClick: @escaping () -> Void,
         onDismiss: @escaping () -> Void
     ) {
         self.panel = panel
         self.statusItem = statusItem
         self.isMorphing = isMorphing
+        self.visualHeight = visualHeight
         self.onInsidePanelClick = onInsidePanelClick
         self.onDismiss = onDismiss
     }
@@ -65,7 +71,10 @@ final class PanelOutsideClickMonitor {
         windowTypeName: String?,
         screenPoint: NSPoint
     ) {
-        let isInsidePanel = panel.frame.contains(screenPoint)
+        let isInsidePanel = PanelOutsideClickPolicy.visualPanelRect(
+            panelFrame: panel.frame,
+            visualHeight: visualHeight()
+        ).contains(screenPoint)
         let hasWindowContext = windowID != nil && windowTypeName != nil
         let buttonWindowID = statusItem.button?.window.map(ObjectIdentifier.init)
         let context = PanelOutsideClickContext(
@@ -73,7 +82,9 @@ final class PanelOutsideClickMonitor {
             hasAttachedSheet: panel.attachedSheet != nil,
             isOnStatusButton: isOnStatusButton(screenPoint),
             isInsidePanel: isInsidePanel,
-            isPanelWindow: hasWindowContext && windowID == ObjectIdentifier(panel),
+            // An event routed to the panel window only keeps it open when it also lands on the visible
+            // panel — the window extends transparently below it, and a click there must dismiss.
+            isPanelWindow: hasWindowContext && windowID == ObjectIdentifier(panel) && isInsidePanel,
             isStatusItemWindow: hasWindowContext && windowID == buttonWindowID,
             eventWindowTypeName: hasWindowContext ? windowTypeName : nil
         )
@@ -107,6 +118,18 @@ struct PanelOutsideClickContext {
 }
 
 enum PanelOutsideClickPolicy {
+    /// The on-screen rect of the *visible* panel: the top `visualHeight` points of the window frame.
+    /// The window itself stays at the screen-clamped maximum height while open, so the frame's lower
+    /// remainder is transparent dead space that must count as "outside" for dismissal.
+    static func visualPanelRect(panelFrame: NSRect, visualHeight: CGFloat) -> NSRect {
+        NSRect(
+            x: panelFrame.minX,
+            y: panelFrame.maxY - min(visualHeight, panelFrame.height),
+            width: panelFrame.width,
+            height: min(visualHeight, panelFrame.height)
+        )
+    }
+
     static func shouldKeepOpen(_ context: PanelOutsideClickContext) -> Bool {
         context.isMorphing
             || context.hasAttachedSheet

@@ -117,4 +117,26 @@ final class PanelOutsideClickPolicyTests: XCTestCase {
             .zero, buttonFrame: .zero, screenTop: nil
         ))
     }
+
+    // MARK: - Visual panel rect
+
+    /// The window is a fixed-size transparent canvas taller than the visible panel; the visual rect is
+    /// its top `visualHeight` points, and clicks in the transparent remainder must count as outside.
+    func testVisualPanelRectIsTopSliceOfWindowFrame() {
+        let windowFrame = NSRect(x: 100, y: 200, width: 320, height: 900)
+        let rect = PanelOutsideClickPolicy.visualPanelRect(panelFrame: windowFrame, visualHeight: 500)
+
+        XCTAssertEqual(rect, NSRect(x: 100, y: 600, width: 320, height: 500))
+        XCTAssertTrue(rect.contains(NSPoint(x: 150, y: 700)), "click on the visible panel is inside")
+        XCTAssertFalse(
+            rect.contains(NSPoint(x: 150, y: 300)),
+            "click in the window's transparent remainder is outside"
+        )
+    }
+
+    func testVisualPanelRectClampsToWindowHeight() {
+        let windowFrame = NSRect(x: 0, y: 0, width: 320, height: 400)
+        let rect = PanelOutsideClickPolicy.visualPanelRect(panelFrame: windowFrame, visualHeight: 900)
+        XCTAssertEqual(rect, windowFrame)
+    }
 }

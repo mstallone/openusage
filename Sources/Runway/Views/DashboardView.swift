@@ -13,10 +13,12 @@ import SwiftUI
 /// `.scrollEdgeEffectStyle(.soft)`, macOS 26+) — Apple's blurred boundary, not a custom gradient or a
 /// material bar. On macOS 15 the footer/top bar still pin via `safeAreaInset`, just without the blur
 /// (content scrolls flush). The panel **auto-fits its content**: each screen publishes its intrinsic
-/// height (`ScrollContentHeightKey` + the measured footer), and the host window is driven to that on
-/// SwiftUI's animation clock (`drivesPanelHeight` / `PanelHeightModifier`). The destination is the only
-/// live screen tree during a switch, and its height morph rides the same spring as its entrance. Scroll
-/// views take over once content exceeds the screen-height cap.
+/// height (`ScrollContentHeightKey` + the measured footer), and the visual panel — a height-framed,
+/// corner-clipped card pinned to the top of a fixed-size transparent window (see
+/// `PanelHeightController`) — animates to that on SwiftUI's clock, with the AppKit backdrop following
+/// via `drivesPanelHeight` / `PanelHeightModifier`. The destination is the only live screen tree
+/// during a switch, and its height morph rides the same spring as its entrance. Scroll views take
+/// over once content exceeds the screen-height cap.
 struct DashboardView: View {
     @Environment(AppContainer.self) private var container
     @Environment(LayoutStore.self) private var layout
@@ -24,10 +26,11 @@ struct DashboardView: View {
     @Environment(PopoverTransparencyStore.self) private var transparency
     @Environment(UpdaterController.self) private var updater
     @State private var reorderLift: ReorderLift?
-    /// The panel height SwiftUI drives — the single animation clock. `PanelHeightModifier` follows it
-    /// frame-by-frame onto the AppKit panel, so the window resize rides the same spring as the screen
-    /// entrance. 0 means "not established yet": the panel keeps the size the controller opened it at
-    /// until the first measurement lands, then we snap un-animated.
+    /// The visual panel height SwiftUI drives — the single animation clock. The height frame below
+    /// animates the panel itself, and `PanelHeightModifier` follows the same value frame-by-frame onto
+    /// the AppKit backdrop, so both ride the same spring as the screen entrance. 0 means "not
+    /// established yet": the panel renders at the controller's opening guess until the first
+    /// measurement lands, then we snap un-animated.
     @State private var animatedHeight: CGFloat = 0
     /// Whether `animatedHeight` has been seeded for this open. Until then the first measurement (or a
     /// reopen) establishes it without animation; afterwards, changes spring.
@@ -46,6 +49,16 @@ struct DashboardView: View {
     @State private var animatedSlideID = 0
     /// Reset to the top whenever the popover closes, so it never reopens mid-scroll.
     @State private var dashboardScrollPosition = ScrollPosition(edge: .top)
+    /// Measured expanded-section height per provider, learned from the first expand's measurement.
+    /// Lets later caret toggles co-animate the panel height in the SAME transaction as the row change
+    /// (one spring clock — no footer catch-up); a provider's first toggle uses a row-count estimate
+    /// and the measurement that follows issues a small same-spring correction. Keyed by the
+    /// provider's expanded-section *composition* (`expansionDeltaKey`), so customizing what sits
+    /// behind the caret misses the cache and re-learns instead of retargeting by a stale height.
+    @State private var expansionDeltas: [String: CGFloat] = [:]
+    /// The composition key whose caret toggle is awaiting its measurement, with the pre-toggle target
+    /// the actual delta is derived from. Cleared when the next dashboard measurement lands.
+    @State private var pendingExpansion: (cacheKey: String, fromTarget: CGFloat)?
     /// Drives the macOS-native confirmation sheet for the Customize "reset all" button. The alert
     /// attaches to this panel as a sheet (see `StatusItemController`'s attached-sheet guard), so a
     /// click on its buttons can't be misread as an outside click that dismisses the popover.
@@ -69,25 +82,40 @@ struct DashboardView: View {
     var body: some View {
         modeBody
             .frame(width: Self.popoverWidth)
-            // Fill the panel. The panel auto-fits its content (the window height is driven to each
-            // screen's measured ideal via `drivesPanelHeight`), so at rest the window is exactly the
-            // content's height and this fill is a no-op; when content exceeds the screen cap the window
-            // clamps and the scroll views inside take the overflow.
-            .frame(maxHeight: .infinity, alignment: .top)
-            // Paint the page surface behind all content (and the footer). Opaque by default so the
-            // popover reads as one solid panel; under Increase Transparency / the egg it clears so the
-            // behind-window backdrop (or party gradient) shows through. Outermost so the footer, header,
-            // and scroll content all sit on it; separation from the footer comes from the native soft
-            // scroll-edge fade (not a distinct bar).
+            // The visual panel: exactly `animatedHeight` tall, growing and shrinking purely inside the
+            // fixed-size window (see `PanelHeightController` — the window opens at the screen-clamped
+            // maximum and never resizes while open). Footer and chrome pin to this frame's bottom.
+            // Until the first measurement lands, the controller's remembered opening height stands in.
+            .frame(
+                height: animatedHeight > 0 ? animatedHeight : MenuBarPopover.openingHeight?(),
+                alignment: .top
+            )
+            // Paint the page surface behind the panel's content (and its footer). Opaque by default so
+            // the popover reads as one solid panel; under Increase Transparency / the egg it clears so
+            // the behind-window backdrop (or party gradient) shows through. Inside the height frame so
+            // it covers exactly the visual panel — never the window's transparent remainder.
             .background(PopoverSurface())
-            // Drive the host panel's height on SwiftUI's clock. At the body root, outside `modeBody`'s
-            // structural-animation suppression, so it can ride the active transition spring.
-            .drivesPanelHeight(animatedHeight)
+            // The easter egg's visuals hug the visual panel (and get clipped to its rounded shape
+            // below), so party/drunk layers can't paint into the window's transparent remainder.
+            .tooMuchTransparency(transparency.effectiveStyle)
+            // Inside the clip below, so a drag that wanders past the panel's bottom edge clips the
+            // floating chip at the edge (as the window bounds used to) instead of rendering it into
+            // the fixed window's transparent remainder. Same origin as the outer fill — the panel is
+            // top-aligned at the window's top-left — so the lift's reorder-space coordinates line up.
             .overlay(alignment: .topLeading) {
                 if let reorderLift {
                     ReorderLiftPreview(lift: reorderLift)
                 }
             }
+            // Round the visual panel itself. The host layer's mask only rounds the window bounds, which
+            // only coincide with the panel when the content happens to fill the whole window.
+            .clipShape(RoundedRectangle(cornerRadius: StatusItemController.cornerRadius, style: .continuous))
+            // Top-pin the panel in the window-filling root: the hosting view centers an undersized
+            // root, so without this the panel would float mid-window.
+            .frame(maxHeight: .infinity, alignment: .top)
+            // Drive the backdrop's height on SwiftUI's clock. At the body root, outside `modeBody`'s
+            // structural-animation suppression, so it can ride the active transition spring.
+            .drivesPanelHeight(animatedHeight)
             .coordinateSpace(name: Self.reorderSpace)
             .background(
                 // Esc backs out of Customize / Settings first; only from the dashboard does it close
@@ -207,6 +235,13 @@ struct DashboardView: View {
             // fight yet); the animated *re-target* defers to the switch path while a slide is in flight.
             .onChange(of: heightCoordinator.measuredIdeal[layout.screen]) { _, _ in
                 guard let target = heightCoordinator.target(for: layout.screen) else { return }
+                // A caret toggle's measurement just landed: learn the provider's exact expanded-section
+                // height so the NEXT toggle co-animates with zero correction.
+                if let pending = pendingExpansion, layout.screen == .dashboard,
+                   let ideal = heightCoordinator.measuredIdeal[.dashboard] {
+                    expansionDeltas[pending.cacheKey] = abs(ideal - pending.fromTarget)
+                    pendingExpansion = nil
+                }
                 if !didEstablishHeight {
                     didEstablishHeight = true
                     animatedHeight = target
@@ -218,21 +253,58 @@ struct DashboardView: View {
             // sibling of `PopoverKeyReader` that only observes (never consumes), so it can't disturb
             // navigation or typing.
             .background(TooMuchTransparencyKeyReader { transparency.toggleSecretCode() })
-            // Reaches `modeBody`, the `PopoverSurface` background, and every card: drives whether surfaces
-            // paint their opaque base or clear to the behind-window vibrancy backdrop.
+            // Installed for the provider cards' expand carets: retargets the panel height inside the
+            // caret's own `withAnimation`, so rows, panel edge, and footer share one spring clock.
+            .onAppear {
+                MenuBarPopover.coAnimateExpansion = { providerID, expanding in
+                    guard didEstablishHeight, animatedHeight > 0, layout.screen == .dashboard else { return }
+                    let fromIdeal = heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight
+                    let key = expansionDeltaKey(for: providerID)
+                    let delta = expansionDeltas[key] ?? estimatedExpansionDelta(for: providerID)
+                    pendingExpansion = (key, fromIdeal)
+                    let ideal = fromIdeal + (expanding ? delta : -delta)
+                    // Plain assignment: this runs inside the caret's `withAnimation(Motion.spring)`, so
+                    // the change rides that same transaction. The measurement that follows only issues
+                    // a correction when the delta was off (a provider's first-ever toggle).
+                    animatedHeight = MenuBarPopover.clampHeight?(ideal) ?? ideal
+                }
+            }
+            // Reaches `modeBody`, the `PopoverSurface` background, the `.tooMuchTransparency` egg layers
+            // (applied on the visual panel above), and every card: drives whether surfaces paint their
+            // opaque base or clear to the behind-window vibrancy backdrop.
             .environment(\.popoverSurfaceTreatment, transparency.surfaceTreatment)
-            // The easter egg's visuals: the readable party (gradient backdrop + glowing rim, text crisp
-            // on frosted cards) for the secret code, or the woozy, barely-readable pink-glass drunk mode
-            // for "Drunk Mode". No-op for the normal/increased styles. Controls stay clickable (overlays
-            // don't hit-test), so the Settings "Drunk Mode" toggle is reachable while it's running.
-            .tooMuchTransparency(transparency.effectiveStyle)
-            // Gate the egg's animation loops on whether the popover is on-screen. Applied OUTSIDE
+            // Gate the egg's animation loops on whether the popover is on-screen. Applied outside
             // `.tooMuchTransparency` so it reaches both the gradient/rim/drunk layers that modifier adds
             // and the in-content `partyPulse`. Hidden → the loops unmount their `TimelineView` clocks, so a
             // left-on egg spends no CPU; a fresh mount on reopen / in-place activation starts them at once.
             // Sourced from the controller's show/hide chokepoints (`popoverShown`), not occlusion — a
             // `.canJoinAllSpaces` panel is briefly occluded mid Space-switch while still on-screen.
             .environment(\.popoverIsVisible, transparency.popoverShown)
+    }
+
+    /// Ties a learned delta to the provider's current expanded-section composition: the ordered On
+    /// Demand metric IDs (order matters — adjacent text rows condense) plus quick-links presence.
+    /// Customizing what sits behind the caret changes the key, so a stale height can't retarget the
+    /// first post-customization toggle; the estimate covers that toggle and the measurement re-learns.
+    private func expansionDeltaKey(for providerID: String) -> String {
+        guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
+            return providerID
+        }
+        let metricIDs = group.expandedWidgets.compactMap { layout.descriptor(for: $0)?.id }
+        let links = group.provider.visibleLinks.isEmpty ? "" : "|links"
+        return "\(providerID)|\(metricIDs.joined(separator: ","))\(links)"
+    }
+
+    /// First-toggle guess for a provider's expanded-section height: its On Demand rows at the compact
+    /// row estimate, plus a quick-links row when present. The real measurement replaces this within a
+    /// couple of frames (with a small same-spring correction) and is remembered exactly afterwards.
+    private func estimatedExpansionDelta(for providerID: String) -> CGFloat {
+        guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
+            return 0
+        }
+        let rows = CGFloat(group.expandedWidgets.count) * DensitySetting.compact.estimatedMetricRowHeight
+        let links: CGFloat = group.provider.visibleLinks.isEmpty ? 0 : 40
+        return rows + links
     }
 
     private func resetTransientState() {

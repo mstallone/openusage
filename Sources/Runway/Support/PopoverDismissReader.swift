@@ -156,15 +156,27 @@ enum MenuBarPopover {
     /// quota pace notification banner).
     static var showHandler: (() -> Void)?
 
-    /// Auto-resize bridge — the "single clock". SwiftUI owns the animated height and the AppKit panel
-    /// is a passive follower: `applyHeight` is called once per animation frame from a SwiftUI
-    /// `Animatable` modifier with the interpolated height, and the controller hops it onto the main
-    /// queue (mandatory — it's invoked from inside SwiftUI's layout pass, and `setFrame` re-enters
-    /// AppKit layout on the constraint-pinned host, which would trip `_NSDetectedLayoutRecursion`) and
-    /// `setFrame`s the panel. `clampHeight` lets SwiftUI clamp its target to the same [min, screen-max]
-    /// range the panel will actually sit at, so the spring settles exactly on-frame.
+    /// Auto-fit bridge — the "single clock". SwiftUI owns the animated visual height (the window is a
+    /// fixed-size transparent canvas and never resizes while open): a SwiftUI `Animatable` modifier
+    /// pushes each interpolated height through `PanelHeightBridge`, which invokes `applyHeight`
+    /// synchronously on the main thread so the AppKit backdrop and shadow commit in the same
+    /// transaction as the SwiftUI frame they match (see `PanelHeightBridge`). `clampHeight` lets
+    /// SwiftUI clamp its target to the same [min, screen-max] range the panel will actually sit at,
+    /// so the spring settles exactly on-frame.
     static var applyHeight: ((CGFloat) -> Void)?
     static var clampHeight: ((CGFloat) -> CGFloat)?
+    /// Installed by `PanelHeightController`: the visual height the panel opened at (the remembered
+    /// per-screen guess). `DashboardView` renders the panel at this height until the first content
+    /// measurement establishes the real one — the window itself is a fixed-size transparent canvas
+    /// (see `PanelHeightController`), so without this the pre-measurement panel would fill it whole.
+    static var openingHeight: (() -> CGFloat)?
+
+    /// Installed by `DashboardView`: retargets the panel height for a provider card's expand/collapse
+    /// caret. Call it INSIDE the same `withAnimation` as the `setProviderExpanded` change — the whole
+    /// point is that rows, panel edge, and footer then ride one spring clock. Waiting for the content
+    /// measurement instead starts a second spring ~2 frames later, which makes SwiftUI sample the
+    /// overlapping animations off-vsync and the footer visibly jitters behind the unfolding rows.
+    static var coAnimateExpansion: ((_ providerID: String, _ expanding: Bool) -> Void)?
 
     /// Closes the popover. Falls back to ordering the given window out if no owner has installed
     /// a handler (which would be a wiring bug, so it's logged loudly by the caller's absence of

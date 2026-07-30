@@ -39,6 +39,7 @@ final class StatusItemController: NSObject {
         panel: panel,
         statusItem: statusItem,
         isMorphing: { [weak self] in self?.heightController.isMorphing ?? false },
+        visualHeight: { [weak self] in self?.heightController.visualHeight ?? 0 },
         onInsidePanelClick: { [weak self] in self?.clearStrayFocus() },
         onDismiss: { [weak self] in self?.hidePanel() }
     )
@@ -48,8 +49,9 @@ final class StatusItemController: NSObject {
     private let backdrop = PopoverBackdropView(cornerRadius: StatusItemController.cornerRadius)
     /// Token for the appearance-change observer; held to follow the documented removal pattern.
     private var appearanceObserver: NSObjectProtocol?
-    /// Corner radius of the panel surface; tuned to read like a system menu-bar popover.
-    private static let cornerRadius: CGFloat = 13
+    /// Corner radius of the panel surface; tuned to read like a system menu-bar popover. Shared with
+    /// `DashboardView`, whose clip rounds the animated visual panel to the same shape.
+    static let cornerRadius: CGFloat = 13
 
     init(container: AppContainer, updater: UpdaterController) {
         self.container = container
@@ -80,8 +82,9 @@ final class StatusItemController: NSObject {
                     .environment(updater)
             )
         )
-        // The host view fills the panel. SwiftUI measures each screen and drives the panel height;
-        // content scrolls only when that height reaches the available-screen limit.
+        // The host view fills the window — a fixed-size transparent canvas while open. SwiftUI
+        // measures each screen and animates the visual panel inside it; content scrolls only when
+        // that height reaches the available-screen limit.
         self.hostingController = hosting
 
         let panel = MenuBarPanel(
@@ -130,6 +133,17 @@ final class StatusItemController: NSObject {
         }
 
         heightController.installBridge()
+        heightController.onVisualHeightChange = { [weak self] height in
+            guard let self, let bounds = self.panel.contentView?.bounds else { return }
+            // AppKit y grows upward: the visual panel hugs the window's TOP, so the backdrop's origin
+            // sits `height` below the container's top edge.
+            self.backdrop.frame = NSRect(
+                x: 0,
+                y: bounds.height - height,
+                width: bounds.width,
+                height: height
+            )
+        }
 
         AppLog.info(.statusItem, "Status item ready (button: \(self.statusItem.button != nil), shortcut: \(KeyboardShortcuts.getShortcut(for: .togglePopover)?.description ?? "none"))")
     }
@@ -163,20 +177,25 @@ final class StatusItemController: NSObject {
         let host = hostingController.view
         host.translatesAutoresizingMaskIntoConstraints = false
         host.wantsLayer = true
-        // Redraw the SwiftUI content on every step of a height change instead of stretching the layer's
-        // cached contents (the default `.onSetNeedsDisplay`), which keeps cards steady during a morph.
-        host.layerContentsRedrawPolicy = .duringViewResize
+        // The window (and so this host) only ever changes size while hidden, between opens — morphs
+        // animate the SwiftUI visual panel inside it — so no resize redraw policy is needed. The layer
+        // mask is a backstop at the window bounds; the panel's own corners come from SwiftUI's clip.
         host.layer?.cornerRadius = Self.cornerRadius
         host.layer?.cornerCurve = .continuous
         host.layer?.masksToBounds = true
 
         container.addSubview(backdrop)
         container.addSubview(host, positioned: .above, relativeTo: backdrop)
+        // The backdrop hangs from the top at the visual height instead of filling the window (the
+        // window is a fixed-size canvas taller than the panel), and it is positioned with DIRECT frame
+        // assignment, never Auto Layout: a per-frame constraint-constant update runs the window's
+        // whole layout engine — the same engine that holds the hosting view's edge pins — which
+        // re-enters the SwiftUI host every frame and measurably knocks the morph animation off its
+        // vsync cadence (the bottom-edge jitter this replaces). A plain frame set dirties only the
+        // backdrop's own subtree.
+        backdrop.translatesAutoresizingMaskIntoConstraints = true
+        backdrop.autoresizingMask = []
         NSLayoutConstraint.activate([
-            backdrop.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            backdrop.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            backdrop.topAnchor.constraint(equalTo: container.topAnchor),
-            backdrop.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             host.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             host.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             host.topAnchor.constraint(equalTo: container.topAnchor),

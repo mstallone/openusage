@@ -3,6 +3,18 @@ import AppKit
 /// Owns the menu-bar panel's placement and content-driven height changes. The status-item controller
 /// still owns panel creation and show/hide; this type owns only the height boundary between SwiftUI and
 /// AppKit.
+///
+/// A height morph never resizes the window at all: `NSWindow.setFrame` forces a synchronous
+/// window-server commit (backing-store reallocation + frame/content sync), and even occasional
+/// mid-interaction resizes stretch the hosting layer for a frame and read as jank. Instead the window
+/// opens **once per session at the screen-clamped maximum height** and stays there; the *visual*
+/// panel — the AppKit backdrop via `onVisualHeightChange`, and SwiftUI's own height-framed,
+/// corner-clipped content — grows and shrinks inside it on SwiftUI's clock. The window's uncovered
+/// region renders fully transparent, and the window server routes mouse events in fully transparent
+/// regions of a borderless non-opaque panel to the window beneath (verified empirically with
+/// `NSWindow.windowNumber(at:)` against this exact panel configuration), so the region neither shows
+/// nor blocks anything. Outside-click dismissal still hit-tests the visual panel rect, not the window
+/// frame (`PanelOutsideClickMonitor`), so a click there closes the popover like any outside click.
 @MainActor
 final class PanelHeightController {
     static let panelWidth: CGFloat = 320
@@ -16,6 +28,12 @@ final class PanelHeightController {
     private var anchorTopLeft: NSPoint?
     private var morphSettleTask: Task<Void, Never>?
     private(set) var isMorphing = false
+    /// The height of the panel the user actually sees — the backdrop and the SwiftUI-clipped content,
+    /// always ≤ the fixed window height. This is also the height that gets remembered per screen.
+    private(set) var visualHeight: CGFloat = PanelHeightController.defaultHeight
+    /// Installed by `StatusItemController`: sizes the AppKit backdrop (the tray / vibrancy layers) to
+    /// the visual height so the revealed panel and its backing always match.
+    var onVisualHeightChange: ((CGFloat) -> Void)?
 
     init(
         panel: MenuBarPanel,
@@ -27,14 +45,17 @@ final class PanelHeightController {
         self.currentScreen = currentScreen
     }
 
-    /// Installs the two narrow callbacks SwiftUI uses: apply one animated frame and clamp a target to
-    /// the available display height.
+    /// Installs the narrow callbacks SwiftUI uses: apply one animated visual height, clamp a target to
+    /// the available display height, and read the opening height for the first pre-measurement render.
     func installBridge() {
         MenuBarPopover.applyHeight = { [weak self] height in
-            self?.applyMorphHeight(height)
+            self?.applyVisualHeight(height)
         }
         MenuBarPopover.clampHeight = { [weak self] rawHeight in
             self?.clampedHeight(rawHeight) ?? rawHeight
+        }
+        MenuBarPopover.openingHeight = { [weak self] in
+            self?.visualHeight ?? Self.defaultHeight
         }
     }
 
@@ -55,19 +76,23 @@ final class PanelHeightController {
         )
         anchorTopLeft = topLeft
 
-        let remembered = loadHeight(for: currentScreen()) ?? Self.defaultHeight
-        let height = clampedHeight(remembered)
+        // The window takes the whole allowed height for the session; only the visual panel (backdrop +
+        // SwiftUI content) opens at the remembered guess and animates from there.
         panel.setFrame(
-            PanelGeometry.frame(topLeft: topLeft, width: Self.panelWidth, height: height),
+            PanelGeometry.frame(topLeft: topLeft, width: Self.panelWidth, height: maximumHeight()),
             display: false
         )
+        let remembered = loadHeight(for: currentScreen()) ?? Self.defaultHeight
+        let height = clampedHeight(remembered)
+        visualHeight = height
+        onVisualHeightChange?(height)
         panel.invalidateShadow()
     }
 
     /// Saves before the caller changes screens or orders the panel out.
     func saveBeforeClosing() {
         guard panel.isVisible else { return }
-        saveHeight(panel.frame.height, for: currentScreen())
+        saveHeight(visualHeight, for: currentScreen())
     }
 
     /// Clears all opening-session state after the panel is ordered out.
@@ -79,18 +104,27 @@ final class PanelHeightController {
         PanelHeightBridge.invalidate()
     }
 
-    private func applyMorphHeight(_ rawHeight: CGFloat) {
-        guard rawHeight > 1, panel.isVisible else { return }
-        guard let anchorTopLeft else {
-            AppLog.error(.statusItem, "Morph height while visible but no anchor; frame not applied")
-            return
-        }
-        let height = clampedHeight(rawHeight)
-        guard abs(panel.frame.height - height) > 1 else { return }
-        panel.setFrame(
-            PanelGeometry.frame(topLeft: anchorTopLeft, width: Self.panelWidth, height: height),
-            display: false
-        )
+    /// Applies whether or not the panel is on screen. Closing collapses every expanded card
+    /// (`collapseExpandedProviders`), and the collapsed re-measure lands while the panel is hidden —
+    /// that apply is what brings the backdrop and the remembered height back down so the next open
+    /// doesn't show the previous session's expanded height. Applying to a hidden panel is just
+    /// backdrop bookkeeping; the window itself never resizes. (Guarding on visibility here also
+    /// poisoned the bridge's duplicate filter: the skipped height was recorded as pushed, so the
+    /// same value was dropped forever after.)
+    private func applyVisualHeight(_ rawHeight: CGFloat) {
+        guard rawHeight > 1 else { return }
+        // Deliberately NOT clamped: every target (and the opening guess) is already clamped before it
+        // animates, so per-frame values only leave the range during spring overshoot — and SwiftUI
+        // renders those raw values. Re-clamping here would pin the backdrop at the boundary while the
+        // panel dips past it (visible at a target sitting exactly on the 200pt minimum), splitting the
+        // two bottom edges. Past the maximum both sides clip at the window bounds — the backdrop via
+        // its below-required height constraint, the panel via the host layer mask — so they agree there.
+        guard abs(visualHeight - rawHeight) > 0.5 else { return }
+        visualHeight = rawHeight
+        onVisualHeightChange?(rawHeight)
+        // The shadow follows the window's rendered alpha shape — the visual panel, not the fixed
+        // window frame — so refresh it as the shape animates (measured: no effect on morph cadence).
+        panel.invalidateShadow()
         isMorphing = true
         scheduleMorphSettle()
     }
@@ -99,13 +133,12 @@ final class PanelHeightController {
         morphSettleTask?.cancel()
         morphSettleTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled, let self, self.panel.isVisible else { return }
+            guard !Task.isCancelled, let self else { return }
             self.isMorphing = false
-            // Rebuilding the window shadow on every interpolated frame adds AppKit work without
-            // changing content layout. Keep the existing shadow during the brief morph and refresh
-            // it once for the settled frame.
             self.panel.invalidateShadow()
-            self.saveHeight(self.panel.frame.height, for: self.currentScreen())
+            // Saves for hidden settles too: the collapse-on-close re-measure settles after the panel
+            // is ordered out, and its save is what makes the next open remember the collapsed height.
+            self.saveHeight(self.visualHeight, for: self.currentScreen())
         }
     }
 
