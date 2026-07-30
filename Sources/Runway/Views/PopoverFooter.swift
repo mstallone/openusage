@@ -21,6 +21,8 @@ struct PopoverFooter: View {
 
     @Environment(\.popoverIsVisible) private var popoverIsVisible
 
+    @State private var isRefreshHovered = false
+
     @ViewBuilder
     var body: some View {
         if screen != .customize {
@@ -93,6 +95,16 @@ struct PopoverFooter: View {
         .keyboardShortcut("r", modifiers: .command)
         .hoverTooltip("Refresh now (⌘R)")
         .disabled(isUpdating)
+        .onHover { isRefreshHovered = $0 }
+        // `NSPanel.orderOut` retains this SwiftUI tree and may not deliver a hover exit, so clear the
+        // hover at the panel's authoritative close signal.
+        .onChange(of: popoverIsVisible) { _, isVisible in
+            if !isVisible { isRefreshHovered = false }
+        }
+        // The footer view itself stays mounted across screen switches while this button is
+        // conditionally removed (Customize empties the body), and a removed view gets no hover
+        // exit — reset here so the button can't remount pre-highlighted.
+        .onDisappear { isRefreshHovered = false }
     }
 
     private func updateStatusLabel(now: Date) -> some View {
@@ -116,7 +128,8 @@ struct PopoverFooter: View {
             }
         }
         .font(.caption2)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(isRefreshHovered && !isUpdating ? .primary : .secondary)
+        .animation(.easeOut(duration: 0.12), value: isRefreshHovered)
     }
 
     private var isUpdating: Bool {

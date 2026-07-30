@@ -30,9 +30,12 @@ struct HeaderView: View {
     @Environment(UpdaterController.self) private var updater
     @Environment(PopoverTransparencyStore.self) private var transparency
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.popoverIsVisible) private var popoverIsVisible
     /// The current screen. The footer is fixed chrome keyed off `layout.screen` (it no longer slides
     /// per-page), so this control shows only when that's `.dashboard` and swaps in place on a switch.
     let screen: PopoverScreen
+
+    @State private var isHovered = false
 
     /// Control diameter, so the gear matches the footer's other chrome.
     private static let controlHeight: CGFloat = 28
@@ -47,10 +50,28 @@ struct HeaderView: View {
         if screen == .dashboard {
             optionsButton
                 .fixedSize()
+                // Hover highlight inside the circle — drawn over the glass, under the glyph — so the
+                // gear reads as hoverable even where the glass shimmer alone is too subtle (and on
+                // macOS 15, where the frosted fallback has no hover response at all).
+                .background {
+                    Circle().fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+                }
                 .interactiveGlass(
                     in: Circle(),
                     reinforced: transparency.effectiveStyle.needsChromeLegibilityBacking
                 )
+                .onHover { isHovered = $0 }
+                .animation(.easeOut(duration: 0.12), value: isHovered)
+                // `NSPanel.orderOut` retains this SwiftUI tree and may not deliver a hover exit, so
+                // clear the hover at the panel's authoritative close signal.
+                .onChange(of: popoverIsVisible) { _, isVisible in
+                    if !isVisible { isHovered = false }
+                }
+                // `HeaderView` stays mounted in the footer while this control is conditionally
+                // removed (any non-dashboard screen), and a removed view gets no hover exit — reset
+                // here so the gear can't remount pre-highlighted, and so a close from Settings
+                // (where the `onChange` above isn't mounted) can't strand the state either.
+                .onDisappear { isHovered = false }
         }
     }
 
