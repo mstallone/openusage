@@ -56,8 +56,14 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             query[kSecUseAuthenticationContext as String] = context
         }
 
+        // Same rule as `ClaudeDesktopSafeStorageKeyReader`: the browser Safe Storage items are
+        // classic login-keychain items whose ACL dialog ignores the LAContext above, so background
+        // reads must run inside the process-wide suppression scope and interactive reads must hold
+        // the gate for their whole duration.
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = allowInteraction
+            ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
+            : KeychainUISuppression.withUISuppressed { SecItemCopyMatching(query as CFDictionary, &result) }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data,

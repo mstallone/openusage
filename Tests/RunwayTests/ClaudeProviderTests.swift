@@ -502,6 +502,88 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertTrue(httpClient.requests.isEmpty)
     }
 
+    func testScopedAccountAutomaticRefreshReportsPermissionRequiredWithoutFileFallback() async {
+        // An extra `CLAUDE_CONFIG_DIR` account follows the same policy as the default card: a
+        // protected scoped keychain item makes an automatic refresh fail fast as Permission
+        // Required — never an interactive read, and never a fallback to the config dir's
+        // possibly-stale credentials file.
+        let keychain = InteractionTrackingKeychain()
+        let httpClient = FakeHTTPClient(response: HTTPResponse(
+            statusCode: 200,
+            headers: [:],
+            body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+        ))
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles([
+                    "/Users/dev/.claude-personal/.credentials.json":
+                        #"""
+                        {"claudeAiOauth":{"accessToken":"stale-file-token","subscriptionType":"pro","scopes":["user:profile"]}}
+                        """#
+                ]),
+                keychain: keychain,
+                scope: .configDir(path: "/Users/dev/.claude-personal", keychainLiteral: "~/.claude-personal")
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let detected = await provider.hasLocalCredentials()
+        XCTAssertTrue(detected, "scoped detection should see the login without keychain interaction")
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(
+            badge(snapshot.lines, "Error"),
+            ClaudeAuthError.codePermissionRequired.localizedDescription
+        )
+        XCTAssertEqual(keychain.interactiveReadCount, 0)
+        XCTAssertEqual(keychain.runwayInteractiveReadCount, 0)
+        XCTAssertGreaterThan(keychain.nonInteractiveReadCount, 0)
+        XCTAssertTrue(
+            httpClient.requests.isEmpty,
+            "a protected scoped keychain item must not fall back to the config dir's credentials file"
+        )
+    }
+
+    func testScopedAccountManualRefreshUsesRunwayInteractiveRead() async {
+        let keychain = InteractionTrackingKeychain(
+            approvedValue: #"""
+            {"claudeAiOauth":{"accessToken":"scoped-keychain-token","subscriptionType":"pro","scopes":["user:profile"]}}
+            """#
+        )
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: FakeFiles(),
+                keychain: keychain,
+                scope: .configDir(path: "/Users/dev/.claude-personal", keychainLiteral: "~/.claude-personal")
+            ),
+            usageClient: ClaudeUsageClient(httpClient: FakeHTTPClient(
+                response: HTTPResponse(
+                    statusCode: 200,
+                    headers: [:],
+                    body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+                )
+            )),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await ProviderRefreshContext.$isManual.withValue(true) {
+            await provider.refresh()
+        }
+
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertGreaterThan(keychain.runwayInteractiveReadCount, 0)
+        XCTAssertEqual(
+            keychain.interactiveReadCount,
+            0,
+            "scoped manual approval must not be delegated to /usr/bin/security"
+        )
+    }
+
     func testUnreadableKeychainAppearingDuringRequestInvalidatesFileGeneration() async {
         let keychain = AppearingUnreadableKeychain()
         let httpClient = RoutingHTTPClient { request in

@@ -524,6 +524,26 @@ final class WidgetDataStore {
         providerErrors[providerID]
     }
 
+    /// The provider's current refresh error when NONE of the card's placed rows can show last-good
+    /// data — a provider that has never refreshed successfully (a login awaiting Keychain approval,
+    /// a fresh install that isn't signed in). The dashboard then replaces the card's empty "No data"
+    /// rows with the error prompt itself. While any placed row still shows stale data this stays
+    /// `nil`: the rows keep it on screen and the header triangle carries the error instead.
+    ///
+    /// `placedDescriptors` is the card's own row list (placed and applicable) — the check must
+    /// mirror exactly what the card renders. Judging by the whole registry instead would let a line
+    /// belonging only to a HIDDEN metric (a cached spend line while just Session is enabled) keep a
+    /// visible wall of "No data" rows under an unexplained triangle — exactly the state this
+    /// accessor exists to replace. Error badges and row-less status/note lines resolve to no placed
+    /// row, so they never count as data.
+    func emptyStateError(for providerID: String, placedDescriptors: [WidgetDescriptor]) -> String? {
+        guard let message = providerErrors[providerID] else { return nil }
+        let hasVisibleData = placedDescriptors.contains { descriptor in
+            descriptor.providerID == providerID && data(for: descriptor).hasData
+        }
+        return hasVisibleData ? nil : message
+    }
+
     /// A soft, non-blocking notice from the provider's latest *successful* snapshot (e.g. Claude's
     /// "Re-login for live usage" when the login lacks the `user:profile` scope). `nil` when there's no
     /// warning. After a *failed* refresh the store keeps the last good snapshot (so this warning can

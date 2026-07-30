@@ -156,7 +156,58 @@ struct WidgetGroupedListView: View {
         }
     }
 
+    /// The provider's card body: its metric rows, or — when the provider has an error and no
+    /// last-good data at all — the error prompt in their place. A column of "No data" bars under an
+    /// unexplained header triangle told the user nothing about what to do next.
+    @ViewBuilder
     private func container(_ group: ProviderGroup) -> some View {
+        if let message = emptyStateError(for: group) {
+            // The error body replaces only the metric rows. The provider's quick links keep their
+            // usual place behind the caret — a Status or API-keys page is often exactly what
+            // resolves the error. The data-less expanded metrics stay hidden.
+            let links = group.provider.visibleLinks
+            let isExpanded = layout.isProviderExpanded(group.provider.id)
+            DashboardMetricCard {
+                errorBody(message: message, providerID: group.provider.id)
+                if !links.isEmpty {
+                    expandToggle(providerID: group.provider.id, isExpanded: isExpanded)
+                    if isExpanded {
+                        ProviderLinksView(links: links)
+                    }
+                }
+            }
+        } else {
+            metricContainer(group)
+        }
+    }
+
+    /// The empty-state judgment must see exactly the rows this card renders — its placed, applicable
+    /// descriptors — so data belonging only to hidden metrics can't mask the error prompt.
+    private func emptyStateError(for group: ProviderGroup) -> String? {
+        let placed = (group.alwaysShownWidgets + group.expandedWidgets).compactMap { widget -> WidgetDescriptor? in
+            guard let descriptor = layout.descriptor(for: widget),
+                  dataStore.isMetricApplicable(descriptor)
+            else {
+                return nil
+            }
+            return descriptor
+        }
+        return dataStore.emptyStateError(for: group.provider.id, placedDescriptors: placed)
+    }
+
+    private func errorBody(message: String, providerID: String) -> some View {
+        ProviderErrorCardView(
+            message: message,
+            isRefreshing: dataStore.refreshingProviderIDs.contains(providerID),
+            onRefresh: {
+                // The explicit user action that may legitimately show a Keychain approval prompt —
+                // the same forced refresh the header and row context menus carry.
+                Task { await dataStore.refresh(providerID: providerID, force: true) }
+            }
+        )
+    }
+
+    private func metricContainer(_ group: ProviderGroup) -> some View {
         // Resolve each row's descriptor + data exactly once per render, then reuse it for both the
         // neighbor-aware condensing rule and the row itself — `dataStore.data(for:)` used to be
         // recomputed several times per row (twice per adjacent pair plus once in `row`).
@@ -417,8 +468,9 @@ struct WidgetGroupedListView: View {
     }
 
     private func makeProviderLift(for group: ProviderGroup, value: DragGesture.Value) -> ReorderLift? {
-        // The floating preview should match what the card shows: only the always-shown rows unless this
-        // provider's caret is currently open.
+        // The floating preview should match what the card shows: the error prompt when that is on
+        // screen, otherwise only the always-shown rows unless this provider's caret is currently open.
+        let errorMessage = emptyStateError(for: group)
         let (alwaysRows, expandedRows) = promotedRowsIfNeeded(
             alwaysRows: resolvedRows(group.alwaysShownWidgets),
             expandedRows: resolvedRows(group.expandedWidgets)
@@ -431,7 +483,8 @@ struct WidgetGroupedListView: View {
             payload: .dashboardProvider(
                 provider: group.provider,
                 plan: dataStore.plan(for: group.provider.id),
-                rows: visibleRows.map(\.data)
+                rows: errorMessage == nil ? visibleRows.map(\.data) : [],
+                errorMessage: errorMessage
             ),
             value: value,
             frames: rowFrames.frames

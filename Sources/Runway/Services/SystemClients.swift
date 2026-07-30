@@ -360,6 +360,85 @@ extension KeychainAccessing {
     }
 }
 
+/// Process-wide guard that keeps Security.framework from showing ANY keychain UI while a
+/// non-interactive operation runs. `LAContext.interactionNotAllowed` (via
+/// `kSecUseAuthenticationContext`) only governs data-protection keychain items; Claude Code and
+/// other CLIs store classic login-keychain items, whose ACL confirmation dialog ("Runway wants to
+/// use your confidential information…") ignores that flag AND `kSecUseAuthenticationUI` — verified
+/// empirically on macOS 15: both query shapes still block on the dialog. The one switch securityd's
+/// classic path honors is `SecKeychainSetUserInteractionAllowed`; under it a protected item returns
+/// `errSecAuthFailed` immediately instead of prompting.
+///
+/// The switch is process-global, so the two sides exclude each other for their whole durations:
+/// an interactive operation registers itself, waits out any in-flight suppressed call (those are
+/// prompt-free by construction and finish in milliseconds), and keeps new suppressed entrants
+/// parked until it completes — an approval dialog can sit open for minutes, and a background read
+/// slipping in under it would flip the flag to `false` right when the user clicks Always Allow.
+/// Suppressed calls only ever wait on a user-attended dialog, never on each other (they refcount),
+/// so background refreshes pause at most while the user is answering a prompt they asked for.
+enum KeychainUISuppression {
+    private static let condition = NSCondition()
+    nonisolated(unsafe) private static var suppressedDepth = 0
+    nonisolated(unsafe) private static var interactiveCount = 0
+
+    static func withUISuppressed<T>(_ body: () throws -> T) rethrows -> T {
+        condition.lock()
+        while interactiveCount > 0 {
+            condition.wait()
+        }
+        suppressedDepth += 1
+        if suppressedDepth == 1 {
+            SecKeychainSetUserInteractionAllowed(false)
+        }
+        condition.unlock()
+        defer {
+            condition.lock()
+            suppressedDepth -= 1
+            if suppressedDepth == 0 {
+                // Runway never disables keychain UI outside this scope, so the process default
+                // (allowed) is the correct restore value.
+                SecKeychainSetUserInteractionAllowed(true)
+                condition.broadcast()
+            }
+            condition.unlock()
+        }
+        return try body()
+    }
+
+    /// Runs one interactive Security.framework operation with the gate held: registered first (so
+    /// no new suppressed call can start underneath it), then waiting out in-flight suppressed calls.
+    /// No deadlock is possible: a registered interactive caller only waits on suppressed calls that
+    /// already hold `suppressedDepth`, and those never wait on anything once entered. The deadline
+    /// only guards against a wedged suppressed call — it cannot be extended by new entrants, because
+    /// those park on `interactiveCount` instead.
+    static func withUIAllowed<T>(_ body: () throws -> T) rethrows -> T {
+        condition.lock()
+        interactiveCount += 1
+        let deadline = Date().addingTimeInterval(2)
+        while suppressedDepth > 0, Date() < deadline {
+            condition.wait(until: deadline)
+        }
+        let suppressionStuck = suppressedDepth > 0
+        condition.unlock()
+        if suppressionStuck {
+            // A suppressed call has been wedged in securityd for over 2s — pathological. Still run
+            // the body rather than fail preemptively or wait forever: an already-authorized item
+            // reads fine even with UI disabled, and a needs-prompt item fails into the callers'
+            // friendly "couldn't be checked" handling instead of hanging the manual refresh.
+            AppLog.warn(.keychain, "interactive keychain operation proceeding while a suppressed call is stuck; an approval prompt may not appear")
+        }
+        defer {
+            condition.lock()
+            interactiveCount -= 1
+            if interactiveCount == 0 {
+                condition.broadcast()
+            }
+            condition.unlock()
+        }
+        return try body()
+    }
+}
+
 struct SecurityKeychainAccessor: KeychainAccessing {
     let processRunner: ProcessRunning
 
@@ -432,31 +511,43 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         .merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         .merging(authentication) { current, _ in current }
 
-        var item: CFTypeRef?
-        let lookupStatus = SecItemCopyMatching(itemQuery as CFDictionary, &item)
-        guard lookupStatus == errSecSuccess, let persistentRef = item as? Data else {
-            throw keychainWriteError(
-                status: lookupStatus,
-                service: service,
-                operation: "resolve item for in-process update"
-            )
-        }
+        try Self.performing(allowUserInteraction: allowUserInteraction) {
+            var item: CFTypeRef?
+            let lookupStatus = SecItemCopyMatching(itemQuery as CFDictionary, &item)
+            guard lookupStatus == errSecSuccess, let persistentRef = item as? Data else {
+                throw keychainWriteError(
+                    status: lookupStatus,
+                    service: service,
+                    operation: "resolve item for in-process update"
+                )
+            }
 
-        let updateQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecUseItemList as String: [persistentRef],
-        ].merging(authentication) { current, _ in current }
-        let updateStatus = SecItemUpdate(
-            updateQuery as CFDictionary,
-            [kSecValueData as String: Data(value.utf8)] as CFDictionary
-        )
-        guard updateStatus == errSecSuccess else {
-            throw keychainWriteError(
-                status: updateStatus,
-                service: service,
-                operation: "in-process update"
+            let updateQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecUseItemList as String: [persistentRef],
+            ].merging(authentication) { current, _ in current }
+            let updateStatus = SecItemUpdate(
+                updateQuery as CFDictionary,
+                [kSecValueData as String: Data(value.utf8)] as CFDictionary
             )
+            guard updateStatus == errSecSuccess else {
+                throw keychainWriteError(
+                    status: updateStatus,
+                    service: service,
+                    operation: "in-process update"
+                )
+            }
         }
+    }
+
+    /// Routes one Security.framework operation through the process-global UI gate: forbidden-UI
+    /// callers run inside the suppression scope (the classic ACL dialog fails with `errSecAuthFailed`
+    /// instead of appearing); interactive callers hold the gate for their whole duration so a racing
+    /// background read can't flip the process-wide flag under an open approval dialog.
+    private static func performing<T>(allowUserInteraction: Bool, _ body: () throws -> T) rethrows -> T {
+        allowUserInteraction
+            ? try KeychainUISuppression.withUIAllowed(body)
+            : try KeychainUISuppression.withUISuppressed(body)
     }
 
     private func keychainWriteError(
@@ -484,7 +575,9 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecReturnData as String: true,
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = KeychainUISuppression.withUIAllowed {
+            SecItemCopyMatching(query as CFDictionary, &item)
+        }
         switch status {
         case errSecSuccess:
             guard let data = item as? Data,
@@ -523,7 +616,10 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
-        switch SecItemCopyMatching(query as CFDictionary, &item) {
+        let status = KeychainUISuppression.withUISuppressed {
+            SecItemCopyMatching(query as CFDictionary, &item)
+        }
+        switch status {
         case errSecSuccess:
             guard let data = item as? Data,
                   let value = String(data: data, encoding: .utf8)
@@ -534,6 +630,9 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         case errSecItemNotFound:
             return .missing
         default:
+            // Typically errSecAuthFailed: the item exists but its ACL does not (yet) authorize
+            // Runway, and UI to ask is forbidden here. Log the status only — never the item value.
+            AppLog.debug(.keychain, "non-interactive read unavailable for service '\(service)' (status \(status))")
             return .unavailable
         }
     }
@@ -558,7 +657,7 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
-        switch SecItemCopyMatching(query as CFDictionary, nil) {
+        switch KeychainUISuppression.withUISuppressed({ SecItemCopyMatching(query as CFDictionary, nil) }) {
         case errSecSuccess: return true
         case errSecItemNotFound: return false
         default: return nil
@@ -614,7 +713,10 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        let status = KeychainUISuppression.withUISuppressed {
+            SecItemCopyMatching(query as CFDictionary, &item)
+        }
+        guard status == errSecSuccess,
               let attributes = item as? [String: Any]
         else {
             return nil

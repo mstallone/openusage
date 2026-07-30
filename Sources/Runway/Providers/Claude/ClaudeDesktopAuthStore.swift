@@ -40,8 +40,15 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             query[kSecUseAuthenticationContext as String] = context
         }
 
+        // The process-wide keychain UI gate, not just the LAContext above: "Claude Safe Storage" is
+        // a classic login-keychain item, and its ACL dialog ignores `interactionNotAllowed` — only
+        // the gate's `SecKeychainSetUserInteractionAllowed` scope actually keeps a background read
+        // prompt-free (and an interactive read must hold the gate so a racing suppressed call can't
+        // disable UI beneath its open approval dialog).
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = allowInteraction
+            ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
+            : KeychainUISuppression.withUISuppressed { SecItemCopyMatching(query as CFDictionary, &result) }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data,
