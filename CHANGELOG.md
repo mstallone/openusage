@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.8.1
+
+### Bug Fixes
+- Improve popover navigation performance ([#6](https://github.com/mstallone/runway/pull/6)) by @mstallone
+- Use compact layout by default ([#7](https://github.com/mstallone/runway/pull/7)) by @mstallone
+- Remove PR screenshot requirement ([#8](https://github.com/mstallone/runway/pull/8)) by @mstallone
+- Remove usage analytics ([#9](https://github.com/mstallone/runway/pull/9)) by @mstallone
+- Reveal long names in the spend legend ([#10](https://github.com/mstallone/runway/pull/10)) by @mstallone
+- Rebrand app as Runway ([#11](https://github.com/mstallone/runway/pull/11)) by @mstallone
+- Wait for shell capture before initial account assembly ([#5](https://github.com/mstallone/runway/pull/5)) by @mstallone
+- Include emails in multi-account provider names ([#12](https://github.com/mstallone/runway/pull/12)) by @mstallone
+- Improve multi-account menu bar stats ([#13](https://github.com/mstallone/runway/pull/13)) by @mstallone
+- Improve app refresh performance ([#14](https://github.com/mstallone/runway/pull/14)) by @mstallone
+- Show account-aware Copilot usage ([#16](https://github.com/mstallone/runway/pull/16)) by @mstallone
+- Smooth panel growth with a fixed window and in-window reveal ([#15](https://github.com/mstallone/runway/pull/15)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.0...v0.8.1](https://github.com/mstallone/runway/compare/v0.8.0...v0.8.1)
+
+- [aa84335](https://github.com/mstallone/runway/commit/aa84335393474d6b7ee4b79614f5acc85a8e695b) Improve popover navigation performance (#6) by @mstallone
+- [fb3a769](https://github.com/mstallone/runway/commit/fb3a769048de4b3ce82c9349852654767e3fcf20) Use compact layout by default (#7) by @mstallone
+- [3cd6b3f](https://github.com/mstallone/runway/commit/3cd6b3f3036341fb7a1d2c346012cb6cef44dbf5) Remove PR screenshot requirement (#8) by @mstallone
+- [a6bc518](https://github.com/mstallone/runway/commit/a6bc51833e018c1e8f3fd04964727f702811bdbb) Remove usage analytics (#9) by @mstallone
+- [f9e7d12](https://github.com/mstallone/runway/commit/f9e7d121426bdf1969f66ea268a426c135e515b8) Reveal long names in the spend legend (#10) by @mstallone
+- [dfaae9c](https://github.com/mstallone/runway/commit/dfaae9c719e3460f07472523cc73748720200915) Rebrand app as Runway (#11) by @mstallone
+- [f281812](https://github.com/mstallone/runway/commit/f281812128159f77ccbbd4649d1f3fd165d84b74) Wait for shell capture before initial account assembly (#5) by @mstallone
+- [c4e247d](https://github.com/mstallone/runway/commit/c4e247dc6a7fb03880f0553e68b6a7b594863fab) Include emails in multi-account provider names (#12) by @mstallone
+- [7678f66](https://github.com/mstallone/runway/commit/7678f66df8efb9453c87af03c226c7cfc82ab906) Improve multi-account menu bar stats (#13) by @mstallone
+- [a24c8b9](https://github.com/mstallone/runway/commit/a24c8b9df16f1866545219f479e4d43b990adf41) Improve app refresh performance (#14) by @mstallone
+- [3404861](https://github.com/mstallone/runway/commit/34048610a643ae0c148c6204fe85d16813953585) Show account-aware Copilot usage (#16) by @mstallone
+- [46783c6](https://github.com/mstallone/runway/commit/46783c66ceebb4d90c40eefeb5b5434b7ea9d406) Smooth panel growth: fixed window, in-window reveal (#15) by @mstallone
+
 ## v0.8.0
 
 ### New Features
