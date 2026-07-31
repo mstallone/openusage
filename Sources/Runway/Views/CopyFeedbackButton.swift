@@ -8,9 +8,16 @@ struct CopyFeedbackButton: View {
     let accessibilityLabel: String
     var isRevealed = true
     let action: () -> Bool
+    /// Reports when the glyph is actually on screen: revealed by hover, or the post-copy checkmark
+    /// lingering after the pointer left. Hosts that collapse the button's reserved space at rest
+    /// (the provider header's trailing gutter) key off this instead of the raw hover, so a
+    /// lingering checkmark keeps its room until it fades.
+    var onPresenceChange: ((Bool) -> Void)?
 
     @State private var copied = false
     @State private var resetTask: Task<Void, Never>?
+
+    private var isPresent: Bool { isRevealed || copied }
 
     var body: some View {
         Button {
@@ -36,10 +43,13 @@ struct CopyFeedbackButton: View {
         // around it. The visible glyph therefore aligns with the old provider-mark position instead of
         // being pushed inward by the larger interaction target.
         .padding(-6)
-        .opacity(isRevealed || copied ? 1 : 0)
-        .allowsHitTesting(isRevealed || copied)
+        .opacity(isPresent ? 1 : 0)
+        .allowsHitTesting(isPresent)
         .animation(.easeOut(duration: 0.12), value: isRevealed)
         .accessibilityLabel(accessibilityLabel)
+        .onChange(of: isPresent) { _, present in
+            onPresenceChange?(present)
+        }
         .onDisappear {
             resetTask?.cancel()
             resetTask = nil
