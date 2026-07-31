@@ -97,6 +97,9 @@ enum ClaudeUsageMapper {
         else {
             return nil
         }
+        // The base is NEVER inferred from the tier string: rate-limit buckets don't have to track the
+        // subscription family (a Team seat can ride a `claude_max_*` bucket). Family freshness comes
+        // from the state file's explicit `organizationType` instead, via `displayOAuth`.
         let base = raw.titleCased(separator: { $0 == " " }, lowercasingTail: true)
 
         guard let tier = rateLimitTier,

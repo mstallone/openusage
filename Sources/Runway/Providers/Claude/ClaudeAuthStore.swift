@@ -38,6 +38,29 @@ struct ClaudeCredentialState: Hashable, Sendable {
     var source: Source
     var fullData: ClaudeCredentialsFile?
     var inferenceOnly: Bool
+    /// The account's CURRENT plan family and rate-limit tier from Claude Code's state file
+    /// (`.claude.json`), when the scope has one. The credential blob's copies are written at login and
+    /// never updated on a plan change, so after an upgrade the blob keeps saying e.g. `…_5x` (or `pro`)
+    /// while the profile Claude Code refetches regularly says `…_20x` (`claude_max`). Display-only —
+    /// `save()` never writes either back into the blob.
+    var profileSubscriptionType: String? = nil
+    var profileRateLimitTier: String? = nil
+
+    /// The credential values the plan badge is built from: the login blob with its plan family and
+    /// rate-limit tier replaced by the fresher state-file values when they are known.
+    var displayOAuth: ClaudeOAuth {
+        var display = oauth
+        if let profileSubscriptionType {
+            // A trusted profile family brings the profile's tier with it as one snapshot — even when
+            // that tier is absent (a Max → Pro downgrade nulls it): keeping the blob's old multiplier
+            // would pair values from two points in time and render a contradictory "Pro 20x".
+            display.subscriptionType = profileSubscriptionType
+            display.rateLimitTier = profileRateLimitTier
+        } else if let profileRateLimitTier {
+            display.rateLimitTier = profileRateLimitTier
+        }
+        return display
+    }
 
     /// Whether this candidate carries a non-blank access token — the single definition of "usable"
     /// shared by `refresh()`'s candidate filter and `hasLocalCredentials()`'s first-run detection, so
@@ -250,10 +273,29 @@ struct ClaudeAuthStore: Sendable {
     func loadCredentialSet(
         allowKeychainInteraction: Bool = false,
         allowDesktopInteraction: Bool = false,
-        forceDesktopFallback: Bool = false
+        forceDesktopFallback: Bool = false,
+        includeProfileTier: Bool = true
     ) -> ClaudeCredentialLoad {
         let storedLoad = orderedStoredCandidates(allowKeychainInteraction: allowKeychainInteraction)
         var stored = storedLoad.candidates
+        // The state file describes ONE login — the one Claude Code last wrote, which also lands in
+        // the highest-priority stored source (keychain first). Only that candidate gets the profile
+        // plan for its badge: a lower-priority fallback candidate can be a DIFFERENT account (the
+        // refresh fall-through exists for exactly that case) and must keep its own blob metadata
+        // rather than wear another account's plan. The Desktop candidate (inserted below) likewise
+        // keeps its own. A refresh landing between a re-login's two writes (credentials before state
+        // file) can pair them across accounts for ONE cycle; that transient is accepted — the blob
+        // carries no account id to verify against, and both stores converge once the login completes.
+        // If a re-login instead lands in the lower-priority FILE beside a still-valid keychain login,
+        // the state file (and with it the card's whole identity, per DefaultAccountObserver) already
+        // describes the file account while usage comes from the keychain — the badge matching the
+        // card label there is the consistent choice, and a failed keychain login falls through to the
+        // file account's own freshly-written blob. Generation snapshots opt out: their candidates
+        // keep only oauth + source, so the state-file read would be pure overhead there.
+        if includeProfileTier, !stored.isEmpty, let plan = profilePlan() {
+            stored[0].profileSubscriptionType = plan.subscriptionType
+            stored[0].profileRateLimitTier = plan.rateLimitTier
+        }
         var desktopStatus: ClaudeDesktopCredentialStatus = .notChecked
         // A working CLI login remains the source of truth and avoids a second Keychain prompt. Desktop
         // is a fallback for people who only use the native app (or whose stored CLI login lacks profile
@@ -304,7 +346,7 @@ struct ClaudeAuthStore: Sendable {
     func hasCredentialFootprint() -> Bool {
         switch scope {
         case .standard:
-            let load = loadCredentialSet()
+            let load = loadCredentialSet(includeProfileTier: false)
             switch load.keychainAccessStatus {
             case .permissionRequired:
                 // The attributes probe confirmed a protected Claude Code item. It is a real footprint
@@ -363,7 +405,9 @@ struct ClaudeAuthStore: Sendable {
             oauth: oauth,
             source: .environment,
             fullData: base?.fullData,
-            inferenceOnly: true
+            inferenceOnly: true,
+            profileSubscriptionType: base?.profileSubscriptionType,
+            profileRateLimitTier: base?.profileRateLimitTier
         )
         return liveCapable.isEmpty ? [envCandidate] : liveCapable + [envCandidate]
     }
@@ -379,7 +423,8 @@ struct ClaudeAuthStore: Sendable {
     ) -> ClaudeCredentialGeneration {
         let load = loadCredentialSet(
             allowKeychainInteraction: allowKeychainInteraction,
-            forceDesktopFallback: forceDesktopFallback
+            forceDesktopFallback: forceDesktopFallback,
+            includeProfileTier: false
         )
         return ClaudeCredentialGeneration(
             load.candidates,
@@ -739,6 +784,54 @@ struct ClaudeAuthStore: Sendable {
             return "\(path)/\(Self.credentialFileName)"
         }
         return "\(envText("CLAUDE_CONFIG_DIR") ?? Self.defaultClaudeHome)/\(Self.credentialFileName)"
+    }
+
+    /// Claude Code's state file for this scope — inside a custom config dir, but next to (not inside)
+    /// the default home: Claude Code keeps the default's state at `~/.claude.json`.
+    private func stateFilePath() -> String {
+        if case .configDir(let path, _) = scope {
+            return "\(path)/.claude.json"
+        }
+        guard let override = envText("CLAUDE_CONFIG_DIR") else { return "~/.claude.json" }
+        let isDefaultHome = (override as NSString).expandingTildeInPath
+            == (Self.defaultClaudeHome as NSString).expandingTildeInPath
+        return isDefaultHome ? "~/.claude.json" : "\(override)/.claude.json"
+    }
+
+    /// The plan values the badge should trust: the state file's profile, which Claude Code refetches
+    /// regularly, unlike the credential blob's login-time copies. `nil` (no file, no account, nothing
+    /// usable) keeps the blob's values. A file that exists but can't be read or parsed also falls back
+    /// — the badge must never fail a refresh — but is logged so a stale badge stays diagnosable.
+    private func profilePlan() -> (subscriptionType: String?, rateLimitTier: String?)? {
+        let text: String?
+        do {
+            text = try files.readTextIfPresent(stateFilePath())
+        } catch {
+            AppLog.warn(LogTag.auth("claude"), "state file unreadable; plan badge falls back to login-time values: \(error.localizedDescription)")
+            return nil
+        }
+        guard let text else { return nil }
+        guard let parsed = try? JSONDecoder().decode(
+            DefaultAccountObserver.ClaudeStateFile.self, from: Data(text.utf8)
+        ) else {
+            AppLog.warn(LogTag.auth("claude"), "state file did not parse; plan badge falls back to login-time values")
+            return nil
+        }
+        // A state file without `oauthAccount` is a normal logged-out shape, not an error.
+        guard let account = parsed.oauthAccount else { return nil }
+        let tier = account.userRateLimitTier?.nilIfEmpty ?? account.organizationRateLimitTier?.nilIfEmpty
+        // Only a plan-shaped org type (`claude_max` → "max") may replace the blob's subscriptionType;
+        // an unrecognized shape keeps the login value rather than guessing at a family.
+        let subscription = account.organizationType?.nilIfEmpty.flatMap { orgType -> String? in
+            guard orgType.hasPrefix("claude_") else { return nil }
+            return String(orgType.dropFirst("claude_".count)).nilIfEmpty
+        }
+        // An empty plan is deliberately NOT treated as "subscription cleared": absent keys are
+        // indistinguishable from a pre-plan-fields Claude Code state file, and unknown org shapes
+        // (Team/enterprise) land here too. The blob's login-time values stand; a truly lapsed
+        // subscription surfaces through the failing usage fetch, not the badge.
+        guard tier != nil || subscription != nil else { return nil }
+        return (subscription, tier)
     }
 
     private func envText(_ name: String) -> String? {
