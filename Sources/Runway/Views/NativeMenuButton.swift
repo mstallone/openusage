@@ -101,15 +101,21 @@ private final class MenuPressView: NSView, NSMenuDelegate {
     /// Gap between the label's bottom edge and the menu's top edge.
     private static let menuGap: CGFloat = 4
 
-    /// When the last menu session ended (`NSEvent.timestamp` clock) and whether a reopen is parked
-    /// until mouse-up. Clicking the control while its menu is open closes the menu — the tracking
-    /// session consumes that mouseDown, so it never reaches `mouseDown` here. The *next* click
-    /// inside the double-click window is the "click again to reopen" gesture, and popping on its
-    /// mouseDown races the previous session's teardown (AppKit drops or instantly re-closes the new
-    /// menu), so that reopen waits for the mouseUp instead — by then the old session is gone, and
-    /// with the button already released the menu opens and stays.
+    /// Reopen machinery for "click again quickly to reopen" while the menu is open. That gesture is
+    /// mostly invisible: the click that dismisses is consumed by the menu's tracking session, and a
+    /// fast follow-up click gets discarded by AppKit before the app sees any of it (not even a
+    /// local event monitor fires). Three paths cover the speeds:
+    /// - delivered: the follow-up mouseDown actually arrives (slower re-clicks) → `reopenOnMouseUp`
+    ///   parks the reopen until the release, past the old session's teardown;
+    /// - consumed: both downs happened inside the session — the window-server click counter (which
+    ///   counts physical downs no matter who swallowed them) reads ≥2 for the session;
+    /// - discarded: the follow-up down lands after the close but is never delivered — the counter
+    ///   ticks up during the post-close watch window.
+    /// `sessionGeneration` invalidates a pending watch whenever a new session starts or a real
+    /// mouseDown arrives, so only one path can fire.
     private var lastMenuCloseTime: TimeInterval = 0
     private var reopenOnMouseUp = false
+    private var sessionGeneration = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -124,8 +130,19 @@ private final class MenuPressView: NSView, NSMenuDelegate {
         fatalError("init(coder:) is not used")
     }
 
+    /// The panel is a non-activating key panel that can briefly cede key status to the menu's own
+    /// window; without this, the first click back on the control after a dismissal can be eaten as
+    /// window-activating click-through instead of reaching `mouseDown`.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
+        // A real mouseDown supersedes any post-close watch — exactly one reopen path may fire.
+        sessionGeneration += 1
         if event.timestamp - lastMenuCloseTime < NSEvent.doubleClickInterval {
+            // Popping now would race the previous session's teardown (AppKit drops the menu);
+            // park the reopen until the release, when the old session is fully gone.
             reopenOnMouseUp = true
         } else {
             presentMenu()
@@ -158,6 +175,7 @@ private final class MenuPressView: NSView, NSMenuDelegate {
 
     func presentMenu() {
         guard let makeItems else { return }
+        sessionGeneration += 1
         let menu = NSMenu()
         menu.delegate = self
         for item in makeItems() {
@@ -167,6 +185,57 @@ private final class MenuPressView: NSView, NSMenuDelegate {
             x: bounds.minX,
             y: isFlipped ? bounds.maxY + Self.menuGap : bounds.minY - Self.menuGap
         )
+        let downsAtOpen = Self.leftMouseDownCounter()
         menu.popUp(positioning: nil, at: below, in: self)
+        scheduleReclickWatch(downsDuringSession: Int(Self.leftMouseDownCounter() &- downsAtOpen))
+    }
+
+    /// Physical left-mouse-down count for the login session, straight from the window server —
+    /// it keeps counting even when the events are swallowed before the app sees them.
+    private static func leftMouseDownCounter() -> UInt32 {
+        CGEventSource.counterForEventType(.combinedSessionState, eventType: .leftMouseDown)
+    }
+
+    private func isCursorOverControl() -> Bool {
+        guard let window else { return false }
+        let point = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        return bounds.contains(convert(point, from: nil))
+    }
+
+    /// After a session ends, watch briefly for the invisible half of a quick re-click: either the
+    /// session already swallowed a second down (`carryEligible` — the counter read ≥2 during it
+    /// with the cursor on the control; a plain dismissing click is exactly 1, and a double-click on
+    /// a *closed* control also reads 1 because its first down is what started the session), or a
+    /// discarded follow-up down ticks the counter during the double-click window after the close.
+    /// Fires at most once, only with the button released and the cursor still on the control.
+    private func scheduleReclickWatch(downsDuringSession: Int) {
+        let carryEligible = downsDuringSession >= 2 && isCursorOverControl()
+        let deadline = ProcessInfo.processInfo.systemUptime + NSEvent.doubleClickInterval + 0.15
+        watchTick(
+            generation: sessionGeneration,
+            carryEligible: carryEligible,
+            baseline: Self.leftMouseDownCounter(),
+            deadline: deadline
+        )
+    }
+
+    private func watchTick(generation: Int, carryEligible: Bool, baseline: UInt32, deadline: TimeInterval) {
+        guard generation == sessionGeneration else { return }
+        let sawDiscardedDown = Self.leftMouseDownCounter() != baseline
+        if carryEligible || sawDiscardedDown,
+           NSEvent.pressedMouseButtons == 0,
+           isCursorOverControl() {
+            presentMenu()
+            return
+        }
+        guard ProcessInfo.processInfo.systemUptime < deadline else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            self?.watchTick(
+                generation: generation,
+                carryEligible: carryEligible,
+                baseline: baseline,
+                deadline: deadline
+            )
+        }
     }
 }
