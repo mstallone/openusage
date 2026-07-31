@@ -18,7 +18,8 @@ struct MetricLineRow: View {
                         .monospacedDigit()
                 }
                 .font(.subheadline)
-                ProgressView(value: min(max(used / max(limit, 1), 0), 1))
+                // Divide by the real limit — fractional caps ($0.50) are valid; only guard zero.
+                ProgressView(value: limit > 0 ? min(max(used / limit, 0), 1) : 0)
                 if let resetsAt, resetsAt > .now {
                     Text("Resets \(resetsAt, format: .relative(presentation: .named))")
                         .font(.caption2)
@@ -27,7 +28,7 @@ struct MetricLineRow: View {
             }
             .padding(.vertical, 2)
 
-        case .values(let label, let values, let unknownModels):
+        case .values(let label, let values, let unknownModels, let expiriesAt):
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(label)
@@ -47,6 +48,12 @@ struct MetricLineRow: View {
                     Text("Unpriced models not included: \(unknownModels.joined(separator: ", "))")
                         .font(.caption2)
                         .foregroundStyle(.orange)
+                }
+                // No hover on iOS: credit expiries (Codex reset credits) must show inline.
+                if !expiriesAt.isEmpty {
+                    Text("Expires \(expiriesAt.sorted().map { $0.formatted(.relative(presentation: .named)) }.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
 

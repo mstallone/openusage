@@ -86,7 +86,7 @@ struct ProgressFormatWire: Decodable {
 /// `.unsupported` rather than failing the whole snapshot, so a newer Mac can add row kinds freely.
 enum MetricLineWire: Decodable {
     case text(label: String, value: String, subtitle: String?)
-    case values(label: String, values: [MetricValueWire], unknownModels: [String])
+    case values(label: String, values: [MetricValueWire], unknownModels: [String], expiriesAt: [Date])
     case progress(label: String, used: Double, limit: Double, format: ProgressFormatWire, resetsAt: Date?)
     case badge(label: String, text: String, subtitle: String?)
     case chart(label: String, points: [ChartPointWire], note: String?)
@@ -94,7 +94,7 @@ enum MetricLineWire: Decodable {
 
     var label: String? {
         switch self {
-        case .text(let label, _, _), .values(let label, _, _), .progress(let label, _, _, _, _),
+        case .text(let label, _, _), .values(let label, _, _, _), .progress(let label, _, _, _, _),
              .badge(let label, _, _), .chart(let label, _, _):
             return label
         case .unsupported:
@@ -103,7 +103,7 @@ enum MetricLineWire: Decodable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, label, value, values, used, limit, format, resetsAt, unknownModels, text, points, note, subtitle
+        case type, label, value, values, used, limit, format, resetsAt, unknownModels, expiriesAt, text, points, note, subtitle
     }
 
     init(from decoder: Decoder) throws {
@@ -120,7 +120,8 @@ enum MetricLineWire: Decodable {
             self = .values(
                 label: label,
                 values: try container.decode([MetricValueWire].self, forKey: .values),
-                unknownModels: try container.decodeIfPresent([String].self, forKey: .unknownModels) ?? []
+                unknownModels: try container.decodeIfPresent([String].self, forKey: .unknownModels) ?? [],
+                expiriesAt: try container.decodeIfPresent([Date].self, forKey: .expiriesAt) ?? []
             )
         case "progress":
             self = .progress(

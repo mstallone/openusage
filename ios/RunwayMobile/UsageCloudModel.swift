@@ -80,6 +80,10 @@ final class UsageCloudModel {
         do {
             let container = CKContainer(identifier: Self.containerID)
             if let message = Self.accountMessage(for: try await container.accountStatus()) {
+                // The account is gone or unreachable: the prior account's private usage must not
+                // keep rendering beneath the notice.
+                devices = []
+                combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: nil, last30Tokens: 0, trend: [])
                 lastError = message
                 return
             }
