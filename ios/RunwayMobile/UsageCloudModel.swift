@@ -142,8 +142,7 @@ final class UsageCloudModel {
                 continue
             }
             var history: HistoryDocument?
-            if let decoded = decodePayload(HistoryDocument.self, record: record, key: Self.historyKey),
-               SyncWire.historySchemas.contains(decoded.schema) {
+            if let decoded = validatedHistory(from: record) {
                 history = decoded
             } else {
                 // Macs always write the history payload (even when empty), so a readable snapshot
@@ -157,6 +156,42 @@ final class UsageCloudModel {
         combined = Self.combine(devices)
         guard unreadable > 0 else { return nil }
         return "Some synced usage couldn’t be read here (\(unreadable) newer or unreadable payload\(unreadable == 1 ? "" : "s")). Update Runway on your Macs and this app."
+    }
+
+    /// Decodes and semantically validates a history payload. Mirrors the Mac's
+    /// `UsageHistoryDocument.validate()` for the fields this app consumes: duplicate days,
+    /// negative or non-finite values, and malformed day keys count as unreadable rather than
+    /// feeding `combine` confident wrong totals.
+    private func validatedHistory(from record: CKRecord) -> HistoryDocument? {
+        guard let decoded = decodePayload(HistoryDocument.self, record: record, key: Self.historyKey),
+              SyncWire.historySchemas.contains(decoded.schema)
+        else { return nil }
+        guard Self.isValid(decoded) else {
+            log.warning("record \(record.recordID.recordName, privacy: .public) history payload semantically invalid")
+            return nil
+        }
+        return decoded
+    }
+
+    private static func isValid(_ history: HistoryDocument) -> Bool {
+        for provider in history.providers.values {
+            var seenDays: Set<String> = []
+            for day in provider.series.daily {
+                guard isDayKey(day.date),
+                      seenDays.insert(day.date).inserted,
+                      day.totalTokens >= 0,
+                      day.costUSD.map({ $0.isFinite && $0 >= 0 }) ?? true
+                else { return false }
+            }
+            for day in (provider.unknownModelsByDay ?? [:]).keys where !isDayKey(day) {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func isDayKey(_ value: String) -> Bool {
+        value.wholeMatch(of: /\d{4}-\d{2}-\d{2}/) != nil
     }
 
     /// Day-sums every device's series inside the Mac's 30-day window (today + 30 previous days).
@@ -182,6 +217,8 @@ final class UsageCloudModel {
                     unknownModels.formUnion(names)
                 }
                 for day in history.series.daily where window.contains(day.date) {
+                    // A zero row is "no usage", not a known $0.00 — mirror the Mac's hasUsage rule.
+                    guard day.totalTokens > 0 || (day.costUSD ?? 0) > 0 else { continue }
                     tokens[day.date, default: 0] += day.totalTokens
                     if let dayCost = day.costUSD {
                         cost[day.date, default: 0] += dayCost
