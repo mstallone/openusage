@@ -878,6 +878,40 @@ final class WidgetDataStoreTests: XCTestCase {
         XCTAssertNotNil(store.localSnapshots[provider.id]?.usageHistory, "stripping must not mutate the store's own snapshot")
     }
 
+    func testLocalSnapshotDocumentCarriesRenamedCardTitles() async {
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("codex"))
+        let descriptor = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let runtime = TestProviderRuntime(
+            provider: provider,
+            descriptors: [descriptor],
+            snapshot: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Session", used: 42, limit: 100, format: .percent)]
+            )
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [descriptor]),
+            providers: [runtime],
+            defaults: makeUserDefaults("snapshot-document-rename"),
+            resolveDisplayName: { $0 == provider.id ? "My Renamed Card" : nil }
+        )
+        await store.refreshAll()
+
+        let document = store.localSnapshotDocument(deviceID: "device", deviceName: "Mac")
+
+        XCTAssertEqual(document.snapshots[provider.id]?.displayName, "My Renamed Card")
+        XCTAssertEqual(
+            store.localSnapshots[provider.id]?.displayName, "Test",
+            "renames apply at the publish boundary, never into the cached snapshot"
+        )
+    }
+
     private func makeUserDefaults(_ name: String) -> UserDefaults {
         let suiteName = "RunwayTests.\(name).\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
