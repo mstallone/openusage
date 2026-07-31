@@ -190,16 +190,31 @@ final class UsageCloudModel {
         return true
     }
 
+    /// Mirrors the Mac validator: shape plus real Gregorian month/day ranges, so an impossible
+    /// date ("2026-99-99") counts as unreadable instead of silently missing the window.
     private static func isDayKey(_ value: String) -> Bool {
-        value.wholeMatch(of: /\d{4}-\d{2}-\d{2}/) != nil
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
+              (1...12).contains(month)
+        else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        guard let monthDate = calendar.date(from: DateComponents(year: year, month: month, day: 1)),
+              let dayRange = calendar.range(of: .day, in: .month, for: monthDate)
+        else { return false }
+        return dayRange.contains(day)
     }
 
     /// Day-sums every device's series inside the Mac's 30-day window (today + 30 previous days).
     private static func combine(_ devices: [DeviceUsage], now: Date = Date()) -> CombinedUsage {
-        let calendar = Calendar.current
+        // Wire day keys are Gregorian with Latin digits regardless of device settings; only the
+        // time zone stays local so "today" matches the user's day boundary.
+        let calendar = Calendar(identifier: .gregorian)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         let todayKey = formatter.string(from: now)
         let yesterdayKey = calendar.date(byAdding: .day, value: -1, to: now).map(formatter.string(from:))
         let orderedWindow: [String] = (0...30).reversed().compactMap { offset in
