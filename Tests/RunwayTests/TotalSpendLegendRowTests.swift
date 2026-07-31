@@ -64,18 +64,18 @@ final class TotalSpendLegendRowTests: XCTestCase {
 
     func testTitleWithinTheFullRowDoesNotMarquee() {
         XCTAssertNil(
-            LegendRowMarqueeMetrics.resolve(
+            MarqueeTextMetrics.resolve(
                 availableWidth: 200,
-                titleWidth: 200
+                textWidth: 200
             )
         )
     }
 
     func testTitleWiderThanTheFullRowMarqueesByOnlyItsOverflow() throws {
         let metrics = try XCTUnwrap(
-            LegendRowMarqueeMetrics.resolve(
+            MarqueeTextMetrics.resolve(
                 availableWidth: 200,
-                titleWidth: 264
+                textWidth: 264
             )
         )
 
@@ -85,9 +85,9 @@ final class TotalSpendLegendRowTests: XCTestCase {
 
     func testMarqueeDurationIsCappedForVeryLongTitles() throws {
         let metrics = try XCTUnwrap(
-            LegendRowMarqueeMetrics.resolve(
+            MarqueeTextMetrics.resolve(
                 availableWidth: 200,
-                titleWidth: 600
+                textWidth: 600
             )
         )
 
@@ -97,7 +97,7 @@ final class TotalSpendLegendRowTests: XCTestCase {
 
     func testReduceMotionJumpsToTheMarqueeEndingOnHover() {
         XCTAssertEqual(
-            LegendRowMarqueeOffset.immediateTarget(
+            MarqueeTextOffset.immediateTarget(
                 isActive: true,
                 reduceMotion: true,
                 distance: 64
@@ -105,7 +105,7 @@ final class TotalSpendLegendRowTests: XCTestCase {
             -64
         )
         XCTAssertEqual(
-            LegendRowMarqueeOffset.immediateTarget(
+            MarqueeTextOffset.immediateTarget(
                 isActive: false,
                 reduceMotion: true,
                 distance: 64
@@ -113,7 +113,7 @@ final class TotalSpendLegendRowTests: XCTestCase {
             0
         )
         XCTAssertEqual(
-            LegendRowMarqueeOffset.immediateTarget(
+            MarqueeTextOffset.immediateTarget(
                 isActive: true,
                 reduceMotion: false,
                 distance: 64
