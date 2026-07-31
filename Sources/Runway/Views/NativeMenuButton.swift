@@ -95,11 +95,21 @@ private struct MenuPressSurface: NSViewRepresentable {
     }
 }
 
-private final class MenuPressView: NSView {
+private final class MenuPressView: NSView, NSMenuDelegate {
     var makeItems: (@MainActor () -> [NSMenuItem])?
 
     /// Gap between the label's bottom edge and the menu's top edge.
     private static let menuGap: CGFloat = 4
+
+    /// When the last menu session ended (`NSEvent.timestamp` clock) and whether a reopen is parked
+    /// until mouse-up. Clicking the control while its menu is open closes the menu — the tracking
+    /// session consumes that mouseDown, so it never reaches `mouseDown` here. The *next* click
+    /// inside the double-click window is the "click again to reopen" gesture, and popping on its
+    /// mouseDown races the previous session's teardown (AppKit drops or instantly re-closes the new
+    /// menu), so that reopen waits for the mouseUp instead — by then the old session is gone, and
+    /// with the button already released the menu opens and stays.
+    private var lastMenuCloseTime: TimeInterval = 0
+    private var reopenOnMouseUp = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -115,7 +125,25 @@ private final class MenuPressView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        presentMenu()
+        if event.timestamp - lastMenuCloseTime < NSEvent.doubleClickInterval {
+            reopenOnMouseUp = true
+        } else {
+            presentMenu()
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard reopenOnMouseUp else { return }
+        reopenOnMouseUp = false
+        // Only when the release still lands on the control — dragging off cancels, like any button.
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.presentMenu()
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        lastMenuCloseTime = ProcessInfo.processInfo.systemUptime
     }
 
     override func accessibilityPerformPress() -> Bool {
@@ -131,6 +159,7 @@ private final class MenuPressView: NSView {
     func presentMenu() {
         guard let makeItems else { return }
         let menu = NSMenu()
+        menu.delegate = self
         for item in makeItems() {
             menu.addItem(item)
         }
