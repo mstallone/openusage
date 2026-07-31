@@ -1,7 +1,7 @@
 <!-- Runway has a strict, issue-first PR policy. External pull requests are closed
-automatically unless they link an issue a maintainer has approved with the `approved`
-label, stay under 1,000 changed lines, and include screenshots for visual changes.
-See CONTRIBUTING.md. Maintainers and collaborators may open PRs directly. -->
+unless they link an issue a maintainer has approved with the `approved` label and
+stay under 1,000 changed lines. See CONTRIBUTING.md. Maintainers and collaborators
+may open PRs directly. -->
 
 ## Approved issue
 
@@ -27,7 +27,3 @@ Fixes #
 ## Tests
 
 <!-- Optional: how you verified the change. Delete if none. -->
-
-## Screenshots
-
-<!-- Required for any visual change: include before/after images. Write "Not applicable" if this isn't a visual change. -->

@@ -1,12 +1,12 @@
 # Contributing to Runway
 
-Runway accepts contributions through a strict, issue-first workflow, and the quality bar is deliberately high. **By design, most external pull requests are closed** — automation closes any that don't follow the rules below. Read this entire document before opening a PR.
+Runway accepts contributions through a strict, issue-first workflow, and the quality bar is deliberately high. **By design, most external pull requests are closed** — any that don't follow the rules below are closed without review. Read this entire document before opening a PR.
 
 ## Philosophy
 
 Runway is highly opinionated. It focuses on clean design, fast performance, and a great user experience. The feature set is intentionally limited to core functionality: tracking AI coding subscription usage, nothing more. Contributions that try to expand that scope, add unnecessary complexity, or compromise the UX will be closed.
 
-If you're unsure whether your idea fits, open an issue first. External pull requests without a linked, maintainer-approved issue are closed automatically — without review.
+If you're unsure whether your idea fits, open an issue first. External pull requests without a linked, maintainer-approved issue are closed without review.
 
 ## Ground Rules
 
@@ -14,20 +14,19 @@ If you're unsure whether your idea fits, open an issue first. External pull requ
 - **Most external PRs get closed, by design.** It's not personal — it keeps a small, focused project sane. See the Pull Request Policy below.
 - No feature creep. If it's not about usage tracking, it doesn't belong here.
 - No AI-generated commit messages. Write your own.
-- Test your changes. If it touches UI, include before/after screenshots.
+- Test your changes, and say how you tested them in the PR.
 - Keep it simple. Don't over-engineer.
 - One PR per concern. Don't bundle unrelated changes.
 - Match the existing design language. Runway has a specific look and feel — [AGENTS.md](AGENTS.md) documents the display conventions.
 
 ## Pull Request Policy
 
-External pull requests are gatekept automatically and **closed** if they:
+External pull requests are **closed without review** if they:
 
 - **Have no approved issue** — they don't link an open issue labeled `approved`.
 - **Are too large** — they change more than 1,000 lines. Split the work into smaller PRs.
-- **Miss screenshots** — they make a visual change without before/after screenshots.
 
-Closures aren't personal and are reversible: get the issue approved (or fix the problem), then reopen or open a focused replacement. Maintainers and collaborators may open PRs directly, and can override the automation with the `keep-open` label.
+Closures aren't personal and are reversible: get the issue approved (or fix the problem), then reopen or open a focused replacement. Maintainers and collaborators may open PRs directly.
 
 ## License Agreement
 
@@ -54,7 +53,7 @@ Each provider is a small Swift module under `Sources/Runway/Providers/<Name>/` t
 4. Add focused tests under `Tests/RunwayTests/`
 5. Add a provider page in `docs/providers/` (metrics, credential sources, endpoints, troubleshooting)
 6. Test it locally with `./script/build_and_run.sh`
-7. Open a PR with screenshots showing it working
+7. Open a PR describing how you verified it working
 
 You can also [open an issue](https://github.com/mstallone/runway/issues/new?template=new_provider.yml) to request a provider without building it yourself.
 
@@ -62,8 +61,7 @@ You can also [open an issue](https://github.com/mstallone/runway/issues/new?temp
 
 1. Reference the approved issue number in your PR
 2. Describe the root cause and fix
-3. Include before/after screenshots for UI bugs
-4. Add a regression test if applicable
+3. Add a regression test if applicable
 
 ### Request a feature
 
@@ -79,7 +77,7 @@ Don't open a PR for a feature without an approved issue first. [Open an issue](h
 
 ## What Gets Rejected
 
-- External PRs without an approved issue (closed automatically)
+- External PRs without an approved issue (closed without review)
 - PRs over 1,000 lines, or that bundle unrelated changes
 - Features that expand the scope beyond usage tracking
 - Changes that compromise speed, simplicity, or the existing UX
@@ -97,12 +95,10 @@ Don't open a PR for a feature without an approved issue first. [Open an issue](h
 
 ## Maintainers
 
-- [@robinebers](https://github.com/robinebers) (lead)
-- [@validatedev](https://github.com/validatedev)
-- [@davidarny](https://github.com/davidarny)
+- [@mstallone](https://github.com/mstallone) (owner)
 
-All PRs require approval from at least 2 maintainers before merging.
-Release tags (`v*`) are owner-managed and can only be created by [@robinebers](https://github.com/robinebers).
+All PRs require maintainer approval before merging.
+Release tags (`v*`) are owner-managed and can only be created by [@mstallone](https://github.com/mstallone).
 
 ## Questions?
 
