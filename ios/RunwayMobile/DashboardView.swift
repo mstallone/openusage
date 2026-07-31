@@ -70,6 +70,13 @@ struct DashboardView: View {
                 .frame(height: 64)
                 .padding(.vertical, 4)
             }
+            if model.combined.last30Cost != nil {
+                // Synced history covers machine-local providers only, whose spend is always
+                // imputed from token counts — the same ⓘ caveat the Mac tiles carry.
+                Text("Dollar amounts are estimated from token usage at API rates.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             if !model.combined.unknownModels.isEmpty {
                 Label(
                     "Spend for unpriced models isn’t included: \(model.combined.unknownModels.joined(separator: ", "))",
@@ -82,10 +89,10 @@ struct DashboardView: View {
     }
 
     private func spendTile(_ title: String, day: CombinedUsage.Day?) -> some View {
-        spendTile(title, cost: day?.cost ?? 0, tokens: day?.tokens ?? 0, empty: day == nil)
+        spendTile(title, cost: day?.cost, tokens: day?.tokens ?? 0, empty: day == nil)
     }
 
-    private func spendTile(_ title: String, cost: Double, tokens: Int, empty: Bool) -> some View {
+    private func spendTile(_ title: String, cost: Double?, tokens: Int, empty: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.caption2)
@@ -95,12 +102,15 @@ struct DashboardView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                Text(UsageFormat.dollars(cost))
+                // A day can have measured tokens with no priced cost — never claim "$0.00" then.
+                Text(cost.map(UsageFormat.dollars) ?? "\(UsageFormat.tokens(Double(tokens))) tokens")
                     .font(.headline)
                     .monospacedDigit()
-                Text("\(UsageFormat.tokens(Double(tokens))) tokens")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if cost != nil {
+                    Text("\(UsageFormat.tokens(Double(tokens))) tokens")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

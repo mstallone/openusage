@@ -174,7 +174,8 @@ enum UsageFormat {
 
     static func value(_ value: MetricValueWire) -> String {
         switch value.kind {
-        case .dollars: return dollars(value.number)
+        // "~" marks spend imputed locally by the Mac rather than measured or billed.
+        case .dollars: return (value.estimated ? "~" : "") + dollars(value.number)
         case .percent: return String(format: "%.0f%%", value.number)
         case .count: return tokens(value.number) + (value.label.map { " \($0)" } ?? "")
         }

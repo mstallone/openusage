@@ -28,19 +28,27 @@ struct MetricLineRow: View {
             .padding(.vertical, 2)
 
         case .values(let label, let values, let unknownModels):
-            HStack {
-                Text(label)
-                if !unknownModels.isEmpty {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .imageScale(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text(label)
+                    if !unknownModels.isEmpty {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                            .imageScale(.small)
+                    }
+                    Spacer()
+                    Text(values.map(UsageFormat.value).joined(separator: " · "))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
-                Spacer()
-                Text(values.map(UsageFormat.value).joined(separator: " · "))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                .font(.subheadline)
+                // No hover on iOS: the triangle must explain itself inline.
+                if !unknownModels.isEmpty {
+                    Text("Unpriced models not included: \(unknownModels.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
-            .font(.subheadline)
 
         case .text(let label, let value, let subtitle):
             labeledText(label: label, value: value, subtitle: subtitle)

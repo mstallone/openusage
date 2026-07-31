@@ -25,7 +25,7 @@ struct CombinedUsage {
 
     var today: Day?
     var yesterday: Day?
-    var last30Cost: Double
+    var last30Cost: Double?
     var last30Tokens: Int
     var trend: [Day]
     /// Models some Mac couldn't price inside the window — their spend is missing from the totals.
@@ -49,7 +49,7 @@ final class UsageCloudModel {
     #endif
 
     private(set) var devices: [DeviceUsage] = []
-    private(set) var combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: 0, last30Tokens: 0, trend: [])
+    private(set) var combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: nil, last30Tokens: 0, trend: [])
     private(set) var isLoading = false
     private(set) var lastError: String?
     private(set) var lastRefreshAt: Date?
@@ -79,8 +79,8 @@ final class UsageCloudModel {
         defer { isLoading = false }
         do {
             let container = CKContainer(identifier: Self.containerID)
-            guard try await container.accountStatus() == .available else {
-                lastError = "Sign into iCloud on this device to see your usage."
+            if let message = Self.accountMessage(for: try await container.accountStatus()) {
+                lastError = message
                 return
             }
             let records = try await fetchAllRecords(in: container.privateCloudDatabase)
@@ -89,11 +89,24 @@ final class UsageCloudModel {
         } catch let error as CKError where error.code == .zoneNotFound || error.code == .userDeletedZone {
             // No Mac has published yet: an empty dashboard with guidance, not an error.
             devices = []
-            combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: 0, last30Tokens: 0, trend: [])
+            combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: nil, last30Tokens: 0, trend: [])
             lastError = nil
             lastRefreshAt = Date()
         } catch {
+            log.error("CloudKit refresh failed: \(String(describing: error), privacy: .public)")
             lastError = error.localizedDescription
+        }
+    }
+
+    /// Only `.noAccount` means "sign in" — the other statuses need their own recovery advice.
+    private static func accountMessage(for status: CKAccountStatus) -> String? {
+        switch status {
+        case .available: nil
+        case .noAccount: "Sign into iCloud on this device to see your usage."
+        case .restricted: "iCloud access is restricted on this device (Screen Time or a profile)."
+        case .temporarilyUnavailable: "iCloud is temporarily unavailable. Try again in a moment."
+        case .couldNotDetermine: "Couldn’t determine iCloud status. Try again."
+        @unknown default: "iCloud isn’t available right now."
         }
     }
 
@@ -187,7 +200,7 @@ final class UsageCloudModel {
         return CombinedUsage(
             today: day(todayKey),
             yesterday: day(yesterdayKey),
-            last30Cost: cost.values.reduce(0, +),
+            last30Cost: sawCost.isEmpty ? nil : cost.values.reduce(0, +),
             last30Tokens: tokens.values.reduce(0, +),
             trend: trend,
             unknownModels: unknownModels.sorted()
