@@ -107,13 +107,15 @@ final class UsageCloudModel {
                 continue
             }
             var history: HistoryDocument?
-            if let historyData = record[Self.historyKey] as? Data {
-                if let decoded = try? decoder.decode(HistoryDocument.self, from: historyData),
-                   SyncWire.historySchemas.contains(decoded.schema) {
-                    history = decoded
-                } else {
-                    unreadable += 1
-                }
+            if let historyData = record[Self.historyKey] as? Data,
+               let decoded = try? decoder.decode(HistoryDocument.self, from: historyData),
+               SyncWire.historySchemas.contains(decoded.schema) {
+                history = decoded
+            } else {
+                // Macs always write the history payload (even when empty), so a readable snapshot
+                // with no readable history means the device is silently absent from the combined
+                // totals — keep showing its snapshot, but say so.
+                unreadable += 1
             }
             loaded.append(DeviceUsage(snapshot: snapshot, history: history))
         }
