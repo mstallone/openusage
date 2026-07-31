@@ -14,23 +14,37 @@ import SwiftUI
 /// on the current selection via `NSMenuItem.state`) is always current. Build items with
 /// `ClosureMenuItem` to keep actions inline.
 struct NativeMenuButton<Label: View>: View {
+    private let accessibilityLabel: String
+    private let accessibilityValue: String?
     private let makeItems: @MainActor () -> [NSMenuItem]
     private let label: Label
 
-    /// Weak handle to the press surface, so keyboard and VoiceOver activation can open the same
-    /// menu a physical click would.
+    /// Weak handle to the press surface, so keyboard activation can open the same menu a physical
+    /// click would.
     @State private var surface = SurfaceBox()
 
-    init(items: @escaping @MainActor () -> [NSMenuItem], @ViewBuilder label: () -> Label) {
+    /// - Parameters:
+    ///   - accessibilityLabel: What the control is, announced by VoiceOver ("Total Spend Metric").
+    ///   - accessibilityValue: The current selection, announced as the pop-up's value.
+    ///   - items: Builds the menu items at open time.
+    ///   - label: The visible SwiftUI label.
+    init(
+        accessibilityLabel: String,
+        accessibilityValue: String? = nil,
+        items: @escaping @MainActor () -> [NSMenuItem],
+        @ViewBuilder label: () -> Label
+    ) {
+        self.accessibilityLabel = accessibilityLabel
+        self.accessibilityValue = accessibilityValue
         self.makeItems = items
         self.label = label()
     }
 
-    /// A SwiftUI `Button` under an AppKit press surface: the surface intercepts physical clicks so
-    /// the menu opens on mouse-down like a native pull-down, while the button — which mouse events
-    /// therefore never reach — keeps the control in the Tab key-view loop and gives Space/VoiceOver
-    /// activation the same menu. The surface is hidden from accessibility so the button is the one
-    /// element assistive tech sees.
+    /// A SwiftUI `Button` under an AppKit press surface. The surface intercepts physical clicks so
+    /// the menu opens on mouse-down like a native pull-down, and it is also the control's one
+    /// accessibility element — a real pop-up button role (which SwiftUI cannot express) whose press
+    /// action opens the menu. The button underneath — which neither mouse events nor assistive tech
+    /// reach — keeps the control in the Tab key-view loop with Space activation.
     var body: some View {
         Button {
             surface.view?.presentMenu()
@@ -38,7 +52,15 @@ struct NativeMenuButton<Label: View>: View {
             label
         }
         .buttonStyle(.plain)
-        .overlay(MenuPressSurface(box: surface, makeItems: makeItems).accessibilityHidden(true))
+        .accessibilityHidden(true)
+        .overlay(
+            MenuPressSurface(
+                box: surface,
+                makeItems: makeItems,
+                accessibilityLabel: accessibilityLabel,
+                accessibilityValue: accessibilityValue
+            )
+        )
     }
 }
 
@@ -47,21 +69,29 @@ private final class SurfaceBox {
     weak var view: MenuPressView?
 }
 
-/// Transparent AppKit surface over the label that owns the mouse-down → menu hand-off.
+/// Transparent AppKit surface over the label that owns the mouse-down → menu hand-off and the
+/// pop-up-button accessibility semantics.
 private struct MenuPressSurface: NSViewRepresentable {
     let box: SurfaceBox
     let makeItems: @MainActor () -> [NSMenuItem]
+    let accessibilityLabel: String
+    let accessibilityValue: String?
 
     func makeNSView(context: Context) -> MenuPressView {
         let view = MenuPressView()
-        view.makeItems = makeItems
-        box.view = view
+        apply(to: view)
         return view
     }
 
     func updateNSView(_ nsView: MenuPressView, context: Context) {
-        nsView.makeItems = makeItems
-        box.view = nsView
+        apply(to: nsView)
+    }
+
+    private func apply(to view: MenuPressView) {
+        view.makeItems = makeItems
+        view.setAccessibilityLabel(accessibilityLabel)
+        view.setAccessibilityValue(accessibilityValue)
+        box.view = view
     }
 }
 
@@ -71,8 +101,31 @@ private final class MenuPressView: NSView {
     /// Gap between the label's bottom edge and the menu's top edge.
     private static let menuGap: CGFloat = 4
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        // The surface is the control's accessibility element, with the pop-up role the SwiftUI
+        // `Menu` it replaces had — so VoiceOver announces a choice menu, not a plain button.
+        setAccessibilityElement(true)
+        setAccessibilityRole(.popUpButton)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
+
     override func mouseDown(with event: NSEvent) {
         presentMenu()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        presentMenu()
+        return true
+    }
+
+    override func accessibilityPerformShowMenu() -> Bool {
+        presentMenu()
+        return true
     }
 
     func presentMenu() {

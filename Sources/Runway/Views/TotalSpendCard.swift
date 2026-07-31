@@ -90,7 +90,10 @@ struct TotalSpendCard: View {
     /// `NSMenu` via `NativeMenuButton`, not a SwiftUI `Menu`: the SwiftUI popup could open at a
     /// stale width and middle-truncate "Cost/MTok".
     private var metricMenu: some View {
-        NativeMenuButton {
+        NativeMenuButton(
+            accessibilityLabel: "Total Spend Metric",
+            accessibilityValue: metric.title
+        ) {
             TotalSpendMetric.allCases.map { option in
                 let item = ClosureMenuItem(title: option.title) {
                     metricRawValue = option.rawValue
@@ -109,8 +112,6 @@ struct TotalSpendCard: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .accessibilityLabel("Total Spend Metric")
-        .accessibilityValue(metric.title)
     }
 
     /// Names the providers actually feeding the ring — the enabled spend-capable set — instead of a
