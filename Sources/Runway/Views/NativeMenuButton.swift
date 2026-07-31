@@ -203,28 +203,44 @@ private final class MenuPressView: NSView, NSMenuDelegate {
     }
 
     /// After a session ends, watch briefly for the invisible half of a quick re-click: either the
-    /// session already swallowed a second down (`carryEligible` — the counter read ≥2 during it
-    /// with the cursor on the control; a plain dismissing click is exactly 1, and a double-click on
-    /// a *closed* control also reads 1 because its first down is what started the session), or a
-    /// discarded follow-up down ticks the counter during the double-click window after the close.
-    /// Fires at most once, only with the button released and the cursor still on the control.
+    /// session already swallowed a second down (the counter read ≥2 during it with the cursor on
+    /// the control; a plain dismissing click is exactly 1, and a double-click on a *closed* control
+    /// also reads 1 because its first down is what started the session), or a discarded follow-up
+    /// down ticks the counter during the double-click window after the close. Confirmation and
+    /// firing rules live in `MenuReclickWatchPolicy`; the watch fires at most once.
     private func scheduleReclickWatch(downsDuringSession: Int) {
-        let carryEligible = downsDuringSession >= 2 && isCursorOverControl()
+        let overControl = isCursorOverControl()
         let deadline = ProcessInfo.processInfo.systemUptime + NSEvent.doubleClickInterval + 0.15
         watchTick(
             generation: sessionGeneration,
-            carryEligible: carryEligible,
-            baseline: Self.leftMouseDownCounter(),
+            confirmed: downsDuringSession >= 2 && overControl,
+            lastCounter: Self.leftMouseDownCounter(),
+            wasOverControl: overControl,
             deadline: deadline
         )
     }
 
-    private func watchTick(generation: Int, carryEligible: Bool, baseline: UInt32, deadline: TimeInterval) {
+    private func watchTick(
+        generation: Int,
+        confirmed: Bool,
+        lastCounter: UInt32,
+        wasOverControl: Bool,
+        deadline: TimeInterval
+    ) {
         guard generation == sessionGeneration else { return }
-        let sawDiscardedDown = Self.leftMouseDownCounter() != baseline
-        if carryEligible || sawDiscardedDown,
-           NSEvent.pressedMouseButtons == 0,
-           isCursorOverControl() {
+        let counterNow = Self.leftMouseDownCounter()
+        let overNow = isCursorOverControl()
+        let nowConfirmed = MenuReclickWatchPolicy.confirms(
+            alreadyConfirmed: confirmed,
+            counterAdvanced: counterNow != lastCounter,
+            overControlNow: overNow,
+            overControlAtPriorTick: wasOverControl
+        )
+        if MenuReclickWatchPolicy.mayReopen(
+            confirmed: nowConfirmed,
+            buttonsPressed: NSEvent.pressedMouseButtons != 0,
+            overControlNow: overNow
+        ) {
             presentMenu()
             return
         }
@@ -232,10 +248,37 @@ private final class MenuPressView: NSView, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             self?.watchTick(
                 generation: generation,
-                carryEligible: carryEligible,
-                baseline: baseline,
+                confirmed: nowConfirmed,
+                lastCounter: counterNow,
+                wasOverControl: overNow,
                 deadline: deadline
             )
         }
+    }
+}
+
+/// Decision rules for the post-close re-click watch, split out so the spurious-reopen cases are
+/// testable. The counter is session-wide (every app's clicks tick it), so an increment alone must
+/// never count as a click on this control.
+enum MenuReclickWatchPolicy {
+    /// Whether this tick confirms a re-click on the control. A prior confirmation latches (so a
+    /// re-click observed while the button is still down survives until it can fire). A fresh
+    /// counter increment confirms only when the cursor was on the control at the ticks on *both*
+    /// sides of it — a genuine swallowed re-click happens with the cursor parked on the control,
+    /// while a click on anything else followed by hovering back is bracketed by an off-control
+    /// tick and stays unconfirmed.
+    static func confirms(
+        alreadyConfirmed: Bool,
+        counterAdvanced: Bool,
+        overControlNow: Bool,
+        overControlAtPriorTick: Bool
+    ) -> Bool {
+        alreadyConfirmed || (counterAdvanced && overControlNow && overControlAtPriorTick)
+    }
+
+    /// A confirmed re-click reopens only once the button is released and the cursor is still on
+    /// the control.
+    static func mayReopen(confirmed: Bool, buttonsPressed: Bool, overControlNow: Bool) -> Bool {
+        confirmed && !buttonsPressed && overControlNow
     }
 }
