@@ -1,0 +1,148 @@
+import Charts
+import SwiftUI
+
+struct DashboardView: View {
+    var model: UsageCloudModel
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let error = model.lastError {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                if model.devices.isEmpty, model.lastError == nil, model.lastRefreshAt != nil {
+                    Section {
+                        ContentUnavailableView(
+                            "Waiting for Your Macs",
+                            systemImage: "icloud",
+                            description: Text("Turn on Sync Across Macs in Runway on a Mac signed into this iCloud account.")
+                        )
+                    }
+                }
+
+                if !model.devices.isEmpty {
+                    combinedSection
+                }
+
+                ForEach(model.devices) { device in
+                    deviceSection(device)
+                }
+            }
+            .navigationTitle("Runway")
+            .refreshable { await model.refresh() }
+            .overlay(alignment: .bottom) {
+                if model.isLoading, model.devices.isEmpty {
+                    ProgressView()
+                        .padding()
+                }
+            }
+        }
+    }
+
+    private var combinedSection: some View {
+        Section("Across Your Macs") {
+            HStack {
+                spendTile("Today", day: model.combined.today)
+                Divider()
+                spendTile("Yesterday", day: model.combined.yesterday)
+                Divider()
+                spendTile(
+                    "Last 30 Days",
+                    cost: model.combined.last30Cost,
+                    tokens: model.combined.last30Tokens,
+                    empty: model.combined.trend.isEmpty
+                )
+            }
+            if model.combined.trend.count > 1 {
+                Chart(model.combined.trend) { day in
+                    BarMark(
+                        x: .value("Day", day.date),
+                        y: .value("Tokens", day.tokens)
+                    )
+                    .foregroundStyle(.tint)
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .frame(height: 64)
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    private func spendTile(_ title: String, day: CombinedUsage.Day?) -> some View {
+        spendTile(title, cost: day?.cost ?? 0, tokens: day?.tokens ?? 0, empty: day == nil)
+    }
+
+    private func spendTile(_ title: String, cost: Double, tokens: Int, empty: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if empty {
+                Text("No data")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(UsageFormat.dollars(cost))
+                    .font(.headline)
+                    .monospacedDigit()
+                Text("\(UsageFormat.tokens(Double(tokens))) tokens")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func deviceSection(_ device: DeviceUsage) -> some View {
+        Section {
+            ForEach(device.snapshot.snapshots.values.sorted(by: { $0.displayName < $1.displayName }), id: \.providerID) { provider in
+                ProviderCard(provider: provider, error: device.snapshot.providerErrors[provider.providerID])
+            }
+        } header: {
+            HStack {
+                Label(device.snapshot.deviceName, systemImage: "desktopcomputer")
+                Spacer()
+                Text(device.snapshot.updatedAt, format: .relative(presentation: .named))
+            }
+        }
+    }
+}
+
+private struct ProviderCard: View {
+    var provider: ProviderSnapshotWire
+    var error: String?
+
+    var body: some View {
+        DisclosureGroup {
+            ForEach(Array(provider.lines.enumerated()), id: \.offset) { _, line in
+                MetricLineRow(line: line)
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(provider.displayName)
+                    .font(.body.weight(.medium))
+                if provider.warning != nil || error != nil {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .imageScale(.small)
+                }
+                Spacer()
+                if let plan = provider.plan {
+                    Text(plan)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}

@@ -9,6 +9,7 @@ What the app does and how it behaves. These pages describe **behavior, not visua
 - [Settings](settings.md) — every option, what it changes
 - [Refreshing & caching](refreshing.md) — when data updates and what happens when a fetch fails
 - [iCloud Sync](icloud-sync.md) — how spend history is combined across Macs
+- [iOS Companion App](ios-app.md) — the iPhone/iPad viewer for synced usage
 - [Model pricing](pricing.md) — how spend tiles price tokens, and where the rates come from
 - [Updates](updates.md) — automatic updates and manual checks
 - [Privacy](privacy.md) — what stays local and which optional services can send data
