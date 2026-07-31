@@ -226,7 +226,8 @@ enum ClaudeCredentialScope: Hashable, Sendable {
 }
 
 struct ClaudeAuthStore: Sendable {
-    private static let defaultClaudeHome = "~/.claude"
+    /// Shared with `ClaudeProfilePlanReader`, which resolves the state file against the same home.
+    static let defaultClaudeHome = "~/.claude"
     private static let credentialFileName = ".credentials.json"
     private static let keychainServicePrefix = "Claude Code"
     private static let prodBaseAPIURL = "https://api.anthropic.com"
@@ -292,7 +293,9 @@ struct ClaudeAuthStore: Sendable {
         // card label there is the consistent choice, and a failed keychain login falls through to the
         // file account's own freshly-written blob. Generation snapshots opt out: their candidates
         // keep only oauth + source, so the state-file read would be pure overhead there.
-        if includeProfileTier, !stored.isEmpty, let plan = profilePlan() {
+        if includeProfileTier, !stored.isEmpty,
+           let plan = ClaudeProfilePlanReader(environment: environment, files: files, scope: scope).read()
+        {
             stored[0].profileSubscriptionType = plan.subscriptionType
             stored[0].profileRateLimitTier = plan.rateLimitTier
         }
@@ -784,54 +787,6 @@ struct ClaudeAuthStore: Sendable {
             return "\(path)/\(Self.credentialFileName)"
         }
         return "\(envText("CLAUDE_CONFIG_DIR") ?? Self.defaultClaudeHome)/\(Self.credentialFileName)"
-    }
-
-    /// Claude Code's state file for this scope — inside a custom config dir, but next to (not inside)
-    /// the default home: Claude Code keeps the default's state at `~/.claude.json`.
-    private func stateFilePath() -> String {
-        if case .configDir(let path, _) = scope {
-            return "\(path)/.claude.json"
-        }
-        guard let override = envText("CLAUDE_CONFIG_DIR") else { return "~/.claude.json" }
-        let isDefaultHome = (override as NSString).expandingTildeInPath
-            == (Self.defaultClaudeHome as NSString).expandingTildeInPath
-        return isDefaultHome ? "~/.claude.json" : "\(override)/.claude.json"
-    }
-
-    /// The plan values the badge should trust: the state file's profile, which Claude Code refetches
-    /// regularly, unlike the credential blob's login-time copies. `nil` (no file, no account, nothing
-    /// usable) keeps the blob's values. A file that exists but can't be read or parsed also falls back
-    /// — the badge must never fail a refresh — but is logged so a stale badge stays diagnosable.
-    private func profilePlan() -> (subscriptionType: String?, rateLimitTier: String?)? {
-        let text: String?
-        do {
-            text = try files.readTextIfPresent(stateFilePath())
-        } catch {
-            AppLog.warn(LogTag.auth("claude"), "state file unreadable; plan badge falls back to login-time values: \(error.localizedDescription)")
-            return nil
-        }
-        guard let text else { return nil }
-        guard let parsed = try? JSONDecoder().decode(
-            DefaultAccountObserver.ClaudeStateFile.self, from: Data(text.utf8)
-        ) else {
-            AppLog.warn(LogTag.auth("claude"), "state file did not parse; plan badge falls back to login-time values")
-            return nil
-        }
-        // A state file without `oauthAccount` is a normal logged-out shape, not an error.
-        guard let account = parsed.oauthAccount else { return nil }
-        let tier = account.userRateLimitTier?.nilIfEmpty ?? account.organizationRateLimitTier?.nilIfEmpty
-        // Only a plan-shaped org type (`claude_max` → "max") may replace the blob's subscriptionType;
-        // an unrecognized shape keeps the login value rather than guessing at a family.
-        let subscription = account.organizationType?.nilIfEmpty.flatMap { orgType -> String? in
-            guard orgType.hasPrefix("claude_") else { return nil }
-            return String(orgType.dropFirst("claude_".count)).nilIfEmpty
-        }
-        // An empty plan is deliberately NOT treated as "subscription cleared": absent keys are
-        // indistinguishable from a pre-plan-fields Claude Code state file, and unknown org shapes
-        // (Team/enterprise) land here too. The blob's login-time values stand; a truly lapsed
-        // subscription surfaces through the failing usage fetch, not the badge.
-        guard tier != nil || subscription != nil else { return nil }
-        return (subscription, tier)
     }
 
     private func envText(_ name: String) -> String? {
