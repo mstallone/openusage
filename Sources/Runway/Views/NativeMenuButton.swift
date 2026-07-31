@@ -174,7 +174,11 @@ private final class MenuPressView: NSView, NSMenuDelegate {
     }
 
     func presentMenu() {
-        guard let makeItems else { return }
+        // The re-click watch and the accessibility press can outlive a panel hide — the panel is
+        // ordered out with its SwiftUI tree (and this view) retained, and an ordered-out window
+        // still passes the cursor geometry test. Never pop a menu for a hidden panel. (Same
+        // lifecycle guard as `PopoverKeyReader`.)
+        guard let makeItems, window?.isVisible == true else { return }
         sessionGeneration += 1
         let menu = NSMenu()
         menu.delegate = self
