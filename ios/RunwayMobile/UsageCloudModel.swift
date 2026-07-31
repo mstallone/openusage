@@ -65,8 +65,7 @@ final class UsageCloudModel {
                 return
             }
             let records = try await fetchAllRecords(in: container.privateCloudDatabase)
-            apply(records)
-            lastError = nil
+            lastError = apply(records)
             lastRefreshAt = Date()
         } catch let error as CKError where error.code == .zoneNotFound || error.code == .userDeletedZone {
             // No Mac has published yet: an empty dashboard with guidance, not an error.
@@ -93,26 +92,35 @@ final class UsageCloudModel {
         return records
     }
 
-    private func apply(_ records: [CKRecord]) {
+    /// Rebuilds display state and returns a user-facing notice when any payload was unreadable.
+    /// A skipped payload is never silent: a newer schema on one Mac must say "update", not quietly
+    /// drop that device (or undercount "Across Your Macs" when only its history payload is newer).
+    private func apply(_ records: [CKRecord]) -> String? {
         var loaded: [DeviceUsage] = []
+        var unreadable = 0
         for record in records {
             guard let snapshotData = record[Self.snapshotKey] as? Data,
                   let snapshot = try? decoder.decode(SnapshotDocument.self, from: snapshotData),
                   SyncWire.snapshotSchemas.contains(snapshot.schema)
-            else { continue }
+            else {
+                unreadable += 1
+                continue
+            }
             var history: HistoryDocument?
-            if let historyData = record[Self.historyKey] as? Data,
-               let decoded = try? decoder.decode(HistoryDocument.self, from: historyData),
-               SyncWire.historySchemas.contains(decoded.schema) {
-                history = decoded
+            if let historyData = record[Self.historyKey] as? Data {
+                if let decoded = try? decoder.decode(HistoryDocument.self, from: historyData),
+                   SyncWire.historySchemas.contains(decoded.schema) {
+                    history = decoded
+                } else {
+                    unreadable += 1
+                }
             }
             loaded.append(DeviceUsage(snapshot: snapshot, history: history))
         }
         devices = loaded.sorted { $0.snapshot.updatedAt > $1.snapshot.updatedAt }
         combined = Self.combine(devices)
-        if devices.isEmpty, !records.isEmpty {
-            lastError = "This device couldn’t read the synced usage format. Update Runway on your Macs and this app."
-        }
+        guard unreadable > 0 else { return nil }
+        return "Some synced usage couldn’t be read here (\(unreadable) newer or unreadable payload\(unreadable == 1 ? "" : "s")). Update Runway on your Macs and this app."
     }
 
     /// Day-sums every device's series inside the Mac's 30-day window (today + 30 previous days).
@@ -123,9 +131,10 @@ final class UsageCloudModel {
         formatter.calendar = calendar
         let todayKey = formatter.string(from: now)
         let yesterdayKey = calendar.date(byAdding: .day, value: -1, to: now).map(formatter.string(from:))
-        let window: Set<String> = Set((0...30).compactMap { offset in
+        let orderedWindow: [String] = (0...30).reversed().compactMap { offset in
             calendar.date(byAdding: .day, value: -offset, to: now).map(formatter.string(from:))
-        })
+        }
+        let window = Set(orderedWindow)
 
         var tokens: [String: Int] = [:]
         var cost: [String: Double] = [:]
@@ -147,7 +156,9 @@ final class UsageCloudModel {
             return CombinedUsage.Day(date: key, tokens: dayTokens, cost: sawCost.contains(key) ? cost[key] : nil)
         }
 
-        let trend = tokens.keys.sorted().map { key in
+        // Zero-fill the full window (like the Mac's trend) so the index-plotted bars keep real
+        // spacing — otherwise nonconsecutive usage days would render adjacent.
+        let trend = tokens.isEmpty ? [] : orderedWindow.map { key in
             CombinedUsage.Day(date: key, tokens: tokens[key] ?? 0, cost: sawCost.contains(key) ? cost[key] : nil)
         }
         return CombinedUsage(

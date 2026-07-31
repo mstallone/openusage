@@ -99,9 +99,23 @@ struct DashboardView: View {
     }
 
     private func deviceSection(_ device: DeviceUsage) -> some View {
-        Section {
+        // A provider whose first refresh failed has an error entry but no last-good snapshot —
+        // it must still appear, with its actionable message, like the Mac's error card.
+        let orphanErrors = device.snapshot.providerErrors
+            .filter { device.snapshot.snapshots[$0.key] == nil }
+            .sorted { $0.key < $1.key }
+        return Section {
             ForEach(device.snapshot.snapshots.values.sorted(by: { $0.displayName < $1.displayName }), id: \.providerID) { provider in
                 ProviderCard(provider: provider, error: device.snapshot.providerErrors[provider.providerID])
+            }
+            ForEach(orphanErrors, id: \.key) { providerID, message in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(providerID.capitalized)
+                        .font(.body.weight(.medium))
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
         } header: {
             HStack {
@@ -121,6 +135,11 @@ private struct ProviderCard: View {
         DisclosureGroup {
             ForEach(Array(provider.lines.enumerated()), id: \.offset) { _, line in
                 MetricLineRow(line: line)
+            }
+            if let warning = provider.warning {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle")
