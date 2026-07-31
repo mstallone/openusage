@@ -270,7 +270,7 @@ final class StaleWhileRevalidateTests: XCTestCase {
         )
         _ = await store.refresh(providerID: provider.id, force: true)
         var historyChangeCount = 0
-        store.onLocalHistoryChanged = { historyChangeCount += 1 }
+        store.onLocalStateChanged = { historyChangeCount += 1 }
 
         runtime.snapshot = ProviderSnapshot(
             providerID: provider.id,

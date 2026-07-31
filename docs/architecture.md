@@ -62,14 +62,15 @@ The UI reads from a few observable stores:
 - `LayoutStore` — which metrics are shown, the provider/metric order, and which metrics are starred for the
   menu bar.
 - `ProviderEnablementStore` — which providers the user has turned on or off.
-- `ICloudUsageSyncStore` — one coordinated, atomic history file per Mac, iCloud metadata notifications,
-  and the visible device/error state. File access is injected for lifecycle and failure tests.
+- `ICloudUsageSyncStore` — one CloudKit record per device in the app's private database (history plus a
+  live snapshot for companion apps), a five-minute peer poll, and the visible device/error state. Cloud
+  access is injected for lifecycle and failure tests.
 
 Refresh runs on a timer in `AppContainer`; each pass respects the cache, so the network is only hit once a
 snapshot has actually expired.
 
 Providers with spend tiles carry an explicit history scope beside their export descriptors. Machine-local
-sources can be summed across device files; account-wide sources such as Cursor cannot. `WidgetDataStore`
+sources can be summed across device records; account-wide sources such as Cursor cannot. `WidgetDataStore`
 re-renders only the spend rows from the union, leaving quota and error state local.
 
 ## The AppKit bridge

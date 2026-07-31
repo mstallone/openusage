@@ -839,6 +839,45 @@ final class WidgetDataStoreTests: XCTestCase {
         XCTAssertEqual(store.data(for: descriptor).valueText, "20%")
     }
 
+    func testLocalSnapshotDocumentStripsRawHistoryButKeepsRenderedLines() async {
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("codex"))
+        let descriptor = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let runtime = TestProviderRuntime(
+            provider: provider,
+            descriptors: [descriptor],
+            snapshot: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Session", used: 42, limit: 100, format: .percent)],
+                usageHistory: ProviderUsageHistory(
+                    series: DailyUsageSeries(daily: [
+                        DailyUsageEntry(date: "2026-07-30", totalTokens: 1_000, costUSD: 1.5)
+                    ])
+                )
+            )
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [descriptor]),
+            providers: [runtime],
+            defaults: makeUserDefaults("snapshot-document")
+        )
+        await store.refreshAll()
+
+        let document = store.localSnapshotDocument(deviceID: "device", deviceName: "Mac")
+
+        let published = document.snapshots[provider.id]
+        XCTAssertNotNil(published)
+        // The raw series would duplicate the record's history payload; only rendered lines ship.
+        XCTAssertNil(published?.usageHistory)
+        XCTAssertEqual(published?.lines.isEmpty, false)
+        XCTAssertNotNil(store.localSnapshots[provider.id]?.usageHistory, "stripping must not mutate the store's own snapshot")
+    }
+
     private func makeUserDefaults(_ name: String) -> UserDefaults {
         let suiteName = "RunwayTests.\(name).\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

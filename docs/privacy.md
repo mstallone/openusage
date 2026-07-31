@@ -24,9 +24,9 @@ To avoid re-reading unchanged Claude, Codex, and pi logs after every relaunch, R
 
 The cache is private to your macOS account and is never sent to a provider or iCloud. Old source-file records are dropped as the scan window advances, and identity caches that have not been used for 35 days are removed. Runway's pricing engine runs after the cache is read, so its computed aggregates and totals are not persisted in this cache.
 
-## Optional iCloud Sync
+## iCloud Sync
 
-If you explicitly turn on [iCloud Sync](icloud-sync.md), Runway writes normalized daily tokens, spend, and model totals to its private iCloud container so your own Macs can show one combined summary. Credentials, account limits, provider responses, and raw logs are never written there. iCloud Sync defaults off.
+With [iCloud Sync](icloud-sync.md) on — the default; it can be turned off in Settings — Runway writes normalized daily tokens, spend, and model totals — plus each device's latest rendered usage snapshot (current quotas, plans, balances, and refresh errors) — to its private CloudKit database so your own devices can show one combined summary and live usage. All of it stays inside your iCloud account and is never visible to Runway's developers or any provider. Credentials, raw provider responses, and raw logs are never written there. Turning sync off deletes this device's record from iCloud.
 
 ## Local Diagnostics
 

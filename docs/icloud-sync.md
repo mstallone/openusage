@@ -1,62 +1,89 @@
 # iCloud Sync
 
-**Sync Across Macs** is off by default. When it is on, each Mac writes one versioned Runway history
-file to the app's private iCloud container and reads the files written by other Macs signed into the same
-iCloud account. A random device ID is kept in the login Keychain so the same Mac continues updating its
-existing file after app preferences are reset or the app is reinstalled. There is no folder picker,
-pairing code, or separate account.
+**Sync Across Macs** is on by default and can be turned off in Settings. While it is on, each
+device keeps one versioned record in
+Runway's private CloudKit database — part of your own iCloud account — and reads the records written
+by your other devices. A random device ID is kept in the login Keychain so the same Mac continues
+updating its existing record after app preferences are reset or the app is reinstalled. There is no
+folder picker, pairing code, or separate account.
 
-The file contains normalized daily tokens and spend, model totals, and unknown-model names for sources
-that are local to one Mac: Claude, Codex, Grok, and OpenCode. It does not contain credentials, account
-limits, raw logs, or provider responses. Cursor's history is already account-wide, so it stays local and
-is never added across Macs. Disabling a provider immediately removes its peer contributions from the
-combined view and omits it from this Mac's next iCloud write, while its local cached snapshot remains.
+Each device's record has two parts:
 
-Runway combines the valid files in memory and rebuilds Today, Yesterday, Last 30 Days, Usage Trend,
-unknown-model warnings, and model breakdowns. The same combined spend rows feed the dashboard, Total
-Spend, menu-bar pins, share cards, and the local HTTP API. Both `/v1/usage` and `/v1/limits` read the
-same rendered snapshots; the former is the deprecated UI-oriented format and the latter is the
-normalized format. Quotas, plans, balances, and provider errors remain this Mac's own values inside
-those snapshots. Rows retained in an older peer file are ignored once they fall outside the same
-calendar window used by the local history scanners.
+- **History** — normalized daily tokens and spend, model totals, and unknown-model names for sources
+  that are local to one Mac: Claude, Codex, Grok, Sakana, and OpenCode. Macs merge these into the
+  combined view. Cursor's history is already account-wide, so it is never added across Macs.
+- **Snapshot** — that device's latest rendered usage state for every enabled provider (current
+  quotas, plans, balances, reset times, and refresh errors). Macs never display other Macs'
+  snapshots; this part exists for companion apps (such as the iOS app) that show live usage without
+  holding any provider credentials.
 
-This Mac updates its file after a five-minute refresh batch, a manual refresh, or a provider enablement
-change. iCloud delivery is eventually consistent, so another Mac can take longer than five minutes to
-receive it, especially while offline. Downloaded changes reload immediately when macOS reports them.
+Records never contain credentials, raw logs, or raw provider responses. Disabling a provider
+immediately removes its peer contributions from the combined view and omits it from this device's
+next record, while its local cached snapshot remains.
+
+Runway combines the valid history payloads in memory and rebuilds Today, Yesterday, Last 30 Days,
+Usage Trend, unknown-model warnings, and model breakdowns. The same combined spend rows feed the
+dashboard, Total Spend, menu-bar pins, share cards, and the local HTTP API. Both `/v1/usage` and
+`/v1/limits` read the same rendered snapshots; the former is the deprecated UI-oriented format and
+the latter is the normalized format. Quotas, plans, balances, and provider errors on a Mac remain
+that Mac's own values inside those snapshots. Rows retained in an older peer record are ignored once
+they fall outside the same calendar window used by the local history scanners.
+
+Because every device only ever writes and deletes its own record, records cannot conflict: a save is
+always the same device replacing its previous value. Readers fetch the whole zone and rebuild the
+peer set from scratch, so a device that stops syncing simply disappears on the next load.
+
+This Mac updates its record after a five-minute refresh batch, a manual refresh, or a provider
+enablement change, and checks for peer updates at the same moments plus on a five-minute poll.
+CloudKit delivery is usually a matter of seconds, but it is eventually consistent — an offline Mac
+catches up when it comes back.
 
 ## Multiple accounts across Macs
 
-Histories match by **account**, not by card name. Each Mac's file records which account every card
-belongs to (an opaque account/organization identifier — never an email), so the same account merges into
-the same card everywhere, even when one Mac shows it as the main card and another as an extra account
-card.
+Histories match by **account**, not by card name. Each device's record notes which account every
+card belongs to (an opaque account/organization identifier — never an email), so the same account
+merges into the same card everywhere, even when one Mac shows it as the main card and another as an
+extra account card.
 
-An account you use on another Mac but have no login for here doesn't become a card: it appears as its
-own slice in **Total Spend**, named by its account code ("claude@ab12cd34") — so the number at the top
-is the whole truth across your Macs, and several such accounts stay tellable apart. That code is the
-same id the account's card carries on any Mac it's signed in on (the synced file holds no emails or
-names to label it with). The moment you log that account in locally, its card appears — under that
-same id — with the full cross-machine history already attached.
+An account you use on another Mac but have no login for here doesn't become a card: it appears as
+its own slice in **Total Spend**, named by its account code ("claude@ab12cd34") — so the number at
+the top is the whole truth across your Macs, and several such accounts stay tellable apart. That
+code is the same id the account's card carries on any Mac it's signed in on (the synced record holds
+no emails or names to label it with). The moment you log that account in locally, its card appears —
+under that same id — with the full cross-machine history already attached.
 
-If a synced file cannot identify the account behind a main Claude or Codex card, Runway keeps its
+If a synced record cannot identify the account behind a main Claude or Codex card, Runway keeps its
 spend in one remote family slice instead of attaching it to a different local account or dropping it
 from Total Spend.
 
-Macs running an older Runway read their own format but report this Mac's newer file as "update
-Runway" — update both sides to sync multi-account machines.
+Devices running an older Runway read their own format but report this device's newer record as
+"update Runway" — update both sides to sync multi-account machines.
 
-Settings lists each valid device file with the time that Mac generated it. To remove a Mac from the
-combined summary, turn sync off on that Mac; this deletes its file from iCloud. Turning sync off also
-stops that Mac from reading peers and immediately returns every surface there to local-only spend.
-Malformed files are ignored and reported in Settings and the app log.
+Settings lists each valid device record with the time that device generated it. To remove a device
+from the combined summary, turn sync off on that device; this deletes its record from iCloud.
+Turning sync off also stops that device from reading peers and immediately returns every surface
+there to local-only spend. Malformed records are ignored and reported in Settings and the app log.
 
 ## Development and release setup
 
 Apple requires the iCloud container assignment to be present in the provisioning profile embedded in
-the app. Runway uses separate resources so development builds cannot write production history:
+the app, and the App ID must have the CloudKit capability. Runway uses separate containers so
+development builds cannot write production data:
 
 - `com.mattstallone.runway.dev` uses `iCloud.com.mattstallone.runway.dev`.
 - `com.mattstallone.runway` uses `iCloud.com.mattstallone.runway`.
+
+Development-signed builds additionally run against the container's **Development** CloudKit
+environment (release builds use **Production**), so a dev build can never touch shipped data even
+inside the same container.
+
+CloudKit creates the `UsageHistory` zone, the `DeviceUsage` record type, and its `history` and
+`snapshot` fields automatically the first time a development build writes — but only in the
+Development environment. Production schemas are never auto-created: before the first release that
+ships sync, and again after any schema change (a new record type or field), open the CloudKit
+Console for the production container and use **Deploy Schema Changes** to promote the Development
+schema to Production. A release build pointed at an undeployed Production container fails its first
+write with the real CloudKit error in Settings and the app log.
 
 Create a `MAC_APP_DEVELOPMENT` profile that includes every registered development Mac and a
 `MAC_APP_DIRECT` profile for releases. Install the development profile on each included Mac. The
@@ -77,20 +104,18 @@ secret `APPLE_DEVELOPER_ID_ICLOUD_PROFILE`. Keep the original provisioning profi
 in a password manager, never in the repository. A provisioning profile contains certificates and
 entitlements rather than private keys, but treating it as a signing asset keeps rotation predictable.
 
-To inspect the actual history written by a running build, find the file first and only call `jq` when a
-file exists:
+To inspect the records written by a running build, use the CloudKit Console
+(<https://icloud.developer.apple.com>) — pick the container, then **Data → Private Database → zone
+`UsageHistory` → record type `DeviceUsage`**, in the **Development** environment for dev builds.
+The same query works from the command line once `xcrun cktool save-token` has stored a token:
 
 ```bash
-file=$(find "$HOME/Library/Mobile Documents" \
-  -type f -path '*runway*/Runway/History/v1/*.json' -print -quit)
-
-if [[ -n "$file" ]]; then
-  jq . "$file"
-else
-  echo "No Runway iCloud history file found"
-fi
+xcrun cktool query-records \
+  --container-id iCloud.com.mattstallone.runway.dev \
+  --environment development --database-type private \
+  --zone-name UsageHistory --record-type DeviceUsage
 ```
 
-No file is expected when sync is off, the app is signed without the matching profile, or the first
-write has not completed. The Settings error and app log distinguish those cases; the spinner only
-appears while an iCloud read or write is actually in progress.
+No record is expected when sync is off, the app is signed without the matching profile, or the first
+write has not completed. The Settings error and app log distinguish those cases (including a Mac not
+signed into iCloud); the spinner only appears while a read or write is actually in progress.

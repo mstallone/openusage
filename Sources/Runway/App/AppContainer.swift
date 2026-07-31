@@ -9,7 +9,8 @@ final class AppContainer {
     let registry: WidgetRegistry
     let layout: LayoutStore
     let dataStore: WidgetDataStore
-    /// Opt-in private iCloud document sync for additive machine-local daily history.
+    /// Default-on private CloudKit sync: one record per device carrying additive machine-local
+    /// daily history plus the live snapshot companion apps read.
     let iCloudSync: ICloudUsageSyncStore
     /// Single source of truth for which providers the user has turned off. Both stores consult it (via
     /// injected closures) and the Customize provider list drives it.
