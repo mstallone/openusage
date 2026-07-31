@@ -86,10 +86,10 @@ struct TotalSpendLegendRow: View {
         isHovered && allocation.reclaimedWidth > 0
     }
 
-    private var marqueeMetrics: LegendRowMarqueeMetrics? {
-        LegendRowMarqueeMetrics.resolve(
+    private var marqueeMetrics: MarqueeTextMetrics? {
+        MarqueeTextMetrics.resolve(
             availableWidth: textAreaWidth,
-            titleWidth: titleIdealWidth
+            textWidth: titleIdealWidth
         )
     }
 
@@ -98,9 +98,9 @@ struct TotalSpendLegendRow: View {
             .opacity(marqueeMetrics == nil ? 1 : 0)
             .overlay(alignment: .leading) {
                 if let marqueeMetrics {
-                    LegendRowMarqueeTitle(
-                        title: title,
-                        fontSize: fontSize,
+                    MarqueeTextScroller(
+                        text: title,
+                        font: .system(size: fontSize),
                         distance: marqueeMetrics.distance,
                         duration: marqueeMetrics.duration,
                         isActive: revealsHoverLayout
@@ -185,38 +185,6 @@ struct LegendRowWidthAllocation {
     }
 }
 
-/// A marquee is reserved for titles that still do not fit after the amount has yielded the entire
-/// row. Distance controls how far the title travels; duration keeps the speed readable without
-/// making unusually long account names take forever.
-struct LegendRowMarqueeMetrics {
-    let distance: CGFloat
-    let duration: TimeInterval
-
-    static func resolve(availableWidth: CGFloat, titleWidth: CGFloat) -> Self? {
-        guard availableWidth > 0 else { return nil }
-
-        let distance = titleWidth - availableWidth
-        guard distance > 1 else { return nil }
-
-        return Self(
-            distance: distance,
-            duration: min(6, max(1, distance / 32))
-        )
-    }
-}
-
-/// Reduce Motion replaces the marquee with one immediate state change. At rest the prefix remains
-/// visible; hovering jumps to the ending so both sides of an overlong account title remain reachable.
-struct LegendRowMarqueeOffset {
-    static func immediateTarget(
-        isActive: Bool,
-        reduceMotion: Bool,
-        distance: CGFloat
-    ) -> CGFloat {
-        isActive && reduceMotion ? -distance : 0
-    }
-}
-
 /// One of the two final title/value layouts. `reclaimedWidth` is deliberately not animatable: hover
 /// crossfades between a resting instance and an already-expanded instance instead of changing a
 /// Text proposal frame by frame.
@@ -284,90 +252,6 @@ private struct LegendRowTextLayout: Layout {
     }
 }
 
-/// Scrolls once from the beginning to the end of an overlong title, then holds the ending in view.
-/// Reset waits until the parent hover crossfade is complete so leaving a row cannot make the title
-/// visibly snap back underneath the pointer.
-private struct LegendRowMarqueeTitle: View {
-    let title: String
-    let fontSize: CGFloat
-    let distance: CGFloat
-    let duration: TimeInterval
-    let isActive: Bool
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var offset: CGFloat = 0
-
-    var body: some View {
-        Text(title)
-            .font(.system(size: fontSize))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .offset(x: offset)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .clipped()
-            .task(id: taskKey) {
-                await updateOffset()
-            }
-    }
-
-    private var taskKey: TaskKey {
-        TaskKey(
-            isActive: isActive,
-            reduceMotion: reduceMotion,
-            distance: distance,
-            duration: duration
-        )
-    }
-
-    @MainActor
-    private func updateOffset() async {
-        guard isActive else {
-            do {
-                try await Task.sleep(for: .milliseconds(140))
-            } catch {
-                return
-            }
-            setOffset(0)
-            return
-        }
-
-        let immediateTarget = LegendRowMarqueeOffset.immediateTarget(
-            isActive: isActive,
-            reduceMotion: reduceMotion,
-            distance: distance
-        )
-        setOffset(immediateTarget)
-        guard !reduceMotion else { return }
-
-        do {
-            try await Task.sleep(for: .milliseconds(450))
-        } catch {
-            return
-        }
-        guard !Task.isCancelled else { return }
-
-        withAnimation(.linear(duration: duration)) {
-            offset = -distance
-        }
-    }
-
-    @MainActor
-    private func setOffset(_ target: CGFloat) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            offset = target
-        }
-    }
-
-    private struct TaskKey: Hashable {
-        let isActive: Bool
-        let reduceMotion: Bool
-        let distance: CGFloat
-        let duration: TimeInterval
-    }
-}
 
 /// Keeps the trailing digits anchored while only the portion competing with the title disappears.
 /// The mask is already at its final state before the hover crossfade begins.
