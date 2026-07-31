@@ -52,9 +52,11 @@ struct MetricLineRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(label)
                     .font(.subheadline)
-                Chart(Array(points.enumerated()), id: \.offset) { _, point in
+                // Plot by index: the wire points arrive oldest → newest, and a categorical
+                // month-name label axis would re-sort them alphabetically (July before June).
+                Chart(Array(points.enumerated()), id: \.offset) { index, point in
                     BarMark(
-                        x: .value("Day", point.label),
+                        x: .value("Day", index),
                         y: .value("Value", point.value)
                     )
                     .foregroundStyle(.tint)

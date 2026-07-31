@@ -58,9 +58,9 @@ struct DashboardView: View {
                 )
             }
             if model.combined.trend.count > 1 {
-                Chart(model.combined.trend) { day in
+                Chart(Array(model.combined.trend.enumerated()), id: \.element.id) { index, day in
                     BarMark(
-                        x: .value("Day", day.date),
+                        x: .value("Day", index),
                         y: .value("Tokens", day.tokens)
                     )
                     .foregroundStyle(.tint)

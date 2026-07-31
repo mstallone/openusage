@@ -153,16 +153,17 @@ struct ChartPointWire: Decodable {
 
 enum UsageFormat {
     static func dollars(_ value: Double) -> String {
-        value >= 100 ? String(format: "$%.0f", value) : String(format: "$%.2f", value)
+        "$" + value.formatted(.number.precision(.fractionLength(value >= 100 ? 0 : 2)))
     }
 
+    /// Counts below a million print in full with thousands separators ("58,342"); larger ones
+    /// stay compact ("1.2M", "3.4B") so rows don't overflow.
     static func tokens(_ value: Double) -> String {
         let magnitude = abs(value)
         switch magnitude {
         case 1_000_000_000...: return String(format: "%.1fB", value / 1_000_000_000)
         case 1_000_000...: return String(format: "%.1fM", value / 1_000_000)
-        case 1_000...: return String(format: "%.1fK", value / 1_000)
-        default: return String(format: "%.0f", value)
+        default: return value.formatted(.number.precision(.fractionLength(0)))
         }
     }
 
