@@ -26,16 +26,14 @@ APP_ID="$(/usr/libexec/PlistBuddy \
   | /usr/bin/grep -Fq "$CONTAINER_ID" \
   || { echo "provisioning profile does not allow $CONTAINER_ID" >&2; exit 1; }
 
-UBIQUITY_ID="$(/usr/libexec/PlistBuddy \
-  -c 'Print :Entitlements:com.apple.developer.ubiquity-container-identifiers:0' "$PROFILE_PLIST")"
-case "$UBIQUITY_ID" in
-  "$CONTAINER_ID"|"$TEAM_ID.$CONTAINER_ID") ;;
-  *) echo "provisioning profile does not allow a ubiquity container for $CONTAINER_ID" >&2; exit 1 ;;
-esac
+# shellcheck source=find_icloud_provisioning_profile.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/find_icloud_provisioning_profile.sh"
+ICLOUD_SERVICES="$(/usr/libexec/PlistBuddy \
+  -c 'Print :Entitlements:com.apple.developer.icloud-services' "$PROFILE_PLIST" 2>/dev/null || true)"
+profile_authorizes_cloudkit "$ICLOUD_SERVICES" \
+  || { echo "provisioning profile does not authorize CloudKit (regenerate it with the CloudKit capability)" >&2; exit 1; }
 
 /bin/cp "$TEMPLATE" "$OUTPUT"
-/usr/libexec/PlistBuddy \
-  -c "Set :com.apple.developer.ubiquity-container-identifiers:0 $UBIQUITY_ID" "$OUTPUT"
 
 # Xcode normally injects these identity entitlements while signing. This repository signs the
 # SwiftPM-built bundle directly with codesign, so derive them from the provisioning profile instead.

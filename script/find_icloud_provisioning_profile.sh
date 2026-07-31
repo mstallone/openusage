@@ -19,8 +19,19 @@ profile_matches_identifiers() {
   esac
 }
 
-# Keep the identifier matcher sourceable so its exact profile-selection behavior can be tested
-# without manufacturing signed provisioning profiles.
+# CloudKit must be an authorized iCloud service in the profile. Development profiles usually carry
+# a wildcard (*); explicit lists must name CloudKit. Without this check a stale CloudDocuments-only
+# profile from the previous sync backend could be selected, producing a signed app that requests a
+# CloudKit entitlement its profile does not authorize.
+profile_authorizes_cloudkit() {
+  case "$1" in
+    *CloudKit*|*"*"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Keep the identifier matcher and service check sourceable so their exact profile-selection
+# behavior can be tested without manufacturing signed provisioning profiles.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
@@ -51,7 +62,10 @@ for directory in "${profile_directories[@]}"; do
       -c "Print :Entitlements:com.apple.application-identifier" \
       "$decoded_profile" 2>/dev/null || true)
     container_identifier=$(/usr/libexec/PlistBuddy \
-      -c "Print :Entitlements:com.apple.developer.ubiquity-container-identifiers:0" \
+      -c "Print :Entitlements:com.apple.developer.icloud-container-identifiers:0" \
+      "$decoded_profile" 2>/dev/null || true)
+    icloud_services=$(/usr/libexec/PlistBuddy \
+      -c "Print :Entitlements:com.apple.developer.icloud-services" \
       "$decoded_profile" 2>/dev/null || true)
     expiration=$(/usr/bin/plutil -extract ExpirationDate raw -o - "$decoded_profile" 2>/dev/null || true)
     /bin/rm -f "$decoded_profile"
@@ -59,6 +73,7 @@ for directory in "${profile_directories[@]}"; do
     profile_matches_identifiers \
       "$application_identifier" "$container_identifier" "$BUNDLE_ID" "$CONTAINER_ID" \
       || continue
+    profile_authorizes_cloudkit "$icloud_services" || continue
 
     expiration_epoch=$(/bin/date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$expiration" +%s 2>/dev/null || true)
     [ -n "$expiration_epoch" ] || continue

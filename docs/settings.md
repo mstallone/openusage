@@ -14,11 +14,13 @@ Settings lives inside the popover — there is no separate window. Open it from 
 
 ## iCloud Sync
 
-**Sync Across Macs** is off by default. Turning it on shares normalized Runway history through the
-app's private iCloud container and combines machine-local tokens and spend across Macs signed into the
-same iCloud account. Settings shows the five-minute write cadence and each Mac's relative **Updated**
-time; it also reports unavailable iCloud, loading, write, and malformed-file states. See
-[iCloud Sync](icloud-sync.md) for what is included and which surfaces use the combined values.
+**Sync Across Macs** is on by default (turn it off here to keep this Mac local-only). It shares
+normalized Runway history and each
+device's latest usage snapshot through the app's private CloudKit database, and combines
+machine-local tokens and spend across Macs signed into the same iCloud account. Settings shows the
+five-minute write cadence and each device's relative **Updated** time; it also reports unavailable
+iCloud, loading, write, and malformed-record states. See [iCloud Sync](icloud-sync.md) for what is
+included and which surfaces use the combined values.
 
 ## Appearance
 

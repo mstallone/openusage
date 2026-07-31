@@ -3,12 +3,19 @@ import Observation
 
 struct UsageHistoryLoadResult: Sendable {
     var documents: [UsageHistoryDocument]
-    var invalidFileMessages: [String]
+    var invalidRecordMessages: [String]
 }
 
-protocol UsageHistoryFileStoring: Sendable {
+/// One device's complete published payload: the history document Macs merge, plus the rendered
+/// snapshot document the iOS companion reads. Written together, deleted together.
+struct DeviceSyncRecord: Sendable {
+    var history: UsageHistoryDocument
+    var snapshot: DeviceSnapshotDocument
+}
+
+protocol UsageCloudStoring: Sendable {
     func loadDocuments() async throws -> UsageHistoryLoadResult
-    func write(_ document: UsageHistoryDocument) async throws
+    func write(_ deviceRecord: DeviceSyncRecord) async throws
     func delete(deviceID: String) async throws
 }
 
@@ -38,115 +45,6 @@ struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
     }
 }
 
-enum ICloudUsageSyncError: Error, LocalizedError {
-    case unavailable
-
-    var errorDescription: String? {
-        "iCloud Drive isn’t available. Check that this Mac is signed into iCloud and iCloud Drive is on."
-    }
-}
-
-/// Coordinated access to the app-private data area of Runway's iCloud Documents container.
-actor ICloudUsageHistoryFileStore: UsageHistoryFileStoring {
-    private let encoder: JSONEncoder
-    private let decoder: JSONDecoder
-
-    init() {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        self.encoder = encoder
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        self.decoder = decoder
-    }
-
-    func loadDocuments() async throws -> UsageHistoryLoadResult {
-        let directory = try historyDirectory(create: false)
-        guard FileManager.default.fileExists(atPath: directory.path) else {
-            return UsageHistoryLoadResult(documents: [], invalidFileMessages: [])
-        }
-
-        let urls = try FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ).filter { $0.pathExtension == "json" }
-
-        var documents: [UsageHistoryDocument] = []
-        var errors: [String] = []
-        for url in urls {
-            do {
-                let data = try coordinatedRead(url)
-                let document = try decoder.decode(UsageHistoryDocument.self, from: data)
-                try document.validate()
-                documents.append(document)
-            } catch {
-                errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
-                AppLog.warn(.config, "iCloud history ignored \(url.lastPathComponent): \(error.localizedDescription)")
-            }
-        }
-        return UsageHistoryLoadResult(documents: documents, invalidFileMessages: errors)
-    }
-
-    func write(_ document: UsageHistoryDocument) async throws {
-        try document.validate()
-        let directory = try historyDirectory(create: true)
-        let url = directory.appendingPathComponent(document.deviceID).appendingPathExtension("json")
-        let data = try encoder.encode(document)
-        try coordinatedWrite(data, to: url)
-    }
-
-    func delete(deviceID: String) async throws {
-        let directory = try historyDirectory(create: false)
-        let url = directory.appendingPathComponent(deviceID).appendingPathExtension("json")
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
-        var coordinationError: NSError?
-        var operationError: Error?
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forDeleting, error: &coordinationError) { coordinatedURL in
-            do { try FileManager.default.removeItem(at: coordinatedURL) }
-            catch { operationError = error }
-        }
-        if let coordinationError { throw coordinationError }
-        if let operationError { throw operationError }
-    }
-
-    private func historyDirectory(create: Bool) throws -> URL {
-        guard let container = FileManager.default.url(forUbiquityContainerIdentifier: nil) else {
-            throw ICloudUsageSyncError.unavailable
-        }
-        let directory = container
-            .appendingPathComponent("Runway", isDirectory: true)
-            .appendingPathComponent("History", isDirectory: true)
-            .appendingPathComponent("v1", isDirectory: true)
-        if create {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        return directory
-    }
-
-    private func coordinatedRead(_ url: URL) throws -> Data {
-        var coordinationError: NSError?
-        var result: Result<Data, Error>?
-        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { coordinatedURL in
-            result = Result { try Data(contentsOf: coordinatedURL) }
-        }
-        if let coordinationError { throw coordinationError }
-        return try result?.get() ?? { throw CocoaError(.fileReadUnknown) }()
-    }
-
-    private func coordinatedWrite(_ data: Data, to url: URL) throws {
-        var coordinationError: NSError?
-        var operationError: Error?
-        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { coordinatedURL in
-            do { try data.write(to: coordinatedURL, options: .atomic) }
-            catch { operationError = error }
-        }
-        if let coordinationError { throw coordinationError }
-        if let operationError { throw operationError }
-    }
-}
-
 @MainActor
 @Observable
 final class ICloudUsageSyncStore {
@@ -154,15 +52,21 @@ final class ICloudUsageSyncStore {
     private static let deviceIDKey = "runway.icloudSync.deviceID.v1"
 
     private let defaults: UserDefaults
-    private let fileStore: any UsageHistoryFileStoring
+    private let cloudStore: any UsageCloudStoring
     private let identityError: String?
     private let dataStore: WidgetDataStore
     private let writeDebounce: Duration
-    private let observesMetadataChanges: Bool
+    /// How often to check the private database for peer updates while sync is on. CloudKit has no
+    /// push channel in this always-running menu-bar app (no APNs entitlement), so a simple poll —
+    /// matched to the five-minute refresh cadence — is the delivery mechanism. `nil` disables
+    /// polling (tests drive reloads directly).
+    private let pollInterval: Duration?
     private var writeTask: Task<Void, Never>?
-    private var metadataQuery: NSMetadataQuery?
-    private var notificationTokens: [NSObjectProtocol] = []
+    private var pollTask: Task<Void, Never>?
     private var syncActivityCount = 0
+    private var writeInProgress = false
+    private var writeQueued = false
+    private var reloadGeneration = 0
 
     let deviceID: String
     let deviceName: String
@@ -174,30 +78,35 @@ final class ICloudUsageSyncStore {
         }
     }
     private(set) var isSyncing = false
-    private var operationError: String?
-    var serviceError: String? { operationError ?? identityError }
-    private(set) var invalidFileMessages: [String] = []
+    /// Read and write failures are tracked separately so a healthy five-minute poll read can never
+    /// hide a failed save: this device's record stays stale until a write succeeds, and Settings
+    /// must keep saying so.
+    private var readError: String?
+    private var writeError: String?
+    var serviceError: String? { writeError ?? readError ?? identityError }
+    private(set) var invalidRecordMessages: [String] = []
     private(set) var documents: [UsageHistoryDocument] = []
 
     init(
         dataStore: WidgetDataStore,
         defaults: UserDefaults = .standard,
-        fileStore: any UsageHistoryFileStoring = ICloudUsageHistoryFileStore(),
+        cloudStore: any UsageCloudStoring = CloudKitUsageHistoryStore(),
         deviceIDStore: any ICloudDeviceIDStoring = KeychainICloudDeviceIDStore(),
         writeDebounce: Duration = .seconds(3),
-        observesMetadataChanges: Bool = true
+        pollInterval: Duration? = .seconds(300)
     ) {
         self.dataStore = dataStore
         self.defaults = defaults
-        self.fileStore = fileStore
+        self.cloudStore = cloudStore
         self.writeDebounce = writeDebounce
-        self.observesMetadataChanges = observesMetadataChanges
+        self.pollInterval = pollInterval
         let identity = Self.resolveDeviceID(defaults: defaults, store: deviceIDStore)
         self.deviceID = identity.id
         self.identityError = identity.error
         self.deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-        self.enabled = defaults.bool(forKey: Self.enabledKey)
-        dataStore.onLocalHistoryChanged = { [weak self] in self?.scheduleWrite() }
+        // On by default: a fresh install starts syncing; only a user's explicit choice is stored.
+        self.enabled = (defaults.object(forKey: Self.enabledKey) as? Bool) ?? true
+        dataStore.onLocalStateChanged = { [weak self] in self?.scheduleWrite() }
         if enabled {
             Task { await applyEnabledChange() }
         }
@@ -224,62 +133,109 @@ final class ICloudUsageSyncStore {
 
     private func applyEnabledChange() async {
         if enabled {
-            startObserving()
+            startPolling()
             await reload()
             await writeNow()
         } else {
             writeTask?.cancel()
-            stopObserving()
+            stopPolling()
             dataStore.clearPeerHistoryDocuments()
             documents = []
-            invalidFileMessages = []
+            invalidRecordMessages = []
             do {
-                try await fileStore.delete(deviceID: deviceID)
-                operationError = nil
+                try await cloudStore.delete(deviceID: deviceID)
+                // Re-enabling can race this deletion: if the toggle came back on while the delete
+                // was in flight, publish again so a late-landing delete cannot leave an enabled
+                // Mac's record missing until the next refresh batch.
+                if enabled {
+                    await writeNow()
+                } else {
+                    readError = nil
+                    writeError = nil
+                }
             } catch {
-                report(error, context: "disable")
+                report(error, .disable)
             }
         }
     }
 
+    /// Serializes saves. The store and CloudKit suspend at network awaits, so a second state change
+    /// could otherwise start an overlapping save whose OLDER payload lands last at the server and
+    /// wins. Overlapping requests instead fold into one queued rerun that publishes the latest
+    /// state after the in-flight save finishes.
     private func writeNow() async {
         guard enabled else { return }
+        if writeInProgress {
+            writeQueued = true
+            return
+        }
+        writeInProgress = true
+        repeat {
+            writeQueued = false
+            await performWrite()
+        } while writeQueued && enabled
+        writeInProgress = false
+    }
+
+    private func performWrite() async {
+        guard enabled else { return }
         await withSyncActivity {
-            let document = dataStore.localHistoryDocument(
-                deviceID: deviceID,
-                deviceName: deviceName
+            let updatedAt = Date()
+            let deviceRecord = DeviceSyncRecord(
+                history: dataStore.localHistoryDocument(
+                    deviceID: deviceID,
+                    deviceName: deviceName,
+                    updatedAt: updatedAt
+                ),
+                snapshot: dataStore.localSnapshotDocument(
+                    deviceID: deviceID,
+                    deviceName: deviceName,
+                    updatedAt: updatedAt
+                )
             )
             do {
-                try await fileStore.write(document)
-                // Disabling can run while the coordinated write is in flight. If it did, remove the
-                // just-finished write as well so this Mac cannot reappear in peers after opting out.
+                try await cloudStore.write(deviceRecord)
+                // Disabling can run while the write is in flight. If it did, remove the
+                // just-finished record as well so this Mac cannot reappear in peers after opting out.
                 guard enabled else {
-                    try await fileStore.delete(deviceID: deviceID)
+                    try await cloudStore.delete(deviceID: deviceID)
                     return
                 }
-                operationError = nil
+                writeError = nil
+                AppLog.info(.config, "iCloud history write ok (device \(deviceID))")
                 await reload()
             } catch {
-                report(error, context: "write")
+                report(error, .write)
             }
         }
     }
 
-    private func reload() async {
+    /// The poll and the post-write reload can overlap at their network awaits; the generation
+    /// check lets only the newest-started read publish, so a slow stale response can never
+    /// replace fresher peer state (or report an outdated error). Internal for the staleness test.
+    func reload() async {
         guard enabled else { return }
         await withSyncActivity {
+            reloadGeneration += 1
+            let generation = reloadGeneration
             do {
-                let result = try await fileStore.loadDocuments()
-                // A read that began while enabled must not restore peer state after sync was disabled.
-                guard enabled else { return }
+                let result = try await cloudStore.loadDocuments()
+                // A read that began while enabled must not restore peer state after sync was
+                // disabled, and a superseded read must not publish over a newer one.
+                guard enabled, generation == reloadGeneration else { return }
                 documents = UsageHistoryDocument.newestByDevice(result.documents)
-                invalidFileMessages = result.invalidFileMessages
+                invalidRecordMessages = result.invalidRecordMessages
                 dataStore.setPeerHistoryDocuments(result.documents, ownDeviceID: deviceID)
-                operationError = result.invalidFileMessages.isEmpty
+                readError = result.invalidRecordMessages.isEmpty
                     ? nil
                     : "Some synced usage data couldn’t be read. Check the log for details."
+                AppLog.info(
+                    .config,
+                    "iCloud history loaded \(documents.count) device record(s), \(invalidRecordMessages.count) invalid"
+                )
             } catch {
-                report(error, context: "read")
+                guard generation == reloadGeneration else { return }
+                report(error, .read)
             }
         }
     }
@@ -292,9 +248,14 @@ final class ICloudUsageSyncStore {
         isSyncing = syncActivityCount > 0
     }
 
-    private func report(_ error: Error, context: String) {
-        operationError = error.localizedDescription
-        AppLog.warn(.config, "iCloud history \(context) failed: \(error.localizedDescription)")
+    private enum SyncOperation: String { case read, write, disable }
+
+    private func report(_ error: Error, _ operation: SyncOperation) {
+        switch operation {
+        case .read: readError = error.localizedDescription
+        case .write, .disable: writeError = error.localizedDescription
+        }
+        AppLog.warn(.config, "iCloud history \(operation.rawValue) failed: \(error.localizedDescription)")
     }
 
     private static func resolveDeviceID(
@@ -327,33 +288,19 @@ final class ICloudUsageSyncStore {
         return value.lowercased()
     }
 
-    private func startObserving() {
-        guard observesMetadataChanges else { return }
-        guard metadataQuery == nil else { return }
-        let query = NSMetadataQuery()
-        query.searchScopes = [NSMetadataQueryUbiquitousDocumentsScope]
-        query.predicate = NSPredicate(format: "%K LIKE '*.json'", NSMetadataItemFSNameKey)
-        let center = NotificationCenter.default
-        notificationTokens = [
-            center.addObserver(forName: .NSMetadataQueryDidFinishGathering, object: query, queue: .main) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.metadataQuery?.enableUpdates()
-                    await self.reload()
-                }
-            },
-            center.addObserver(forName: .NSMetadataQueryDidUpdate, object: query, queue: .main) { [weak self] _ in
-                Task { @MainActor in await self?.reload() }
+    private func startPolling() {
+        guard let pollInterval, pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: pollInterval)
+                guard !Task.isCancelled, let self else { return }
+                await self.reload()
             }
-        ]
-        metadataQuery = query
-        query.start()
+        }
     }
 
-    private func stopObserving() {
-        metadataQuery?.stop()
-        metadataQuery = nil
-        for token in notificationTokens { NotificationCenter.default.removeObserver(token) }
-        notificationTokens = []
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 }

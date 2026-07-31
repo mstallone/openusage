@@ -1,6 +1,6 @@
 import Foundation
 
-/// One Mac's presentation-free usage history in the private iCloud container.
+/// One device's presentation-free usage history, the merge payload of its CloudKit sync record.
 struct UsageHistoryDocument: Hashable, Sendable, Codable, Identifiable {
     /// v2 adds account cards (`claude@ab12cd34`) and the `identities` map that lets peers match
     /// histories by ACCOUNT instead of by card id — the same account can be the default card on one

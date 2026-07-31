@@ -8,11 +8,7 @@
   </array>
   <key>com.apple.developer.icloud-services</key>
   <array>
-    <string>CloudDocuments</string>
-  </array>
-  <key>com.apple.developer.ubiquity-container-identifiers</key>
-  <array>
-    <string>$(TeamIdentifierPrefix)iCloud.com.mattstallone.runway</string>
+    <string>CloudKit</string>
   </array>
 </dict>
 </plist>

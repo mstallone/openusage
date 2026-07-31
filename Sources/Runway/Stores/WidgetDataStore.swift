@@ -87,8 +87,11 @@ final class WidgetDataStore {
     /// just gathers each pass's enabled bounded metrics and delegates.
     @ObservationIgnored private let notificationEvaluator = QuotaNotificationEvaluator()
 
-    /// Wired by `ICloudUsageSyncStore`; debounced there so a concurrent provider batch produces one file.
-    @ObservationIgnored var onLocalHistoryChanged: (@MainActor () -> Void)?
+    /// Fires when this Mac's publishable sync state changes: refreshed usage history or a provider
+    /// error transition (the synced snapshot carries `providerErrors`, so failures must publish
+    /// too). Wired by `ICloudUsageSyncStore`; debounced there so a concurrent provider batch
+    /// produces one write.
+    @ObservationIgnored var onLocalStateChanged: (@MainActor () -> Void)?
     @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
     /// Accounts synced from other Macs that have NO card here: surfaced in Total Spend only (their
     /// synthesized snapshots carry the usual Today/Yesterday/Last 30 Days lines), never as cards.
@@ -188,7 +191,7 @@ final class WidgetDataStore {
         let start = monotonicNow()
         AppLog.info(.refresh, "batch start (\(providerIDs.count) providers, force=\(force))")
         let tasks = providerIDs.map { providerID in
-            Task { await self.refresh(providerID: providerID, force: force, notifyHistoryChange: false) }
+            Task { await self.refresh(providerID: providerID, force: force, notifyStateChange: false) }
         }
         var outcomes: [RefreshOutcome] = []
         outcomes.reserveCapacity(tasks.count)
@@ -206,7 +209,9 @@ final class WidgetDataStore {
         let failed = outcomes.count { $0 == .failed }
         let cached = outcomes.count { $0 == .cacheHit }
         let backedOff = outcomes.count { $0 == .backedOff }
-        if refreshed > 0 { onLocalHistoryChanged?() }
+        // Failures publish too: the synced snapshot's error map must not stay frozen on a Mac whose
+        // every provider is failing. Cached/backed-off outcomes changed nothing, so they don't.
+        if refreshed > 0 || failed > 0 { onLocalStateChanged?() }
         AppLog.info(.refresh, "batch end (\(durationMs)ms, \(refreshed) ok / \(failed) failed / \(cached) cached / \(backedOff) backed off)")
     }
 
@@ -261,7 +266,7 @@ final class WidgetDataStore {
     func refresh(
         providerID: String,
         force: Bool = false,
-        notifyHistoryChange: Bool = true
+        notifyStateChange: Bool = true
     ) async -> RefreshOutcome {
         guard isProviderEnabled(providerID) else { return .skipped }
         // A TTL-fresh entry that provably belongs to another account (swap since it was written) must
@@ -324,6 +329,7 @@ final class WidgetDataStore {
             // Negative-cache the failure so a wake burst can't re-probe this provider in a tight loop.
             failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
             AppLog.warn(.refresh, "\(providerID) failed: \(message)")
+            if notifyStateChange { onLocalStateChanged?() }
             return .failed
         }
         if providerErrors[providerID] != nil {
@@ -354,7 +360,7 @@ final class WidgetDataStore {
         // non-account providers and for cards whose identity didn't resolve this launch.
         cache.store(snapshot, producedByIdentityKey: providerIdentityKeys[providerID])
         rebuildRenderedSnapshots()
-        if notifyHistoryChange { onLocalHistoryChanged?() }
+        if notifyStateChange { onLocalStateChanged?() }
         AppLog.info(.refresh, "\(providerID) ok (\(durationMs)ms)")
         return .refreshed
     }
@@ -377,8 +383,8 @@ final class WidgetDataStore {
         rebuildRenderedSnapshots()
     }
 
-    /// Replaces the downloaded peer set. A conflicted duplicate device file resolves to the newest
-    /// valid document, and this Mac's own downloaded copy is excluded in favor of current memory.
+    /// Replaces the downloaded peer set. A duplicate device document resolves to the newest valid
+    /// one, and this Mac's own downloaded copy is excluded in favor of current memory.
     func setPeerHistoryDocuments(_ documents: [UsageHistoryDocument], ownDeviceID: String) {
         peerHistoryDocuments = UsageHistoryDocument.newestByDevice(documents)
             .filter { $0.deviceID != ownDeviceID }
@@ -413,6 +419,28 @@ final class WidgetDataStore {
             updatedAt: updatedAt,
             providers: providers,
             identities: identities.isEmpty ? nil : identities
+        )
+    }
+
+    /// The companion payload to `localHistoryDocument`: this Mac's rendered live state for every
+    /// enabled provider, written for the iOS app. Built from `localSnapshots` only — peer
+    /// contributions never republish — and unlike history it includes account-wide providers such
+    /// as Cursor, because a live snapshot is per-device display state, not additive history.
+    func localSnapshotDocument(deviceID: String, deviceName: String, updatedAt: Date = Date()) -> DeviceSnapshotDocument {
+        var snapshots = localSnapshots.filter { isProviderEnabled($0.key) }
+        // Strip the raw daily series: the rendered lines already carry every display value, and the
+        // machine-local series ships in the record's history payload. Not duplicating it keeps the
+        // per-device record far from CloudKit's 1 MB record limit.
+        for (id, var snapshot) in snapshots {
+            snapshot.usageHistory = nil
+            snapshots[id] = snapshot
+        }
+        return DeviceSnapshotDocument(
+            deviceID: deviceID,
+            deviceName: deviceName,
+            updatedAt: updatedAt,
+            snapshots: snapshots,
+            providerErrors: providerErrors.filter { isProviderEnabled($0.key) }
         )
     }
 

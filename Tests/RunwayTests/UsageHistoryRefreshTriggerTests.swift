@@ -17,7 +17,7 @@ final class UsageHistoryRefreshTriggerTests: XCTestCase {
             defaults: defaults
         )
         var writes = 0
-        store.onLocalHistoryChanged = { writes += 1 }
+        store.onLocalStateChanged = { writes += 1 }
 
         await store.refreshAll(force: true)
         XCTAssertEqual(writes, 1, "a concurrent provider batch publishes one history change")
