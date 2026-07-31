@@ -70,6 +70,14 @@ struct DashboardView: View {
                 .frame(height: 64)
                 .padding(.vertical, 4)
             }
+            if !model.combined.unknownModels.isEmpty {
+                Label(
+                    "Spend for unpriced models isn’t included: \(model.combined.unknownModels.joined(separator: ", "))",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.caption2)
+                .foregroundStyle(.orange)
+            }
         }
     }
 
@@ -110,7 +118,7 @@ struct DashboardView: View {
             }
             ForEach(orphanErrors, id: \.key) { providerID, message in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(providerID.capitalized)
+                    Text(device.snapshot.providerNames?[providerID] ?? providerID)
                         .font(.body.weight(.medium))
                     Label(message, systemImage: "exclamationmark.triangle")
                         .font(.caption)

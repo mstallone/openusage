@@ -29,6 +29,9 @@ struct HistoryDocument: Decodable {
 
 struct ProviderHistory: Decodable {
     var series: DailySeries
+    /// Day → names of models the Mac couldn't price; their usage is EXCLUDED from `series`, so
+    /// combined totals must warn when any fall inside the displayed window.
+    var unknownModelsByDay: [String: [String]]?
 }
 
 struct DailySeries: Decodable {
@@ -50,6 +53,8 @@ struct SnapshotDocument: Decodable {
     var updatedAt: Date
     var snapshots: [String: ProviderSnapshotWire]
     var providerErrors: [String: String]
+    /// Display names for error-only providers (no snapshot to take a title from).
+    var providerNames: [String: String]?
 }
 
 struct ProviderSnapshotWire: Decodable {

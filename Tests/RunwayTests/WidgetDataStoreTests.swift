@@ -912,6 +912,21 @@ final class WidgetDataStoreTests: XCTestCase {
         )
     }
 
+    func testLocalSnapshotDocumentNamesErrorOnlyProviders() async {
+        let provider = Provider(id: "ghost", displayName: "Ghost Provider", icon: .providerMark("codex"))
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: []),
+            providers: [],
+            defaults: makeUserDefaults("snapshot-document-error-names")
+        )
+        store.providerErrors[provider.id] = "Not logged in."
+
+        let document = store.localSnapshotDocument(deviceID: "device", deviceName: "Mac")
+
+        XCTAssertNil(document.snapshots[provider.id])
+        XCTAssertEqual(document.providerNames?[provider.id], "Ghost Provider")
+    }
+
     private func makeUserDefaults(_ name: String) -> UserDefaults {
         let suiteName = "RunwayTests.\(name).\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

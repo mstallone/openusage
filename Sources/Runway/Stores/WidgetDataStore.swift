@@ -441,12 +441,20 @@ final class WidgetDataStore {
             }
             snapshots[id] = snapshot
         }
+        let errors = providerErrors.filter { isProviderEnabled($0.key) }
+        // Error-only providers (no last-good snapshot) carry no display name anywhere else in the
+        // record, so resolve theirs here — same boundary rule as the card titles above.
+        var names: [String: String] = [:]
+        for id in errors.keys where snapshots[id] == nil {
+            names[id] = resolveDisplayName?(id) ?? registry.provider(id: id)?.displayName ?? id
+        }
         return DeviceSnapshotDocument(
             deviceID: deviceID,
             deviceName: deviceName,
             updatedAt: updatedAt,
             snapshots: snapshots,
-            providerErrors: providerErrors.filter { isProviderEnabled($0.key) }
+            providerErrors: errors,
+            providerNames: names.isEmpty ? nil : names
         )
     }
 

@@ -1,6 +1,7 @@
 import CloudKit
 import Foundation
 import Observation
+import os
 
 /// One synced device as this app displays it: the live snapshot is required (it is what the phone
 /// exists to show); history rides along for the combined totals.
@@ -27,6 +28,8 @@ struct CombinedUsage {
     var last30Cost: Double
     var last30Tokens: Int
     var trend: [Day]
+    /// Models some Mac couldn't price inside the window — their spend is missing from the totals.
+    var unknownModels: [String] = []
 }
 
 /// Read-only consumer of Runway's private CloudKit database. Mirrors the Mac's transport exactly:
@@ -53,6 +56,22 @@ final class UsageCloudModel {
 
     private let zoneID = CKRecordZone.ID(zoneName: UsageCloudModel.zoneName, ownerName: CKCurrentUserDefaultName)
     private let decoder = SyncWire.decoder()
+    private let log = Logger(subsystem: "com.mattstallone.runway.mobile", category: "sync")
+
+    /// Decodes one payload field, logging the concrete failure (record + error) so wire drift is
+    /// diagnosable locally while the UI keeps its friendly aggregate notice.
+    private func decodePayload<T: Decodable>(_ type: T.Type, record: CKRecord, key: String) -> T? {
+        guard let data = record[key] as? Data else {
+            log.warning("record \(record.recordID.recordName, privacy: .public) has no \(key, privacy: .public) payload")
+            return nil
+        }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            log.warning("record \(record.recordID.recordName, privacy: .public) \(key, privacy: .public) payload undecodable: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
 
     func refresh() async {
         guard !isLoading else { return }
@@ -99,16 +118,14 @@ final class UsageCloudModel {
         var loaded: [DeviceUsage] = []
         var unreadable = 0
         for record in records {
-            guard let snapshotData = record[Self.snapshotKey] as? Data,
-                  let snapshot = try? decoder.decode(SnapshotDocument.self, from: snapshotData),
+            guard let snapshot = decodePayload(SnapshotDocument.self, record: record, key: Self.snapshotKey),
                   SyncWire.snapshotSchemas.contains(snapshot.schema)
             else {
                 unreadable += 1
                 continue
             }
             var history: HistoryDocument?
-            if let historyData = record[Self.historyKey] as? Data,
-               let decoded = try? decoder.decode(HistoryDocument.self, from: historyData),
+            if let decoded = decodePayload(HistoryDocument.self, record: record, key: Self.historyKey),
                SyncWire.historySchemas.contains(decoded.schema) {
                 history = decoded
             } else {
@@ -141,8 +158,12 @@ final class UsageCloudModel {
         var tokens: [String: Int] = [:]
         var cost: [String: Double] = [:]
         var sawCost: Set<String> = []
+        var unknownModels: Set<String> = []
         for device in devices {
             for history in (device.history?.providers ?? [:]).values {
+                for (day, names) in history.unknownModelsByDay ?? [:] where window.contains(day) {
+                    unknownModels.formUnion(names)
+                }
                 for day in history.series.daily where window.contains(day.date) {
                     tokens[day.date, default: 0] += day.totalTokens
                     if let dayCost = day.costUSD {
@@ -168,7 +189,8 @@ final class UsageCloudModel {
             yesterday: day(yesterdayKey),
             last30Cost: cost.values.reduce(0, +),
             last30Tokens: tokens.values.reduce(0, +),
-            trend: trend
+            trend: trend,
+            unknownModels: unknownModels.sorted()
         )
     }
 }
