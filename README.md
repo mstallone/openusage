@@ -41,7 +41,7 @@ Most providers read the credentials already on your machine (keychain, auth file
 - **[One-shot CLI](docs/cli.md).** Agents can read stable limit JSON through the same five-minute cache with `runway`, or bypass freshness with `runway --force`; the menu-bar app does not need to be running.
 - **[Local HTTP API](docs/local-http-api.md).** Other apps can read machine-friendly limits from `127.0.0.1:6736/v1/limits`; the legacy `/v1/usage` UI contract remains supported. It is loopback-only and never serves credentials; note that browser pages can read it too — see the [privacy note](docs/local-http-api.md#cors-and-privacy).
 - **[Proxy support](docs/proxy.md).** Route provider requests through SOCKS5 or HTTP(S) via `~/.runway/config.json`.
-- **Native settings.** Launch at login, global shortcut, icon style, theme, density, 12/24-hour time — see [Settings](docs/settings.md).
+- **Native settings.** Launch at login, global shortcut, icon style, theme, 12/24-hour time — see [Settings](docs/settings.md).
 - **[Automatic updates](docs/updates.md).** Signed, notarized stable updates via Sparkle.
 
 
@@ -106,7 +106,7 @@ The repository must be public (Sparkle fetches the DMG and appcast anonymously),
 
 ## Contributing
 
-Issues are welcome. Pull requests are **strict and issue-first**: external PRs must link an issue a maintainer has approved with the `approved` label, and automation closes anything that doesn't follow the rules — so **most external PRs are closed by design**. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening one. Report security issues privately per [SECURITY.md](SECURITY.md). The Runway name and logo are covered by the [trademark policy](TRADEMARK.md).
+Issues are welcome. Pull requests are **strict and issue-first**: external PRs must link an issue a maintainer has approved with the `approved` label — **most external PRs without one are closed by design**. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening one. Report security issues privately per [SECURITY.md](SECURITY.md). The Runway name and logo are covered by the [trademark policy](TRADEMARK.md).
 
 ## License
 
