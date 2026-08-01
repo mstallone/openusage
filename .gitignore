@@ -12,6 +12,7 @@ node_modules/
 
 # Signing and notarization material
 *.p12
+*.p8
 *.pem
 *.key
 *.cer

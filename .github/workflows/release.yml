@@ -16,16 +16,22 @@ on:
 permissions:
   contents: write
 
-# Serialize update-feed publishers: each release reads the existing appcast, regenerates it with
-# generate_appcast, and force-publishes the backing branch. Without this, two publishers could race
-# and drop a feed entry.
-concurrency:
-  group: update-feed-publish
-  cancel-in-progress: false
-
 jobs:
   release:
     runs-on: macos-26
+    # actions: write lets this job dispatch deploy-update-feed.yml the moment the feed is published,
+    # instead of waiting for the whole run (the iOS jobs below can keep it open for up to an hour).
+    permissions:
+      contents: write
+      actions: write
+    # Serialize update-feed publishers: each release reads the existing appcast, regenerates it with
+    # generate_appcast, and force-publishes the backing branch. Without this, two publishers could
+    # race and drop a feed entry. Job-level (not workflow-level) so the lock is held only while this
+    # job runs — the iOS TestFlight jobs never touch update-feed, and the distribute job can spend
+    # up to an hour polling Apple, which must not block pricing-supplement publishes.
+    concurrency:
+      group: update-feed-publish
+      cancel-in-progress: false
     env:
       APPLE_TEAM_ID: 8KZBNZJBAX
     steps:
@@ -261,6 +267,18 @@ jobs:
           # keep_files, publishing the appcast would delete it from the branch.
           keep_files: true
 
+      - name: Deploy update feed now
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Deploy the live feed immediately: the workflow_run trigger in deploy-update-feed.yml only
+        # fires when this whole run completes, and the iOS jobs below can keep the run open for up
+        # to an hour — Sparkle clients must not wait on TestFlight polling. workflow_dispatch is one
+        # of the two event types GITHUB_TOKEN may trigger, and --ref main is required because the
+        # deploy workflow file lives on the default branch, not on this tag. The workflow_run
+        # trigger stays as a fallback; a duplicate deploy is an idempotent no-op serialized by the
+        # update-feed-deploy concurrency group.
+        run: gh workflow run deploy-update-feed.yml --ref main
+
       - name: Remove release credentials
         if: always()
         env:
@@ -268,6 +286,162 @@ jobs:
         run: |
           rm -f "$RUNNER_TEMP/runway-icloud.provisionprofile"
           rm -f "$RUNNER_TEMP/sparkle_ed_private_key"
+          if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
+            rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          fi
+
+  # Ships the iOS companion app to TestFlight from the same tag. Independent of the macOS job on
+  # purpose: a TestFlight hiccup must not block the DMG/appcast, and vice versa. iOS has no
+  # notarization — the App Store Connect upload is the platform's equivalent. Signing is manual
+  # with the Apple Distribution cert + App Store profile secrets (an App Manager API key cannot
+  # use Xcode cloud signing); the API key only authenticates the upload. The one-time App Store
+  # Connect setup is documented in the release-swift skill under .agents/skills/release-swift/.
+  testflight:
+    name: iOS TestFlight
+    runs-on: macos-26
+    env:
+      APPLE_TEAM_ID: 8KZBNZJBAX
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      build: ${{ steps.meta.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0          # full history so the CFBundleVersion (commit count) is correct
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Resolve tag and version
+        id: meta
+        run: |
+          TAG="${{ inputs.tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="$("$GITHUB_WORKSPACE/script/validate_release_tag.sh" "$TAG")"
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            # CFBundleVersion, resolved once here so the upload and the distribute job that polls
+            # for the processed build can never disagree about which build they mean.
+            echo "build=$(git rev-list --count HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate required secrets
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          APPLE_IOS_APP_STORE_PROFILE: ${{ secrets.APPLE_IOS_APP_STORE_PROFILE }}
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_NOTARY_PRIVATE_KEY_BASE64 \
+            APPLE_NOTARY_KEY_ID \
+            APPLE_NOTARY_ISSUER_ID \
+            APPLE_DISTRIBUTION_CERTIFICATE_BASE64 \
+            APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD \
+            APPLE_IOS_APP_STORE_PROFILE
+          do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required repository secret: $name"
+              exit 1
+            fi
+          done
+
+      # Apple Distribution cert (.p12, base64) used to sign the iOS app. Same action and pattern as
+      # the macOS job's Developer ID import: temporary keychain, cleaned up in a post step.
+      - name: Import Apple Distribution certificate
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+
+      - name: Write App Store provisioning profile
+        env:
+          IOS_PROFILE_BASE64: ${{ secrets.APPLE_IOS_APP_STORE_PROFILE }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$IOS_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/runway-ios-appstore.mobileprovision"
+          echo "IOS_PROVISIONING_PROFILE=$RUNNER_TEMP/runway-ios-appstore.mobileprovision" >> "$GITHUB_ENV"
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_NOTARY_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Build, sign, and upload to TestFlight
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          RUNWAY_VERSION: ${{ steps.meta.outputs.version }}
+          RUNWAY_BUILD: ${{ steps.meta.outputs.build }}
+        run: ./script/release_ios.sh
+
+      - name: Remove release credentials
+        if: always()
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          rm -f "$RUNNER_TEMP/runway-ios-appstore.mobileprovision"
+          if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
+            rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          fi
+
+  # Distributes the uploaded build to external testers: waits for Apple's processing, adds the
+  # build to the external group(s), and submits it for Beta App Review (external testers get it
+  # when Apple approves; the internal group already gets every build automatically). A separate
+  # job from the upload on purpose — an upload can never be repeated (duplicate build number), but
+  # this step is idempotent, so a failure here is retried with `gh run rerun <run-id> --failed`
+  # without touching the uploaded build. Linux runner: this only calls the App Store Connect API,
+  # no Xcode needed.
+  distribute:
+    name: TestFlight External
+    runs-on: ubuntu-latest
+    needs: testflight
+    env:
+      # Comma-separated external TestFlight group names every release ships to. The groups must
+      # already exist under TestFlight → External Testing (one-time setup in the README).
+      TESTFLIGHT_EXTERNAL_GROUPS: External
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_NOTARY_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Add build to external groups and submit for Beta App Review
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          RUNWAY_VERSION: ${{ needs.testflight.outputs.version }}
+          RUNWAY_BUILD: ${{ needs.testflight.outputs.build }}
+        run: node script/testflight_distribute.mjs
+
+      - name: Remove release credentials
+        if: always()
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
           if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
             rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           fi

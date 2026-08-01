@@ -12,6 +12,12 @@
 # suppresses workflow triggers from GITHUB_TOKEN pushes. workflow_run on their completion is the
 # reliable signal — and it requires this file to live on the default branch, which also makes
 # manual dispatch work.
+#
+# The Release workflow ALSO dispatches this workflow directly right after its macOS job publishes
+# update-feed (workflow_dispatch is exempt from the GITHUB_TOKEN suppression): its iOS TestFlight
+# jobs can keep the run open for up to an hour, and Sparkle clients must not wait on that. The
+# workflow_run completion below is the fallback; duplicate deploys are idempotent no-ops serialized
+# by the concurrency group.
 name: Deploy Update Feed
 
 on:
@@ -32,8 +38,11 @@ concurrency:
 jobs:
   deploy:
     name: Deploy Update Feed
-    # Deploy after a successful publish; a failed Release never touched update-feed, so skip.
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # No conclusion filter on purpose: a Release run can end failed, cancelled, or timed out AFTER
+    # its macOS job already published a new appcast to update-feed (the iOS TestFlight jobs keep
+    # the run open long after that publish), and suppressing the deploy then would strand the new
+    # appcast where Sparkle clients never see it. Deploying is always safe — it re-deploys the
+    # update-feed branch as-is, and the branch only ever changes on a successful macOS publish.
     runs-on: ubuntu-latest
     # Use the product-facing environment name so GitHub's repository homepage identifies these
     # deployments by purpose instead of by their Pages transport.
