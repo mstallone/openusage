@@ -58,6 +58,9 @@ final class UsageCloudModel {
     private(set) var isLoading = false
     private(set) var lastError: String?
     private(set) var lastRefreshAt: Date?
+    /// Bumped when the iCloud account changes; a refresh only publishes results if its starting
+    /// generation still matches, so an old account's slow fetch can't restore cleared data.
+    private var generation = 0
 
     private let zoneID = CKRecordZone.ID(zoneName: UsageCloudModel.zoneName, ownerName: CKCurrentUserDefaultName)
     private let decoder = SyncWire.decoder()
@@ -69,6 +72,9 @@ final class UsageCloudModel {
         NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                // Invalidate any fetch already in flight for the old account: its results must
+                // never repopulate what this clear removes.
+                self.generation += 1
                 self.clearLoadedState()
                 self.lastError = nil
                 await self.refresh()
@@ -99,10 +105,22 @@ final class UsageCloudModel {
     func refresh() async {
         guard !isLoading else { return }
         isLoading = true
-        defer { isLoading = false }
+        let startGeneration = generation
+        await performRefresh(startGeneration)
+        isLoading = false
+        if startGeneration != generation {
+            // The account changed while this fetch was in flight: its results were discarded and
+            // the change handler's own refresh() bailed on isLoading — fetch the new account now.
+            await refresh()
+        }
+    }
+
+    private func performRefresh(_ startGeneration: Int) async {
         do {
             let container = CKContainer(identifier: Self.containerID)
-            if let message = Self.accountMessage(for: try await container.accountStatus()) {
+            let status = try await container.accountStatus()
+            guard startGeneration == generation else { return }
+            if let message = Self.accountMessage(for: status) {
                 // The account is gone or unreachable: the prior account's private usage must not
                 // keep rendering beneath the notice.
                 clearLoadedState()
@@ -110,16 +128,18 @@ final class UsageCloudModel {
                 return
             }
             let records = try await fetchAllRecords(in: container.privateCloudDatabase)
+            guard startGeneration == generation else { return }
             lastError = apply(records)
             lastRefreshAt = Date()
         } catch let error as CKError where error.code == .zoneNotFound || error.code == .userDeletedZone {
+            guard startGeneration == generation else { return }
             // No Mac has published yet: an empty dashboard with guidance, not an error.
-            devices = []
-            combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: nil, last30Tokens: 0, trend: [])
+            clearLoadedState()
             lastError = nil
             lastRefreshAt = Date()
         } catch {
             log.error("CloudKit refresh failed: \(String(describing: error), privacy: .public)")
+            guard startGeneration == generation else { return }
             lastError = error.localizedDescription
         }
     }
