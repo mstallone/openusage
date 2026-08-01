@@ -1071,6 +1071,78 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
+    func testProvenAssociationFromSecondCredentialOverridesUnverifiedZero() async {
+        // The GitHub CLI credential can't see enterprise associations (its empty org report is only
+        // provisional), but the editor credential proves octo-enterprise owns the seat org and can't
+        // read its usage. The proof is an account-level fact: the unverified zero must yield to the
+        // managed state instead of being published with a warning.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testProvenAssociationFromFirstCredentialBlocksLaterUnverifiedZero() async {
+        // Same combination in the other order: the proof arrives before the unverified empty report,
+        // which must then be rejected rather than stored.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+                    : ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
     func testEnterpriseDiscoveryPaginatesViewerEnterprises() async {
         let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
         let http = RoutingHTTPClient { request in

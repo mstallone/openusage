@@ -175,7 +175,11 @@ final class CopilotProvider: ProviderRuntime {
         /// can't read enterprise associations) — the snapshot then carries a soft warning so the
         /// zero is never silent.
         case empty([MetricLine], enterpriseUnverified: Bool)
-        case managed
+        /// `provenEnterpriseAssociation` is true when this credential *proved* an owning enterprise
+        /// (whose usage it could not read). Ownership is an account-level fact — independent of
+        /// which credential learned it — so the multi-credential aggregation uses the proof to
+        /// invalidate another credential's unverified zero.
+        case managed(provenEnterpriseAssociation: Bool)
         case temporarilyUnavailable
     }
 
@@ -210,6 +214,7 @@ final class CopilotProvider: ProviderRuntime {
         isEnterpriseSeat: Bool
     ) async -> OrgBillingLookup {
         var sawTransientFailure = false
+        var sawProvenEnterpriseAssociation = false
         var emptyCandidate: (lines: [MetricLine], enterpriseUnverified: Bool)?
         for (index, token) in tokens.enumerated() {
             if index > 0 {
@@ -223,12 +228,23 @@ final class CopilotProvider: ProviderRuntime {
             case .usage(let lines):
                 return .usage(lines)
             case .empty(let lines, let enterpriseUnverified):
+                // Once any credential has proven an owning enterprise, an unverified zero is exactly
+                // the claim that proof invalidates — only an enterprise-verified zero may still land.
+                if enterpriseUnverified && sawProvenEnterpriseAssociation {
+                    continue
+                }
                 // An enterprise-verified zero beats an unverified one from an earlier credential:
                 // it clears the soft warning the unverified report would carry.
                 if emptyCandidate == nil || (emptyCandidate?.enterpriseUnverified == true && !enterpriseUnverified) {
                     emptyCandidate = (lines, enterpriseUnverified)
                 }
-            case .managed:
+            case .managed(let provenEnterpriseAssociation):
+                if provenEnterpriseAssociation {
+                    sawProvenEnterpriseAssociation = true
+                    if emptyCandidate?.enterpriseUnverified == true {
+                        emptyCandidate = nil
+                    }
+                }
                 continue
             case .temporarilyUnavailable:
                 sawTransientFailure = true
@@ -237,7 +253,9 @@ final class CopilotProvider: ProviderRuntime {
         if let emptyCandidate, !sawTransientFailure {
             return .empty(emptyCandidate.lines, enterpriseUnverified: emptyCandidate.enterpriseUnverified)
         }
-        return sawTransientFailure ? .temporarilyUnavailable : .managed
+        return sawTransientFailure
+            ? .temporarilyUnavailable
+            : .managed(provenEnterpriseAssociation: sawProvenEnterpriseAssociation)
     }
 
     private func orgBillingLookup(
@@ -252,6 +270,9 @@ final class CopilotProvider: ProviderRuntime {
         // Set when a business seat's empty org report is published without enterprise visibility;
         // the snapshot carries a soft warning so that zero is never a silent claim.
         var enterpriseUnverified = false
+        // Set when GraphQL proved an enterprise owns the seat org (usage unreadable) — carried out
+        // so the aggregation across credentials can overrule another credential's unverified zero.
+        var provenEnterpriseAssociation = false
         var rememberedEmpty: (org: String, lines: [MetricLine])?
         if let cached = defaults.string(forKey: Self.billingOrgDefaultsKey) {
             let cachedKey = cached.lowercased()
@@ -319,7 +340,7 @@ final class CopilotProvider: ProviderRuntime {
                     if response.isGitHubRateLimited || response.statusCode >= 500 {
                         return .temporarilyUnavailable
                     }
-                    return .managed
+                    return .managed(provenEnterpriseAssociation: false)
                 }
                 orgs = CopilotOrgBillingMapper.orgLogins(response)
                 emptyReportsAreAuthoritative = false
@@ -395,15 +416,16 @@ final class CopilotProvider: ProviderRuntime {
                 // month, not as "managed" — but the zero is published with a soft warning, since a
                 // business org owned by an enterprise could consolidate usage this credential can't see.
                 if isEnterpriseSeat, emptyCandidate != nil, !sawTransientFailure {
-                    return .managed
+                    return .managed(provenEnterpriseAssociation: false)
                 }
                 enterpriseUnverified = true
             case .managed:
                 // A proven enterprise association with unreadable usage: an empty org report cannot
                 // prove that consolidated usage is zero. Keep the honest managed state instead of
                 // publishing false totals.
+                provenEnterpriseAssociation = true
                 if emptyCandidate != nil && !sawTransientFailure {
-                    return .managed
+                    return .managed(provenEnterpriseAssociation: true)
                 }
             case .temporarilyUnavailable:
                 sawTransientFailure = true
@@ -416,7 +438,9 @@ final class CopilotProvider: ProviderRuntime {
         {
             return .empty(emptyCandidate.lines, enterpriseUnverified: enterpriseUnverified)
         }
-        return sawTransientFailure ? .temporarilyUnavailable : .managed
+        return sawTransientFailure
+            ? .temporarilyUnavailable
+            : .managed(provenEnterpriseAssociation: provenEnterpriseAssociation)
     }
 
     private func enterpriseBillingLookup(
