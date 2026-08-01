@@ -57,9 +57,10 @@ plays that role).
   injected at build time — the `MARKETING_VERSION` in the Xcode project is never bumped by hand.
   TestFlight rejects a reused build number for the same version, so rerunning a tag that already
   uploaded fails at the upload step; tag a new patch version instead.
-- Signing is Xcode cloud signing with the App Store Connect API key the Mac release already uses
-  for notarization — no certificate or provisioning profile secrets. The key must have the App
-  Manager role.
+- Signing is manual: an Apple Distribution certificate and App Store provisioning profile stored
+  as repository secrets, the same pattern as the Mac release's Developer ID cert and iCloud
+  profile. The App Store Connect API key (App Manager role) only authenticates the upload and the
+  TestFlight distribution calls — cloud signing does not work with API keys below Admin.
 - `script/release_ios.sh` is the whole build; run it locally with `SKIP_TESTFLIGHT_UPLOAD=1` to get
   a signed `.ipa` in `dist/ios/` without uploading.
 - The upload can never be repeated, but the external-distribution job is idempotent: if it fails

@@ -274,10 +274,10 @@ jobs:
 
   # Ships the iOS companion app to TestFlight from the same tag. Independent of the macOS job on
   # purpose: a TestFlight hiccup must not block the DMG/appcast, and vice versa. iOS has no
-  # notarization — the App Store Connect upload is the platform's equivalent. Signing is Xcode
-  # cloud signing via the same App Store Connect API key the macOS job uses for notarization (the
-  # key needs the App Manager role); the one-time App Store Connect setup is documented in the
-  # release-swift skill under .agents/skills/release-swift/.
+  # notarization — the App Store Connect upload is the platform's equivalent. Signing is manual
+  # with the Apple Distribution cert + App Store profile secrets (an App Manager API key cannot
+  # use Xcode cloud signing); the API key only authenticates the upload. The one-time App Store
+  # Connect setup is documented in the release-swift skill under .agents/skills/release-swift/.
   testflight:
     name: iOS TestFlight
     runs-on: macos-26
@@ -315,18 +315,40 @@ jobs:
           APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          APPLE_IOS_APP_STORE_PROFILE: ${{ secrets.APPLE_IOS_APP_STORE_PROFILE }}
         run: |
           set -euo pipefail
           for name in \
             APPLE_NOTARY_PRIVATE_KEY_BASE64 \
             APPLE_NOTARY_KEY_ID \
-            APPLE_NOTARY_ISSUER_ID
+            APPLE_NOTARY_ISSUER_ID \
+            APPLE_DISTRIBUTION_CERTIFICATE_BASE64 \
+            APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD \
+            APPLE_IOS_APP_STORE_PROFILE
           do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::Missing required repository secret: $name"
               exit 1
             fi
           done
+
+      # Apple Distribution cert (.p12, base64) used to sign the iOS app. Same action and pattern as
+      # the macOS job's Developer ID import: temporary keychain, cleaned up in a post step.
+      - name: Import Apple Distribution certificate
+        uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7.0.0
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+
+      - name: Write App Store provisioning profile
+        env:
+          IOS_PROFILE_BASE64: ${{ secrets.APPLE_IOS_APP_STORE_PROFILE }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$IOS_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/runway-ios-appstore.mobileprovision"
+          echo "IOS_PROVISIONING_PROFILE=$RUNNER_TEMP/runway-ios-appstore.mobileprovision" >> "$GITHUB_ENV"
 
       - name: Write App Store Connect API key
         env:
@@ -352,6 +374,7 @@ jobs:
         env:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
         run: |
+          rm -f "$RUNNER_TEMP/runway-ios-appstore.mobileprovision"
           if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
             rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           fi
