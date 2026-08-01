@@ -12,7 +12,7 @@ AGENTS.md is the source of truth for agent instructions in this repository. CLAU
 
 ## Releases
 
-`main` is the active development line; the NextByte-owned `mstallone/runway` fork ships via `.github/workflows/release.yml` (Sparkle appcast on `update-feed`). Cut releases with the release-swift skill.
+`main` is the active development line; the NextByte-owned `mstallone/runway` fork ships via `.github/workflows/release.yml` (Sparkle appcast on `update-feed`). Cut releases with the release-swift skill; secrets and one-time setup are documented in `docs/releasing.md`.
 
 ### Guardrails (do not break)
 - Versions are `0.7.x` and up. Never reuse a `0.6.x` number — those are the original edition's released tags, now frozen on the `tauri-legacy` branch (final release `v0.6.28`).

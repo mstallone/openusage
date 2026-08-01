@@ -169,4 +169,4 @@ selecting it.
 - The version is the tag; never edit version files.
 - The appcast is append-only so older installs keep working; the workflow aborts rather than shrink it.
 
-Release secrets and one-time setup live in the README under [Release setup](../../../README.md#release-setup-one-time).
+Release secrets and one-time setup live in [docs/releasing.md](../../../docs/releasing.md#release-setup-one-time).
