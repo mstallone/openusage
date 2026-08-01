@@ -30,3 +30,19 @@ jobs:
 
       - name: Run tests
         run: swift test
+
+  # Compile check for the iOS companion app so a PR can't silently break the TestFlight job in
+  # release.yml. Unsigned simulator build only — signing and upload are exercised at release time.
+  ios:
+    name: Build iOS App
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: |
+          xcodebuild -project ios/RunwayMobile.xcodeproj -scheme RunwayMobile \
+            -configuration Release -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO build

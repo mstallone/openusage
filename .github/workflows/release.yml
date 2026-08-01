@@ -271,3 +271,80 @@ jobs:
           if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
             rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           fi
+
+  # Ships the iOS companion app to TestFlight from the same tag. Independent of the macOS job on
+  # purpose: a TestFlight hiccup must not block the DMG/appcast, and vice versa. iOS has no
+  # notarization — the App Store Connect upload is the platform's equivalent. Signing is Xcode
+  # cloud signing via the same App Store Connect API key the macOS job uses for notarization (the
+  # key needs the App Manager role); the one-time App Store Connect setup is documented in the
+  # release-swift skill under .agents/skills/release-swift/.
+  testflight:
+    name: iOS TestFlight
+    runs-on: macos-26
+    env:
+      APPLE_TEAM_ID: 8KZBNZJBAX
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0          # full history so the CFBundleVersion (commit count) is correct
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Resolve tag and version
+        id: meta
+        run: |
+          TAG="${{ inputs.tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="$("$GITHUB_WORKSPACE/script/validate_release_tag.sh" "$TAG")"
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate required secrets
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          for name in \
+            APPLE_NOTARY_PRIVATE_KEY_BASE64 \
+            APPLE_NOTARY_KEY_ID \
+            APPLE_NOTARY_ISSUER_ID
+          do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required repository secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_NOTARY_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Build, sign, and upload to TestFlight
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          RUNWAY_VERSION: ${{ steps.meta.outputs.version }}
+        run: ./script/release_ios.sh
+
+      - name: Remove release credentials
+        if: always()
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
+            rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          fi
