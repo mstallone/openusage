@@ -13,6 +13,35 @@ rejected. The tag is the version (`v0.7.1` becomes `CFBundleShortVersionString =
 
 ## Cutting a release
 
+### 0. Preflight: iOS signing assets
+
+Check this **before** tagging — a bad provisioning profile fails the iOS job halfway through a run
+that has already published the Mac release, and the fix cannot ship until the next tag.
+
+Both App Store profiles must exist and be `ACTIVE`:
+
+- `Runway Mobile App Store` → `com.mattstallone.runway.mobile`
+- `Runway Mobile Widgets App Store` → `com.mattstallone.runway.mobile.widgets`
+
+**Editing an App ID's capabilities silently invalidates every existing profile built on it.** Nothing
+warns you; the profile flips to `INVALID` and signing fails much later with an unrelated-looking
+error. If capabilities changed since the last release, regenerate both profiles and refresh
+`APPLE_IOS_APP_STORE_PROFILE` / `APPLE_IOS_WIDGET_APP_STORE_PROFILE` in the same sitting.
+
+Both App IDs must keep **both** iCloud containers enabled — `iCloud.com.mattstallone.runway` for
+Release and `iCloud.com.mattstallone.runway.dev` for Debug. A profile granting only one signs one
+configuration and breaks the other.
+
+Verify a downloaded profile before trusting it:
+
+```sh
+security cms -D -i profile.mobileprovision > /tmp/p.plist
+/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.icloud-container-identifiers' /tmp/p.plist
+/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.icloud-container-environment' /tmp/p.plist
+```
+
+Expect both containers and both environments (`Production`, `Development`).
+
 ### 1. Choose the version
 
 Propose the next stable version (default bump: patch) and confirm it with the owner before proceeding.
@@ -56,20 +85,37 @@ Wait for explicit approval of the changelog before changing any files. Accept ed
 
 ### 4. Record it in CHANGELOG.md
 
-Prepend the approved section right after the `# Changelog` header. Commit on `main`:
+`main` is a protected branch: pushing to it directly is rejected, so the changelog lands through a
+PR. Prepend the approved section right after the `# Changelog` header, then:
 
 ```sh
 git switch main && git pull
+git switch -c docs/changelog-v{version}
 git add CHANGELOG.md && git commit -m "docs: changelog for v{version}"
+git push -u origin docs/changelog-v{version}
+gh pr create --base main --title "docs: changelog for v{version}" --body-file /tmp/pr-v{version}.md
 ```
 
-### 5. Tag and push
+Follow the PR description structure in AGENTS.md. Wait for CI, then squash-merge:
 
 ```sh
+gh pr merge {pr} --squash --delete-branch
+```
+
+### 5. Tag the merged commit and push
+
+Tag **after** the merge, so the tag points at a commit that is on `main`. Tagging first leaves the
+release tag off `main` forever (the squash-merge rewrites the commit), which pollutes the next
+release's changelog range with the previous release's own changelog commit.
+
+```sh
+git switch main && git pull
 git tag -a v{version} -m "v{version}"
-git push origin main
 git push origin v{version}
 ```
+
+Pushing the tag is what starts the release run — there is no `git push origin main` step, because
+the merge already updated it.
 
 ### 6. Publish the notes
 
@@ -167,6 +213,10 @@ selecting it.
 - Never push or tag automatically — ask the owner first.
 - Always publish notes to the GitHub Release — never blank.
 - The version is the tag; never edit version files.
+- `main` is protected: the changelog lands via PR, and the tag goes on the merged commit — never
+  tag before the merge.
 - The appcast is append-only so older installs keep working; the workflow aborts rather than shrink it.
+- Editing App ID capabilities invalidates existing provisioning profiles; regenerate them and
+  refresh the secrets before tagging.
 
 Release secrets and one-time setup live in the README under [Release setup](../../../README.md#release-setup-one-time).
