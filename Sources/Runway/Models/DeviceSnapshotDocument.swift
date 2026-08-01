@@ -15,4 +15,8 @@ struct DeviceSnapshotDocument: Hashable, Sendable, Codable {
     var snapshots: [String: ProviderSnapshot]
     /// Latest refresh error per enabled provider, mirroring the dashboard's warning indicators.
     var providerErrors: [String: String]
+    /// Resolved display names for providers that appear in `providerErrors` with no snapshot (a
+    /// provider whose first refresh ever failed) — otherwise consumers would have only the card id
+    /// to label the error with. Additive in schema v1; absent from older records.
+    var providerNames: [String: String]? = nil
 }

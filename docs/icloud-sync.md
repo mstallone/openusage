@@ -13,9 +13,10 @@ Each device's record has two parts:
   that are local to one Mac: Claude, Codex, Grok, Sakana, and OpenCode. Macs merge these into the
   combined view. Cursor's history is already account-wide, so it is never added across Macs.
 - **Snapshot** — that device's latest rendered usage state for every enabled provider (current
-  quotas, plans, balances, reset times, and refresh errors). Macs never display other Macs'
-  snapshots; this part exists for companion apps (such as the iOS app) that show live usage without
-  holding any provider credentials.
+  quotas, plans, balances, reset times, and refresh errors), with card titles resolved the way the
+  dashboard shows them — including your renames. Macs never display other Macs' snapshots; this
+  part exists for companion apps (such as the iOS app) that show live usage without holding any
+  provider credentials.
 
 Records never contain credentials, raw logs, or raw provider responses. Disabling a provider
 immediately removes its peer contributions from the combined view and omits it from this device's

@@ -428,19 +428,33 @@ final class WidgetDataStore {
     /// as Cursor, because a live snapshot is per-device display state, not additive history.
     func localSnapshotDocument(deviceID: String, deviceName: String, updatedAt: Date = Date()) -> DeviceSnapshotDocument {
         var snapshots = localSnapshots.filter { isProviderEnabled($0.key) }
-        // Strip the raw daily series: the rendered lines already carry every display value, and the
-        // machine-local series ships in the record's history payload. Not duplicating it keeps the
-        // per-device record far from CloudKit's 1 MB record limit.
         for (id, var snapshot) in snapshots {
+            // Strip the raw daily series: the rendered lines already carry every display value, and
+            // the machine-local series ships in the record's history payload. Not duplicating it
+            // keeps the per-device record far from CloudKit's 1 MB record limit.
             snapshot.usageHistory = nil
+            // The publish boundary is a display boundary, like the CLI/API: renames live only in
+            // the account registry (never baked into cached snapshots), so resolve them here or
+            // companion apps would show the derived name instead of the user's chosen one.
+            if let resolved = resolveDisplayName?(id) {
+                snapshot.displayName = resolved
+            }
             snapshots[id] = snapshot
+        }
+        let errors = providerErrors.filter { isProviderEnabled($0.key) }
+        // Error-only providers (no last-good snapshot) carry no display name anywhere else in the
+        // record, so resolve theirs here — same boundary rule as the card titles above.
+        var names: [String: String] = [:]
+        for id in errors.keys where snapshots[id] == nil {
+            names[id] = resolveDisplayName?(id) ?? registry.provider(id: id)?.displayName ?? id
         }
         return DeviceSnapshotDocument(
             deviceID: deviceID,
             deviceName: deviceName,
             updatedAt: updatedAt,
             snapshots: snapshots,
-            providerErrors: providerErrors.filter { isProviderEnabled($0.key) }
+            providerErrors: errors,
+            providerNames: names.isEmpty ? nil : names
         )
     }
 
