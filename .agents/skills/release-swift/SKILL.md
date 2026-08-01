@@ -15,8 +15,10 @@ rejected. The tag is the version (`v0.7.1` becomes `CFBundleShortVersionString =
 
 ### 0. Preflight: iOS signing assets
 
-Check this **before** tagging — a bad provisioning profile fails the iOS job halfway through a run
-that has already published the Mac release, and the fix cannot ship until the next tag.
+Check this **before** tagging. A profile problem fails the iOS job during signing, which is *before*
+the upload consumes the TestFlight build number — so it is recoverable on the same tag: fix the
+secret and `gh run rerun <run-id> --failed` (see step 7). Preflighting saves that round trip, not
+the release.
 
 Both App Store profiles must exist and be `ACTIVE`:
 
