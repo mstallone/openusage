@@ -19,6 +19,11 @@ permissions:
 jobs:
   release:
     runs-on: macos-26
+    # actions: write lets this job dispatch deploy-update-feed.yml the moment the feed is published,
+    # instead of waiting for the whole run (the iOS jobs below can keep it open for up to an hour).
+    permissions:
+      contents: write
+      actions: write
     # Serialize update-feed publishers: each release reads the existing appcast, regenerates it with
     # generate_appcast, and force-publishes the backing branch. Without this, two publishers could
     # race and drop a feed entry. Job-level (not workflow-level) so the lock is held only while this
@@ -261,6 +266,18 @@ jobs:
           # update-feed also hosts pricing_supplement.json (see pricing-supplement.yml). Without
           # keep_files, publishing the appcast would delete it from the branch.
           keep_files: true
+
+      - name: Deploy update feed now
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Deploy the live feed immediately: the workflow_run trigger in deploy-update-feed.yml only
+        # fires when this whole run completes, and the iOS jobs below can keep the run open for up
+        # to an hour — Sparkle clients must not wait on TestFlight polling. workflow_dispatch is one
+        # of the two event types GITHUB_TOKEN may trigger, and --ref main is required because the
+        # deploy workflow file lives on the default branch, not on this tag. The workflow_run
+        # trigger stays as a fallback; a duplicate deploy is an idempotent no-op serialized by the
+        # update-feed-deploy concurrency group.
+        run: gh workflow run deploy-update-feed.yml --ref main
 
       - name: Remove release credentials
         if: always()
