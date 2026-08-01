@@ -10,6 +10,10 @@ struct CopilotMappedUsage: Equatable, Sendable {
     /// Unlike `/user/orgs`, this is the seat-association signal needed to attribute an empty billing
     /// report without guessing from all of the user's memberships.
     var organizationLogins: [String] = []
+    /// True for a Copilot Enterprise seat (`copilot_plan` names enterprise). An owning enterprise
+    /// then certainly exists, which changes how much an *empty* org billing report can prove when
+    /// enterprise associations cannot be read — see the discovery-denied branch in the provider.
+    var isEnterpriseSeat: Bool = false
     /// True for an org-managed (token-based-billing) seat whose response carried no usable per-seat
     /// meters — the signal that the real usage lives in *organization* billing, where the provider
     /// should look next. Kept as an explicit flag so the org lookup is never gated on the incidental
@@ -40,6 +44,8 @@ enum CopilotUsageMapper {
     static func map(body: [String: Any]) throws -> CopilotMappedUsage {
         let plan = planLabel(body["copilot_plan"])
         let organizationLogins = organizationLogins(body)
+        let isEnterpriseSeat = (body["copilot_plan"] as? String)?
+            .lowercased().contains("enterprise") == true
         let resetsAt = parseResetDate(body["quota_reset_date"])
             ?? parseResetDate(body["limited_user_reset_date"])
 
@@ -98,6 +104,7 @@ enum CopilotUsageMapper {
                     plan: plan,
                     lines: [],
                     organizationLogins: organizationLogins,
+                    isEnterpriseSeat: isEnterpriseSeat,
                     isOrgManagedSeat: true
                 )
             }

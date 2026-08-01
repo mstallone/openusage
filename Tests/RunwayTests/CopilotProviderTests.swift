@@ -1016,6 +1016,33 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
     }
 
+    func testEnterpriseSeatWithDeniedDiscoveryKeepsManagedState() async {
+        // A Copilot Enterprise seat guarantees an owning enterprise exists. When the token can't
+        // read enterprise associations, an empty org report can't rule out consolidated usage —
+        // unlike the business seat above, this must stay in the managed state, not read as zero.
+        var body = makeBusinessPlaceholderBody(seatOrgs: ["acme"])
+        body["copilot_plan"] = "enterprise"
+        let http = routedClient([
+            ("/copilot_internal/user", ok(body)),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", ok([
+                "errors": [[
+                    "type": "FORBIDDEN",
+                    "message": "Resource not accessible by integration"
+                ]]
+            ]))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
     func testProvenEnterpriseWithUnreadableUsageKeepsManagedState() async {
         // GraphQL proves octo-enterprise owns the seat org, but its usage endpoint is forbidden. The
         // org-level empty report cannot rule out consolidated enterprise usage here, so the honest

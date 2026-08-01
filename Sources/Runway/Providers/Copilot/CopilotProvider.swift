@@ -115,7 +115,8 @@ final class CopilotProvider: ProviderRuntime {
                 }
                 switch await orgBillingLookup(
                     tokens: billingTokens,
-                    seatOrgLogins: mapped.organizationLogins
+                    seatOrgLogins: mapped.organizationLogins,
+                    isEnterpriseSeat: mapped.isEnterpriseSeat
                 ) {
                 case .usage(let usageLines), .empty(let usageLines):
                     lines = usageLines
@@ -192,7 +193,8 @@ final class CopilotProvider: ProviderRuntime {
     /// association before the enterprise endpoint is queried.
     private func orgBillingLookup(
         tokens: [CopilotToken],
-        seatOrgLogins: [String]
+        seatOrgLogins: [String],
+        isEnterpriseSeat: Bool
     ) async -> OrgBillingLookup {
         var sawTransientFailure = false
         var emptyCandidate: [MetricLine]?
@@ -200,7 +202,11 @@ final class CopilotProvider: ProviderRuntime {
             if index > 0 {
                 AppLog.info(LogTag.plugin("copilot"), "trying another local GitHub credential for billing")
             }
-            switch await orgBillingLookup(token: token.value, seatOrgLogins: seatOrgLogins) {
+            switch await orgBillingLookup(
+                token: token.value,
+                seatOrgLogins: seatOrgLogins,
+                isEnterpriseSeat: isEnterpriseSeat
+            ) {
             case .usage(let lines):
                 return .usage(lines)
             case .empty(let lines):
@@ -217,7 +223,11 @@ final class CopilotProvider: ProviderRuntime {
         return sawTransientFailure ? .temporarilyUnavailable : .managed
     }
 
-    private func orgBillingLookup(token: String, seatOrgLogins: [String]) async -> OrgBillingLookup {
+    private func orgBillingLookup(
+        token: String,
+        seatOrgLogins: [String],
+        isEnterpriseSeat: Bool
+    ) async -> OrgBillingLookup {
         let associatedOrgKeys = Set(seatOrgLogins.map { $0.lowercased() })
         var shouldTryEnterprise = false
         var attemptedOrgKeys: Set<String> = []
@@ -351,12 +361,20 @@ final class CopilotProvider: ProviderRuntime {
                 return .usage(lines)
             case .empty(let lines):
                 return .empty(lines)
-            case .noAssociation, .discoveryDenied:
-                // No enterprise claims the seat org (or the token can't see enterprises at all).
-                // Consolidated billing would have made the org endpoint 404, so an associated seat
-                // org's readable empty report below is authoritative — this is every business org at
-                // the start of a billing month, which must read as zero credits, not as "managed".
+            case .noAssociation:
+                // Discovery answered and no visible enterprise claims the seat org: the org's own
+                // readable report (including a month-start empty one) is the best available truth.
                 break
+            case .discoveryDenied:
+                // The token can't see enterprise associations at all. What an empty org report can
+                // still prove depends on the seat: a Copilot Enterprise seat guarantees an owning
+                // enterprise exists, so possibly-consolidated usage stays unverifiable — keep the
+                // managed state. A Business seat's org normally bills itself, so its readable empty
+                // report stands: every business org reads as zero credits at the start of a billing
+                // month, not as "managed".
+                if isEnterpriseSeat, emptyCandidate != nil, !sawTransientFailure {
+                    return .managed
+                }
             case .managed:
                 // A proven enterprise association with unreadable usage: an empty org report cannot
                 // prove that consolidated usage is zero. Keep the honest managed state instead of
