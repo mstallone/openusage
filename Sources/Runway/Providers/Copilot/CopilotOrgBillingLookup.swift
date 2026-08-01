@@ -8,8 +8,9 @@ extension CopilotProvider {
         case usage([MetricLine])
         /// A readable zero report. `enterpriseUnverified` is true when the report is published
         /// without having ruled out enterprise-consolidated usage (a business seat whose credential
-        /// can't read enterprise associations) — the snapshot then carries a soft warning so the
-        /// zero is never silent.
+        /// can't read enterprise associations). The flag only steers the multi-credential
+        /// aggregation; the rendered zero is identical — real usage under the same login surfaces in
+        /// the org report on the next refresh, so a month-start zero corrects itself.
         case empty([MetricLine], enterpriseUnverified: Bool)
         /// `provenEnterpriseAssociation` is true when this credential *proved* an owning enterprise
         /// (whose usage it could not read). Ownership is an account-level fact — independent of
@@ -103,8 +104,9 @@ extension CopilotProvider {
         var shouldTryEnterprise = false
         var attemptedOrgKeys: Set<String> = []
         var unresolvedAssociatedOrgKeys: Set<String> = []
-        // Set when a business seat's empty org report is published without enterprise visibility;
-        // the snapshot carries a soft warning so that zero is never a silent claim.
+        // Set when a business seat's empty org report is published without enterprise visibility —
+        // consumed by the multi-credential aggregation, where a proven association or a verified
+        // zero from another credential outranks it.
         var enterpriseUnverified = false
         // Set when GraphQL proved an enterprise owns the seat org (usage unreadable) — carried out
         // so the aggregation across credentials can overrule another credential's unverified zero.
@@ -248,9 +250,9 @@ extension CopilotProvider {
                 // still prove depends on the seat: a Copilot Enterprise seat guarantees an owning
                 // enterprise exists, so possibly-consolidated usage stays unverifiable — keep the
                 // managed state. A Business seat's org normally bills itself, so its readable empty
-                // report stands — every business org reads as zero credits at the start of a billing
-                // month, not as "managed" — but the zero is published with a soft warning, since a
-                // business org owned by an enterprise could consolidate usage this credential can't see.
+                // report stands: every business org reads as zero credits at the start of a billing
+                // month, not as "managed", and any real usage under this login surfaces in the org
+                // report on a later refresh.
                 if isEnterpriseSeat, emptyCandidate != nil, !sawTransientFailure {
                     return .managed(provenEnterpriseAssociation: false)
                 }

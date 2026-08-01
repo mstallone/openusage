@@ -1016,8 +1016,9 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
-        // The zero couldn't be enterprise-verified, so it must not be a silent claim.
-        XCTAssertNotNil(snapshot.warning)
+        // No warning even though the zero couldn't be enterprise-verified: real usage under the same
+        // login surfaces in the org report on the next refresh, so the zero corrects itself.
+        XCTAssertNil(snapshot.warning)
     }
 
     func testEnterpriseSeatWithDeniedDiscoveryKeepsManagedState() async {

@@ -101,7 +101,6 @@ final class CopilotProvider: ProviderRuntime {
             // credits and spend, while everyone else gets an explicit managed-account state. Gated on
             // the mapper's explicit flag, never on `lines` being empty (issue #839).
             var lines = mapped.lines
-            var warning: String?
             if mapped.isOrgManagedSeat {
                 // A second local token may belong to another GitHub account. It is safe for billing
                 // only when Copilot named the seat org; otherwise `/user/orgs` must stay tied to the
@@ -121,13 +120,12 @@ final class CopilotProvider: ProviderRuntime {
                 ) {
                 case .usage(let usageLines):
                     lines = usageLines
-                case .empty(let usageLines, let enterpriseUnverified):
+                case .empty(let usageLines, _):
+                    // A month-start zero is self-correcting — any real usage under this login shows
+                    // up in the org report on the next refresh — so an unverified zero renders
+                    // without a warning; `enterpriseUnverified` still steers the credential
+                    // aggregation above.
                     lines = usageLines
-                    if enterpriseUnverified {
-                        // The zero is the org's own answer, but this credential couldn't rule out
-                        // enterprise-consolidated usage — say so instead of presenting a silent zero.
-                        warning = "Enterprise-billed usage can't be checked with this GitHub login."
-                    }
                 case .managed:
                     lines = [
                         .badge(
@@ -156,8 +154,7 @@ final class CopilotProvider: ProviderRuntime {
                     for: lines,
                     isOrgManagedSeat: mapped.isOrgManagedSeat,
                     usesFreeTierQuotas: mapped.usesFreeTierQuotas
-                ),
-                warning: warning
+                )
             )
         } catch let error as CopilotUsageError {
             return ProviderSnapshot.error(provider: provider, error: error)
