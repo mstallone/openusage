@@ -30,6 +30,11 @@ struct CombinedUsage {
     var trend: [Day]
     /// Models some Mac couldn't price inside the window — their spend is missing from the totals.
     var unknownModels: [String] = []
+
+    /// Whether anything in the window deserves the combined section: usage, cost, or a warning.
+    var hasData: Bool {
+        !trend.isEmpty || !unknownModels.isEmpty || last30Cost != nil || last30Tokens > 0
+    }
 }
 
 /// Read-only consumer of Runway's private CloudKit database. Mirrors the Mac's transport exactly:
@@ -58,6 +63,24 @@ final class UsageCloudModel {
     private let decoder = SyncWire.decoder()
     private let log = Logger(subsystem: "com.mattstallone.runway.mobile", category: "sync")
 
+    init() {
+        // An iCloud account switch must never leave the previous account's private usage on
+        // screen — clear before the new account's first fetch, which may itself fail.
+        NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.clearLoadedState()
+                self.lastError = nil
+                await self.refresh()
+            }
+        }
+    }
+
+    private func clearLoadedState() {
+        devices = []
+        combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: nil, last30Tokens: 0, trend: [])
+    }
+
     /// Decodes one payload field, logging the concrete failure (record + error) so wire drift is
     /// diagnosable locally while the UI keeps its friendly aggregate notice.
     private func decodePayload<T: Decodable>(_ type: T.Type, record: CKRecord, key: String) -> T? {
@@ -82,8 +105,7 @@ final class UsageCloudModel {
             if let message = Self.accountMessage(for: try await container.accountStatus()) {
                 // The account is gone or unreachable: the prior account's private usage must not
                 // keep rendering beneath the notice.
-                devices = []
-                combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: nil, last30Tokens: 0, trend: [])
+                clearLoadedState()
                 lastError = message
                 return
             }
@@ -246,8 +268,9 @@ final class UsageCloudModel {
         }
 
         // Zero-fill the full window (like the Mac's trend) so the index-plotted bars keep real
-        // spacing — otherwise nonconsecutive usage days would render adjacent.
-        let trend = tokens.isEmpty ? [] : orderedWindow.map { key in
+        // spacing — otherwise nonconsecutive usage days would render adjacent. A cost-only window
+        // (every token count zero) gets no token chart at all rather than 31 invisible bars.
+        let trend = !tokens.values.contains(where: { $0 > 0 }) ? [] : orderedWindow.map { key in
             CombinedUsage.Day(date: key, tokens: tokens[key] ?? 0, cost: sawCost.contains(key) ? cost[key] : nil)
         }
         return CombinedUsage(

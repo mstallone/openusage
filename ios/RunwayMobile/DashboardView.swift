@@ -14,7 +14,7 @@ struct DashboardView: View {
                     }
                 }
 
-                if model.devices.isEmpty, model.combined.trend.isEmpty, model.lastError == nil, model.lastRefreshAt != nil {
+                if model.devices.isEmpty, !model.combined.hasData, model.lastError == nil, model.lastRefreshAt != nil {
                     Section {
                         ContentUnavailableView(
                             "Waiting for Your Macs",
@@ -27,7 +27,7 @@ struct DashboardView: View {
                 // Combined totals stand on the history payloads alone — they must show even when
                 // no snapshot decoded (and hide when no history did, instead of hollow tiles).
                 // An all-unpriced window has an empty trend but still needs its warning shown.
-                if !model.combined.trend.isEmpty || !model.combined.unknownModels.isEmpty {
+                if model.combined.hasData {
                     combinedSection
                 }
 
@@ -57,7 +57,7 @@ struct DashboardView: View {
                     "Last 30 Days",
                     cost: model.combined.last30Cost,
                     tokens: model.combined.last30Tokens,
-                    empty: model.combined.trend.isEmpty
+                    empty: model.combined.last30Cost == nil && model.combined.last30Tokens == 0
                 )
             }
             if model.combined.trend.count > 1 {
