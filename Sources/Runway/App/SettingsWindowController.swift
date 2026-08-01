@@ -194,13 +194,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     /// error notice or the iCloud device list appearing). Remember it and follow it.
     private func paneContentHeightChanged(_ pane: SettingsPane, _ height: CGFloat) {
         guard pane == selectedPane, height > 1 else { return }
-        let target = clampedContentHeight(height)
-        defaults.set(Double(target), forKey: Self.heightKey(for: pane))
+        // Remember the RAW measured height — the screen cap belongs to whatever display the window
+        // is on when it's applied (`setContentHeight`/`rememberedHeight` clamp at use time), so a
+        // height capped by a small display can't stick after moving to a larger one.
+        defaults.set(Double(height), forKey: Self.heightKey(for: pane))
         // The geometry callback can fire inside a SwiftUI layout pass; resizing the window there
         // would re-enter the same layout. Defer one runloop turn — on a plain open the remembered
         // height already matches and the deferred call is a no-op.
         Task { @MainActor [weak self] in
-            self?.setContentHeight(target, animated: true)
+            self?.setContentHeight(height, animated: true)
         }
     }
 
@@ -295,6 +297,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     }
 
     // MARK: - NSWindowDelegate
+
+    /// The height cap belongs to the display, so dragging the open window onto a different (e.g.
+    /// shorter) screen re-derives the current pane's height there — otherwise a window sized on a
+    /// tall display would keep its bottom controls stranded past a shorter display's edge, with the
+    /// pane's scroll view none the wiser. Un-animated: this fires mid-drag, and an animation would
+    /// fight the user's hand.
+    func windowDidChangeScreen(_ notification: Notification) {
+        setContentHeight(rememberedHeight(for: selectedPane), animated: false)
+    }
 
     /// The whole point of the teardown: a closed Settings window keeps no SwiftUI tree, no hosting
     /// view, and no window — reopening rebuilds one pane from the live stores in a few milliseconds.
