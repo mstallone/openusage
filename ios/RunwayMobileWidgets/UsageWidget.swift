@@ -121,11 +121,61 @@ enum WidgetUsageCache {
     }
 }
 
+/// Why there's no usage to show. Semantic (rather than a plain string) so every family can keep
+/// the friendly-error signal at its own size: full text where there's room, a distinct symbol
+/// plus a compact label on the circular face.
+enum WidgetNotice {
+    case signedOut
+    case restricted
+    case accountChanged
+    case waitingForMacs
+    case noRecentUsage
+    case updateApp
+    case unavailable
+    case unreachable
+
+    var text: String {
+        switch self {
+        case .signedOut: "Sign into iCloud"
+        case .restricted: "iCloud restricted"
+        case .accountChanged: "iCloud account changed"
+        case .waitingForMacs: "Waiting for your Macs"
+        case .noRecentUsage: "No recent usage"
+        case .updateApp: "Update this app"
+        case .unavailable: "iCloud unavailable"
+        case .unreachable: "Can’t reach iCloud"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .signedOut, .accountChanged: "person.icloud"
+        case .restricted: "lock.icloud"
+        case .waitingForMacs, .noRecentUsage: "icloud"
+        case .updateApp: "exclamationmark.icloud"
+        case .unavailable, .unreachable: "icloud.slash"
+        }
+    }
+
+    /// One or two words that fit under the circular face's symbol.
+    var shortLabel: String {
+        switch self {
+        case .signedOut: "Sign In"
+        case .restricted: "Restricted"
+        case .accountChanged: "Account"
+        case .waitingForMacs: "Waiting"
+        case .noRecentUsage: "No Usage"
+        case .updateApp: "Update"
+        case .unavailable, .unreachable: "Offline"
+        }
+    }
+}
+
 struct UsageEntry: TimelineEntry {
     var date: Date
     var usage: WidgetUsage?
-    /// Short reason rendered when there's no usage to show (signed out, nothing synced yet).
-    var note: String?
+    /// Reason rendered when there's no usage to show (signed out, nothing synced yet).
+    var notice: WidgetNotice?
     /// The instance's configured display (long-press → Edit Widget): cost or token counts.
     var mode: UsageDisplayMode = .cost
     /// `usage` came from the cache because the refresh failed — views surface the fetch age
@@ -148,7 +198,7 @@ extension UsageEntry {
             partial: false,
             fetchedAt: now
         )
-        return UsageEntry(date: now, usage: usage, note: nil, mode: mode)
+        return UsageEntry(date: now, usage: usage, notice: nil, mode: mode)
     }
 }
 
@@ -195,28 +245,28 @@ struct UsageTimelineProvider: AppIntentTimelineProvider {
                 return UsageEntry(
                     date: now,
                     usage: nil,
-                    note: status == .noAccount ? "Sign into iCloud" : "iCloud restricted",
+                    notice: status == .noAccount ? .signedOut : .restricted,
                     mode: mode
                 )
             default:
                 // temporarilyUnavailable / couldNotDetermine (and unknown future statuses): the
                 // account is probably still there — treat like an unreachable fetch, keep cache.
                 log.info("iCloud status transiently unavailable for widget: \(String(describing: status), privacy: .public)")
-                return fallbackEntry(now: now, note: "iCloud unavailable", mode: mode)
+                return fallbackEntry(now: now, notice: .unavailable, mode: mode)
             }
             let result = try await reader.fetchUsage(now: now)
             guard accountToken == WidgetUsageCache.currentAccountToken() else {
                 WidgetUsageCache.clear()
                 log.info("iCloud account changed during widget fetch; discarding results")
-                return UsageEntry(date: now, usage: nil, note: "iCloud account changed", mode: mode)
+                return UsageEntry(date: now, usage: nil, notice: .accountChanged, mode: mode)
             }
             guard result.combined.hasData else {
                 WidgetUsageCache.clear()
                 // When payloads were skipped as unreadable, "waiting" or "no usage" would be a
                 // lie — the honest guidance is the same as the dashboard's update notice.
-                let note = result.unreadableNotice != nil ? "Update this app"
-                    : result.devices.isEmpty ? "Waiting for your Macs" : "No recent usage"
-                return UsageEntry(date: now, usage: nil, note: note, mode: mode)
+                let notice: WidgetNotice = result.unreadableNotice != nil ? .updateApp
+                    : result.devices.isEmpty ? .waitingForMacs : .noRecentUsage
+                return UsageEntry(date: now, usage: nil, notice: notice, mode: mode)
             }
             let usage = WidgetUsage(
                 combined: result.combined,
@@ -224,20 +274,20 @@ struct UsageTimelineProvider: AppIntentTimelineProvider {
                 fetchedAt: now
             )
             WidgetUsageCache.save(usage, accountToken: accountToken)
-            return UsageEntry(date: now, usage: usage, note: nil, mode: mode)
+            return UsageEntry(date: now, usage: usage, notice: nil, mode: mode)
         } catch {
             log.error("widget refresh failed: \(String(describing: error), privacy: .public)")
-            return fallbackEntry(now: now, note: "Can’t reach iCloud", mode: mode)
+            return fallbackEntry(now: now, notice: .unreachable, mode: mode)
         }
     }
 
     /// Stale beats blank when a refresh fails — but never silently: cached entries are flagged so
     /// views show the fetch age, and the cache only replays for the same iCloud account.
-    private static func fallbackEntry(now: Date, note: String, mode: UsageDisplayMode) -> UsageEntry {
+    private static func fallbackEntry(now: Date, notice: WidgetNotice, mode: UsageDisplayMode) -> UsageEntry {
         if let cached = WidgetUsageCache.load() {
-            return UsageEntry(date: now, usage: cached.reanchored(to: now), note: nil, mode: mode, stale: true)
+            return UsageEntry(date: now, usage: cached.reanchored(to: now), notice: nil, mode: mode, stale: true)
         }
-        return UsageEntry(date: now, usage: nil, note: note, mode: mode)
+        return UsageEntry(date: now, usage: nil, notice: notice, mode: mode)
     }
 }
 

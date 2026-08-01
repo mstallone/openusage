@@ -16,7 +16,7 @@ struct UsageWidgetView: View {
             default: SmallUsageView(usage: usage, mode: entry.mode, stale: entry.stale)
             }
         } else {
-            NoUsageView(note: entry.note ?? "No Data", family: family)
+            NoUsageView(notice: entry.notice ?? .noRecentUsage, family: family)
         }
     }
 }
@@ -299,33 +299,43 @@ private struct MediumUsageView: View {
 }
 
 private struct NoUsageView: View {
-    var note: String
+    var notice: WidgetNotice
     var family: WidgetFamily
 
     var body: some View {
         switch family {
         case .accessoryInline:
-            Text("Runway · \(note)")
+            Text("Runway · \(notice.text)")
         case .accessoryCircular:
+            // No room for the sentence, but the reason still shows: a per-state symbol and a
+            // compact label, so "Update" is distinguishable from "Sign In" at a glance.
             ZStack {
                 AccessoryWidgetBackground()
-                Image(systemName: "icloud")
+                VStack(spacing: 1) {
+                    Image(systemName: notice.symbol)
+                        .imageScale(.small)
+                    Text(notice.shortLabel)
+                        .font(.system(size: 9, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+                .padding(.horizontal, 4)
             }
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 1) {
                 Text("Runway")
                     .font(.caption.weight(.semibold))
                     .widgetAccentable()
-                Text(note)
+                Text(notice.text)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         default:
             VStack(spacing: 4) {
-                Image(systemName: "icloud")
+                Image(systemName: notice.symbol)
                     .foregroundStyle(.secondary)
-                Text(note)
+                Text(notice.text)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
