@@ -18,7 +18,7 @@ final class UpdaterController {
     // single isolation and break one of the two conformances under Swift 6.
     private let updaterDelegate = RunwayUpdaterDelegate()
     private let userDriverDelegate = UpdaterUserDriverDelegate()
-    private let presentationController: UpdaterPresentationController
+    private let activation: ActivationPolicyCoordinator
     private var controller: SPUStandardUpdaterController?
     private var canCheckObservation: AnyCancellable?
 
@@ -40,8 +40,8 @@ final class UpdaterController {
         set { controller?.updater.automaticallyChecksForUpdates = newValue }
     }
 
-    init(presentationController: UpdaterPresentationController = UpdaterPresentationController()) {
-        self.presentationController = presentationController
+    init(activation: ActivationPolicyCoordinator = .shared) {
+        self.activation = activation
     }
 
     /// Starts the updater if (and only if) this build ships an appcast feed. Safe to call once at launch.
@@ -61,10 +61,10 @@ final class UpdaterController {
             self?.availableUpdateVersion = nil
         }
         userDriverDelegate.onUpdateWillShow = { [weak self] in
-            self?.presentationController.bringToFront(reason: "Sparkle will show update")
+            self?.activation.acquire(.updaterUI, reason: "Sparkle will show update")
         }
         userDriverDelegate.onUpdateSessionFinished = { [weak self] in
-            self?.presentationController.returnToMenuBar()
+            self?.activation.release(.updaterUI)
         }
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,
@@ -91,7 +91,7 @@ final class UpdaterController {
         // before handing control over so the activation-policy transition cannot leave Sparkle's
         // checking window behind the currently active app. The next-runloop handoff mirrors the
         // workaround verified in sparkle-project/Sparkle#2889.
-        presentationController.bringToFront(reason: "user initiated check")
+        activation.acquire(.updaterUI, reason: "user initiated check")
         DispatchQueue.main.async {
             controller.checkForUpdates(nil)
         }
@@ -107,62 +107,6 @@ final class UpdaterController {
     /// it, so a dismissal is a snooze — not a permanent skip (that stays in Sparkle's own window).
     func dismissAvailableUpdate() {
         availableUpdateVersion = nil
-    }
-}
-
-/// Owns the narrow AppKit boundary required to present Sparkle from a dockless menu-bar app.
-///
-/// `NSApplication.activate()` is unreliable when another app is active (sparkle-project/Sparkle#2889),
-/// so user-initiated update UI deliberately uses the older API that ignores the current foreground app.
-/// The injected closures keep that behavior unit-testable without trying to automate macOS focus.
-@MainActor
-final class UpdaterPresentationController {
-    private let activationPolicy: @MainActor () -> NSApplication.ActivationPolicy
-    private let isActive: @MainActor () -> Bool
-    private let setActivationPolicy: @MainActor (NSApplication.ActivationPolicy) -> Bool
-    private let activate: @MainActor (Bool) -> Void
-
-    convenience init(application: NSApplication = .shared) {
-        self.init(
-            activationPolicy: { application.activationPolicy() },
-            isActive: { application.isActive },
-            setActivationPolicy: { application.setActivationPolicy($0) },
-            activate: { application.activate(ignoringOtherApps: $0) }
-        )
-    }
-
-    init(
-        activationPolicy: @escaping @MainActor () -> NSApplication.ActivationPolicy,
-        isActive: @escaping @MainActor () -> Bool,
-        setActivationPolicy: @escaping @MainActor (NSApplication.ActivationPolicy) -> Bool,
-        activate: @escaping @MainActor (Bool) -> Void
-    ) {
-        self.activationPolicy = activationPolicy
-        self.isActive = isActive
-        self.setActivationPolicy = setActivationPolicy
-        self.activate = activate
-    }
-
-    func bringToFront(reason: String) {
-        let beforePolicy = activationPolicy()
-        let beforeActive = isActive()
-        let policyChanged = setActivationPolicy(.regular)
-        activate(true)
-        AppLog.info(
-            .updates,
-            "foreground updater (reason=\(reason), policy=\(beforePolicy.rawValue)->\(activationPolicy().rawValue), " +
-                "active=\(beforeActive)->\(isActive()), policyChanged=\(policyChanged))"
-        )
-    }
-
-    func returnToMenuBar() {
-        let beforePolicy = activationPolicy()
-        let policyChanged = setActivationPolicy(.accessory)
-        AppLog.info(
-            .updates,
-            "finish updater presentation (policy=\(beforePolicy.rawValue)->\(activationPolicy().rawValue), " +
-                "active=\(isActive()), policyChanged=\(policyChanged))"
-        )
     }
 }
 

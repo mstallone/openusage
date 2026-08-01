@@ -12,5 +12,17 @@ struct RunwayApp: App {
         Settings {
             EmptyView()
         }
+        .commands {
+            // The app menu is visible whenever the app is promoted to `.regular` (the Settings
+            // window or a Sparkle update session is up). The standard Runway → Settings… item (⌘,)
+            // would open this empty SwiftUI scene as a blank window — replace it so the one menu
+            // entry point routes to the real Settings window instead.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    SettingsWindowLink.open()
+                }
+                .keyboardShortcut(",")
+            }
+        }
     }
 }

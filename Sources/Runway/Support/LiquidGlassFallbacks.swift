@@ -17,7 +17,7 @@ import SwiftUI
 /// interactive glass controls — never the content cards.
 ///
 /// Keeping every `#available(macOS 26, *)` check in this one file means the views (`HeaderView`,
-/// `SettingsScreen`, `DashboardView`) stay free of inline availability branches.
+/// `DashboardView`, the Settings window panes) stay free of inline availability branches.
 extension View {
     /// Liquid Glass button style on macOS 26, the matching bordered style on macOS 15.
     ///

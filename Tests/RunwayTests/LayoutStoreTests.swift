@@ -1466,12 +1466,6 @@ final class LayoutStoreTests: XCTestCase {
 
         store.screen = .dashboard
         XCTAssertNil(store.customizeProviderID, "leaving Customize resets the L2 selection back to the list")
-
-        // A direct jump to Settings also clears it — never strand a detail selection on another screen.
-        store.screen = .customize
-        store.customizeProviderID = "codex"
-        store.screen = .settings
-        XCTAssertNil(store.customizeProviderID)
     }
 
     // MARK: - Share confirmation

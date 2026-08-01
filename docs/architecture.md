@@ -79,9 +79,13 @@ macOS menu-bar apps live in an `NSStatusItem`. Runway shows its content in a cus
 `NSPanel` rather than an `NSPopover`: a popover's window is only key while the whole app is active, and
 activating a menu-bar (accessory) app is asynchronous and unreliable on recent macOS, so a popover
 ends up unable to receive keystrokes until a second click. A non-activating `NSPanel` whose
-`canBecomeKey` is `true` takes key focus the instant it opens, so keyboard navigation and the Settings
-shortcut recorder just work. `App/` owns that AppKit layer and hosts the SwiftUI views inside it, so
-the bulk of the UI can stay plain SwiftUI.
+`canBecomeKey` is `true` takes key focus the instant it opens, so keyboard navigation just works.
+`App/` owns that AppKit layer and hosts the SwiftUI views inside it, so the bulk of the UI can stay
+plain SwiftUI.
+
+Settings is a separate, ordinary window (`App/SettingsWindowController.swift`) rather than a popover
+screen: a preferences-style toolbar window that is created lazily on first open, mounts only the
+active tab's SwiftUI pane, and is torn down entirely on close so it costs nothing while hidden.
 
 ## Platform support
 

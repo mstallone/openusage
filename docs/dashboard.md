@@ -69,7 +69,7 @@ The image is a flexible-height PNG using the app's look — the provider's mark 
 
 ## Footer
 
-The compact bar pinned to the bottom of the popover — it stays glued to the panel's bottom edge as the popover grows and shrinks. On the left: the app version. On the right: a live countdown to the next update (like `5m`) you can click (or press **⌘R**) to refresh right away, and a **gear** menu button. The gear holds everything in one place — **Customize**, **Settings**, **Share Screenshot** (submenu of providers), **Check for Updates…**, **About Runway**, and **Quit Runway**.
+The compact bar pinned to the bottom of the popover — it stays glued to the panel's bottom edge as the popover grows and shrinks. On the left: the app version. On the right: a live countdown to the next update (like `5m`) you can click (or press **⌘R**) to refresh right away, and a **gear** menu button. The gear holds everything in one place — **Customize**, **Settings** (opens the [Settings window](settings.md)), **Share Screenshot** (submenu of providers), **Check for Updates…**, **About Runway**, and **Quit Runway**.
 
 ## Customize
 
@@ -91,14 +91,14 @@ When Runway ships a new default metric, existing layouts get it once. If you tur
 
 | Key | Action |
 |---|---|
-| Return | From the dashboard, open Customize; from a provider detail, return to the provider list; from the provider list or Settings, return to the dashboard |
-| Esc | From a provider detail, return to the provider list; from the provider list or Settings, return to the dashboard; from the dashboard, close the popover |
+| Return | From the dashboard, open Customize; from a provider detail, return to the provider list; from the provider list, return to the dashboard |
+| Esc | From a provider detail, return to the provider list; from the provider list, return to the dashboard; from the dashboard, close the popover |
 | ⌘Z | Undo the last customization change (app-wide; repeat to step back) |
-| ⌘R | Refresh now from the dashboard or Settings (skips the cache) |
-| ⌘, | Open / close Settings (in the popover) |
+| ⌘R | Refresh now from the dashboard (skips the cache) |
+| ⌘, | Open the [Settings window](settings.md) (closes the popover) |
 
 A global shortcut (recorded in Settings) toggles the popover from anywhere.
 
 ## Closing
 
-Closing the popover resets navigation state: scroll position returns to the top, Customize / Settings close, and every provider card collapses.
+Closing the popover resets navigation state: scroll position returns to the top, Customize closes, and every provider card collapses.

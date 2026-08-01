@@ -1,6 +1,10 @@
 # Settings
 
-Settings lives inside the popover — there is no separate window. Open it from the footer's **gear** menu, with ⌘, while the popover is showing, or by right-clicking the menu bar icon and choosing Settings. The dashboard slides over to the Settings screen, which carries a back button in its top-left corner. Go back with that button, the ⌘, shortcut, or Esc (Esc always backs out to the dashboard first — pressing it again closes the popover).
+Settings opens in its own window — separate from the popover, so the dashboard stays a quick glance and Settings gets room to breathe. Open it from the popover footer's **gear** menu, with ⌘, while the popover is showing, or by right-clicking the menu bar icon and choosing Settings. Opening Settings closes the popover; close the window with the red close button, Esc, or ⌘W.
+
+The window is organized into four tabs — **General**, **Appearance**, **Notifications**, and **Advanced** — using the classic macOS preferences toolbar. It remembers the tab you were on, its size, and its position, and it only exists while it's open: a closed Settings window uses no memory or CPU at all, and reopening it is instant.
+
+While Settings is open, Runway briefly appears in the Dock (the same as during an [update session](updates.md)) — that's what reliably brings the window to the front of a menu-bar-only app. It leaves the Dock again when you close the window.
 
 ## General
 
@@ -12,7 +16,7 @@ Settings lives inside the popover — there is no separate window. Open it from 
 
 **Upgrading from the legacy (pre-0.7) edition:** the old edition managed start-on-login with its own launcher file, which an in-place update left behind. That leftover could start the app a second time at every login and showed up in System Settings → Login Items under the signing company's name ("SUNSTORY LLC") instead of Runway. The app now removes it automatically on launch — only when the file verifiably points at Runway itself — so login starts exactly one copy, controlled by the Launch at Login toggle above.
 
-## iCloud Sync
+### iCloud Sync
 
 **Sync Across Macs** is on by default (turn it off here to keep this Mac local-only). It shares
 normalized Runway history and each
@@ -22,16 +26,22 @@ five-minute write cadence and each device's relative **Updated** time; it also r
 iCloud, loading, write, and malformed-record states. See [iCloud Sync](icloud-sync.md) for what is
 included and which surfaces use the combined values.
 
+### Privacy
+
+| Setting | Options | What it does |
+|---|---|---|
+| Hide From Screen Share | On / Off | Off (default). On replaces the menu bar strip with the Runway icon and wordmark while your screen is being shared or recorded, and restores your starred metrics the moment the capture ends. See [Menu bar](menu-bar.md#hiding-usage-while-screen-sharing). |
+
 ## Appearance
 
 | Setting | Options | What it does |
 |---|---|---|
 | Icon Style | Text / Bars | How starred metrics render in the menu bar. See [Menu bar](menu-bar.md). |
-| Theme | System / Light / Dark | App-wide appearance override for the popover. |
+| Theme | System / Light / Dark | App-wide appearance override for the popover and the Settings window. |
 | Time Format | Auto / 12-hour / 24-hour | How exact times read (e.g. "Resets today at 6:38 PM" vs "18:38"). Auto follows the system. |
 | Increase Transparency | Off / On | Off (default) keeps the popover a solid panel. On makes it translucent so your desktop shows through, while keeping the numbers and footer controls legible with adaptive frosted surfaces. It pauses automatically when you have the macOS **Reduce Transparency** or **Increase Contrast** accessibility setting turned on (a note explains why), so it never works against those preferences. |
 
-## Usage Display
+### Usage Display
 
 | Setting | Options | What it does |
 |---|---|---|
@@ -53,13 +63,15 @@ Alerts fire on a new crossing or pace worsening, then stay deduplicated while th
 
 All three alerts default off. The first time you turn one on, Runway asks for notification permission; if you decline (or turn notifications off for Runway in System Settings later), a warning mark appears on the Notifications header and an "Open System Settings" button shows under the toggles so you can re-enable them. A notification's title is the alert name, its subtitle names the provider and metric, and its body is the plain-language verdict. Tapping an alert opens the popover on the dashboard.
 
-## Privacy
+## Advanced
+
+### Command Line
 
 | Setting | Options | What it does |
 |---|---|---|
-| Hide From Screen Share | On / Off | Off (default). On replaces the menu bar strip with the Runway icon and wordmark while your screen is being shared or recorded, and restores your starred metrics the moment the capture ends. See [Menu bar](menu-bar.md#hiding-usage-while-screen-sharing). |
+| Terminal Helper | Install / Uninstall | Adds a global `runway` command agents can use to monitor limits. See [CLI](cli.md). |
 
-## Advanced
+### Logging
 
 | Setting | Options | What it does |
 |---|---|---|
@@ -69,7 +81,7 @@ All three alerts default off. The first time you turn one on, Runway asks for no
 
 See [Logging](logging.md) for the full behavior: subsystem tags, the file size cap, and the guarantee that secrets are never written.
 
-## Updates
+### Updates
 
 The Updates section appears in official packaged builds that include the signed update feed. Local
 developer builds do not show it.
