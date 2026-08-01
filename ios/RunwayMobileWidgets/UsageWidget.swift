@@ -24,14 +24,17 @@ struct WidgetUsage: Codable {
 }
 
 extension WidgetUsage {
-    init(combined: CombinedUsage, unreadablePayloads: Bool, fetchedAt: Date) {
+    /// `unreadableHistories` (not the app's combined unreadable notice): the widget renders only
+    /// the history-derived totals, so an unreadable snapshot must not flag complete totals as
+    /// undercounting.
+    init(combined: CombinedUsage, unreadableHistories: Bool, fetchedAt: Date) {
         self.init(
             today: combined.today.map(Day.init),
             yesterday: combined.yesterday.map(Day.init),
             last30Cost: combined.last30Cost,
             last30Tokens: combined.last30Tokens,
             trend: combined.trend.map(Day.init),
-            partial: unreadablePayloads || !combined.unknownModels.isEmpty,
+            partial: unreadableHistories || !combined.unknownModels.isEmpty,
             fetchedAt: fetchedAt
         )
     }
@@ -262,15 +265,16 @@ struct UsageTimelineProvider: AppIntentTimelineProvider {
             }
             guard result.combined.hasData else {
                 WidgetUsageCache.clear()
-                // When payloads were skipped as unreadable, "waiting" or "no usage" would be a
-                // lie — the honest guidance is the same as the dashboard's update notice.
-                let notice: WidgetNotice = result.unreadableNotice != nil ? .updateApp
+                // When history payloads were skipped as unreadable, "waiting" or "no usage"
+                // would be a lie — the honest guidance is the dashboard's update notice.
+                // Unreadable snapshots don't count here: they never feed the widget's totals.
+                let notice: WidgetNotice = result.unreadableHistories > 0 ? .updateApp
                     : result.devices.isEmpty ? .waitingForMacs : .noRecentUsage
                 return UsageEntry(date: now, usage: nil, notice: notice, mode: mode)
             }
             let usage = WidgetUsage(
                 combined: result.combined,
-                unreadablePayloads: result.unreadableNotice != nil,
+                unreadableHistories: result.unreadableHistories > 0,
                 fetchedAt: now
             )
             WidgetUsageCache.save(usage, accountToken: accountToken)

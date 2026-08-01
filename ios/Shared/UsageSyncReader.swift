@@ -57,6 +57,10 @@ struct UsageSyncReader: Sendable {
         var devices: [DeviceUsage] = []
         var combined = CombinedUsage(today: nil, yesterday: nil, last30Cost: nil, last30Tokens: 0, trend: [])
         var unreadableNotice: String?
+        /// How many history payloads specifically were skipped. `combined` is built from
+        /// histories alone, so only these make its totals undercount — an unreadable snapshot
+        /// (counted in `unreadableNotice` for the app's device sections) does not.
+        var unreadableHistories = 0
     }
 
     private let log: Logger
@@ -130,27 +134,31 @@ struct UsageSyncReader: Sendable {
         let decoder = SyncWire.decoder()
         var loaded: [DeviceUsage] = []
         var histories: [HistoryDocument] = []
-        var unreadable = 0
+        var unreadableHistories = 0
+        var unreadableSnapshots = 0
         for record in records {
             // The two payloads are independent: a device whose snapshot is newer than this app
             // can read must still contribute its valid history to the combined totals (and vice
             // versa). Each unreadable half counts toward the update notice on its own — Macs
-            // always write both, even when the history has no providers.
+            // always write both, even when the history has no providers. The kinds are tracked
+            // separately: only missing histories undercount the combined totals.
             let history = validatedHistory(from: record, decoder: decoder)
-            if let history { histories.append(history) } else { unreadable += 1 }
+            if let history { histories.append(history) } else { unreadableHistories += 1 }
             if let snapshot = decodePayload(SnapshotDocument.self, record: record, key: Self.snapshotKey, decoder: decoder),
                SyncWire.snapshotSchemas.contains(snapshot.schema) {
                 loaded.append(DeviceUsage(snapshot: snapshot, history: history))
             } else {
-                unreadable += 1
+                unreadableSnapshots += 1
             }
         }
+        let unreadable = unreadableHistories + unreadableSnapshots
         let notice = unreadable == 0 ? nil :
             "Some synced usage couldn’t be read here (\(unreadable) newer or unreadable payload\(unreadable == 1 ? "" : "s")). Update Runway on your Macs and this app."
         return FetchResult(
             devices: loaded.sorted { $0.snapshot.updatedAt > $1.snapshot.updatedAt },
             combined: Self.combine(histories, now: now),
-            unreadableNotice: notice
+            unreadableNotice: notice,
+            unreadableHistories: unreadableHistories
         )
     }
 
