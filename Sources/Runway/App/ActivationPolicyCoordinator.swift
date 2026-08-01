@@ -56,13 +56,21 @@ final class ActivationPolicyCoordinator {
     func acquire(_ holder: Holder, reason: String) {
         holders.insert(holder)
         let before = activationPolicy()
-        _ = setActivationPolicy(.regular)
+        let accepted = setActivationPolicy(.regular)
+        // Presentation continues either way: activation and window ordering are the best remaining
+        // fallback when the policy transition is refused, so a refusal is loud in the log (per the
+        // error-handling rules) but never blocks showing the window.
         activate(true)
-        AppLog.info(
-            .lifecycle,
-            "foreground acquire (\(holder.rawValue): \(reason), " +
-                "policy=\(before.rawValue)->\(activationPolicy().rawValue), holds=\(holders.count))"
-        )
+        let transition = "policy=\(before.rawValue)->\(activationPolicy().rawValue), holds=\(holders.count)"
+        if accepted {
+            AppLog.info(.lifecycle, "foreground acquire (\(holder.rawValue): \(reason), \(transition))")
+        } else {
+            AppLog.warn(
+                .lifecycle,
+                "foreground acquire (\(holder.rawValue): \(reason), \(transition)) — " +
+                    "setActivationPolicy(.regular) refused; window may open behind the frontmost app"
+            )
+        }
     }
 
     /// Releases the surface's hold. The app returns to the dockless `.accessory` policy only when no
@@ -74,7 +82,14 @@ final class ActivationPolicyCoordinator {
             AppLog.info(.lifecycle, "foreground release (\(holder.rawValue)); still held by \(remaining)")
             return
         }
-        _ = setActivationPolicy(.accessory)
-        AppLog.info(.lifecycle, "foreground release (\(holder.rawValue)); back to accessory")
+        if setActivationPolicy(.accessory) {
+            AppLog.info(.lifecycle, "foreground release (\(holder.rawValue)); back to accessory")
+        } else {
+            AppLog.warn(
+                .lifecycle,
+                "foreground release (\(holder.rawValue)); setActivationPolicy(.accessory) refused — " +
+                    "Dock icon may linger until the next policy transition"
+            )
+        }
     }
 }

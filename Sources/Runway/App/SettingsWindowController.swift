@@ -1,16 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// Lets views anywhere in the app — the popover footer's gear menu, the Customize cross-link, the
-/// ⌘, key monitor, the status item's context menu — open the standalone Settings window without
-/// knowing who owns it. Installed by `StatusItemController` at launch, mirroring the
-/// `MenuBarPopover` handler pattern.
+/// Lets callers anywhere in the app — the popover footer's gear menu, the Customize cross-link, the
+/// ⌘, key monitor, the status item's context menu, and the app menu's Settings… item (in the
+/// RunwayApp target, hence `public`) — open the standalone Settings window without knowing who owns
+/// it. Installed by `StatusItemController` at launch, mirroring the `MenuBarPopover` handler pattern.
 @MainActor
-enum SettingsWindowLink {
+public enum SettingsWindowLink {
     /// Closes the popover (when open) and shows the Settings window.
     static var openHandler: (() -> Void)?
 
-    static func open() {
+    public static func open() {
         openHandler?()
     }
 }
@@ -256,8 +256,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
     }
 
     /// Shifts a frame back inside the usable screen: lifts it when its bottom would fall below the
-    /// visible area (a taller pane on a low-positioned window) and keeps the title bar under the
-    /// menu bar. Height is already capped to fit, so both edges can always be satisfied.
+    /// visible area (a taller pane on a low-positioned window), keeps the title bar under the menu
+    /// bar, and pulls it back horizontally (a saved position from a disconnected or rearranged
+    /// display would otherwise reopen the non-resizable window fully off-screen — AppKit's
+    /// order-front constraint doesn't cover X). Height is already capped to fit; on a display
+    /// narrower than the window the left edge wins.
     private func constrainedToScreen(_ rawFrame: NSRect) -> NSRect {
         guard let visible = (window?.screen ?? NSScreen.main)?.visibleFrame else { return rawFrame }
         var frame = rawFrame
@@ -267,6 +270,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         if frame.maxY > visible.maxY {
             frame.origin.y = visible.maxY - frame.height
         }
+        frame.origin.x = max(min(frame.minX, visible.maxX - frame.width), visible.minX)
         return frame
     }
 
