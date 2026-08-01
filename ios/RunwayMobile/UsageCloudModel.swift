@@ -133,27 +133,24 @@ final class UsageCloudModel {
     /// drop that device (or undercount "Across Your Macs" when only its history payload is newer).
     private func apply(_ records: [CKRecord]) -> String? {
         var loaded: [DeviceUsage] = []
+        var histories: [HistoryDocument] = []
         var unreadable = 0
         for record in records {
-            guard let snapshot = decodePayload(SnapshotDocument.self, record: record, key: Self.snapshotKey),
-                  SyncWire.snapshotSchemas.contains(snapshot.schema)
-            else {
-                unreadable += 1
-                continue
-            }
-            var history: HistoryDocument?
-            if let decoded = validatedHistory(from: record) {
-                history = decoded
+            // The two payloads are independent: a device whose snapshot is newer than this app
+            // can read must still contribute its valid history to the combined totals (and vice
+            // versa). Each unreadable half counts toward the update notice on its own — Macs
+            // always write both, even when the history has no providers.
+            let history = validatedHistory(from: record)
+            if let history { histories.append(history) } else { unreadable += 1 }
+            if let snapshot = decodePayload(SnapshotDocument.self, record: record, key: Self.snapshotKey),
+               SyncWire.snapshotSchemas.contains(snapshot.schema) {
+                loaded.append(DeviceUsage(snapshot: snapshot, history: history))
             } else {
-                // Macs always write the history payload (even when empty), so a readable snapshot
-                // with no readable history means the device is silently absent from the combined
-                // totals — keep showing its snapshot, but say so.
                 unreadable += 1
             }
-            loaded.append(DeviceUsage(snapshot: snapshot, history: history))
         }
         devices = loaded.sorted { $0.snapshot.updatedAt > $1.snapshot.updatedAt }
-        combined = Self.combine(devices)
+        combined = Self.combine(histories)
         guard unreadable > 0 else { return nil }
         return "Some synced usage couldn’t be read here (\(unreadable) newer or unreadable payload\(unreadable == 1 ? "" : "s")). Update Runway on your Macs and this app."
     }
@@ -207,7 +204,7 @@ final class UsageCloudModel {
     }
 
     /// Day-sums every device's series inside the Mac's 30-day window (today + 30 previous days).
-    private static func combine(_ devices: [DeviceUsage], now: Date = Date()) -> CombinedUsage {
+    private static func combine(_ histories: [HistoryDocument], now: Date = Date()) -> CombinedUsage {
         // Wire day keys are Gregorian with Latin digits regardless of device settings; only the
         // time zone stays local so "today" matches the user's day boundary.
         let calendar = Calendar(identifier: .gregorian)
@@ -226,8 +223,8 @@ final class UsageCloudModel {
         var cost: [String: Double] = [:]
         var sawCost: Set<String> = []
         var unknownModels: Set<String> = []
-        for device in devices {
-            for history in (device.history?.providers ?? [:]).values {
+        for document in histories {
+            for history in document.providers.values {
                 for (day, names) in history.unknownModelsByDay ?? [:] where window.contains(day) {
                     unknownModels.formUnion(names)
                 }

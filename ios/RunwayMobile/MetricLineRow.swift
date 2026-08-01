@@ -9,17 +9,20 @@ struct MetricLineRow: View {
     var body: some View {
         switch line {
         case .progress(let label, let used, let limit, let format, let resetsAt):
+            // The wire carries raw consumption; render REMAINING (Runway's default meter style),
+            // labeled as such, so the phone and a default-configured Mac read the same way.
+            let remaining = max(limit - used, 0)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(label)
                     Spacer()
-                    Text(UsageFormat.progress(used: used, limit: limit, format: format))
+                    Text(UsageFormat.remaining(remaining, limit: limit, format: format))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
                 .font(.subheadline)
                 // Divide by the real limit — fractional caps ($0.50) are valid; only guard zero.
-                ProgressView(value: limit > 0 ? min(max(used / limit, 0), 1) : 0)
+                ProgressView(value: limit > 0 ? min(max(remaining / limit, 0), 1) : 0)
                 if let resetsAt, resetsAt > .now {
                     Text("Resets \(resetsAt, format: .relative(presentation: .named))")
                         .font(.caption2)

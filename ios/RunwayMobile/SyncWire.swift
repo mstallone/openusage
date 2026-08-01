@@ -184,13 +184,13 @@ enum UsageFormat {
         }
     }
 
-    static func progress(used: Double, limit: Double, format: ProgressFormatWire) -> String {
+    static func remaining(_ remaining: Double, limit: Double, format: ProgressFormatWire) -> String {
         switch format.kind {
-        case .percent: return String(format: "%.0f%%", used)
-        case .dollars: return "\(dollars(used)) of \(dollars(limit))"
+        case .percent: return String(format: "%.0f%% left", limit > 0 ? remaining / limit * 100 : 0)
+        case .dollars: return "\(dollars(remaining)) of \(dollars(limit)) left"
         case .count:
             let suffix = format.suffix.map { " \($0)" } ?? ""
-            return "\(tokens(used)) of \(tokens(limit))\(suffix)"
+            return "\(tokens(remaining)) of \(tokens(limit))\(suffix) left"
         }
     }
 }
