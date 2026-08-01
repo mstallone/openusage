@@ -268,8 +268,10 @@ struct UsageTimelineProvider: AppIntentTimelineProvider {
                 // When history payloads were skipped as unreadable, "waiting" or "no usage"
                 // would be a lie — the honest guidance is the dashboard's update notice.
                 // Unreadable snapshots don't count here: they never feed the widget's totals.
+                // "Waiting" only when nothing proves a Mac has synced — a readable history
+                // counts as proof even when its snapshot didn't decode into `devices`.
                 let notice: WidgetNotice = result.unreadableHistories > 0 ? .updateApp
-                    : result.devices.isEmpty ? .waitingForMacs : .noRecentUsage
+                    : result.devices.isEmpty && result.historyCount == 0 ? .waitingForMacs : .noRecentUsage
                 return UsageEntry(date: now, usage: nil, notice: notice, mode: mode)
             }
             let usage = WidgetUsage(

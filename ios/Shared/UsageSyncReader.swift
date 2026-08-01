@@ -61,6 +61,9 @@ struct UsageSyncReader: Sendable {
         /// histories alone, so only these make its totals undercount — an unreadable snapshot
         /// (counted in `unreadableNotice` for the app's device sections) does not.
         var unreadableHistories = 0
+        /// How many history payloads decoded — evidence a Mac has synced even when no snapshot
+        /// decoded (`devices` requires a readable snapshot, so it can be empty regardless).
+        var historyCount = 0
     }
 
     private let log: Logger
@@ -158,7 +161,8 @@ struct UsageSyncReader: Sendable {
             devices: loaded.sorted { $0.snapshot.updatedAt > $1.snapshot.updatedAt },
             combined: Self.combine(histories, now: now),
             unreadableNotice: notice,
-            unreadableHistories: unreadableHistories
+            unreadableHistories: unreadableHistories,
+            historyCount: histories.count
         )
     }
 
