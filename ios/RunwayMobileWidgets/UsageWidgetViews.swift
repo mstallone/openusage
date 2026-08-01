@@ -72,14 +72,16 @@ private struct InlineUsageView: View {
     var stale: Bool
 
     var body: some View {
-        // The one line of context-free text: tokens need their unit spelled out here, and a
-        // cached value carries its fetch age.
-        let value = Text("Runway · Today \(dayValue(usage.today, mode: mode))\(mode == .tokens ? " tok" : "")")
-        if stale {
-            value + Text(" · ") + Text(usage.fetchedAt, format: .relative(presentation: .numeric, unitsStyle: .abbreviated))
-        } else {
-            value
+        // The one line of context-free text: tokens need their unit spelled out here, an
+        // incomplete total carries the warning glyph, and a cached value carries its fetch age.
+        var line = Text("Runway · Today \(dayValue(usage.today, mode: mode))\(mode == .tokens ? " tok" : "")")
+        if usage.partial {
+            line = line + Text(" ") + Text(Image(systemName: "exclamationmark.triangle.fill"))
         }
+        if stale {
+            line = line + Text(" · ") + Text(usage.fetchedAt, format: .relative(presentation: .numeric, unitsStyle: .abbreviated))
+        }
+        return line
     }
 }
 
@@ -92,19 +94,11 @@ private struct CircularUsageView: View {
         ZStack {
             AccessoryWidgetBackground()
             VStack(spacing: 0) {
-                // A cached value trades the "TODAY" label for its fetch age — the only room this
-                // family has to say the number isn't current.
-                if stale {
-                    FetchAgeText(date: usage.fetchedAt)
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                } else {
-                    Text("TODAY")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
+                caption
+                    .font(.system(size: stale ? 8 : 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
                 Text(dayValue(usage.today, mode: mode))
                     .font(.system(.caption, design: .rounded).weight(.bold))
                     .monospacedDigit()
@@ -113,6 +107,18 @@ private struct CircularUsageView: View {
             }
             .padding(.horizontal, 4)
         }
+    }
+
+    /// "TODAY" normally, the fetch age when serving cached numbers — plus the warning glyph when
+    /// the total is known to undercount, so even this face never presents partial data as complete.
+    private var caption: Text {
+        var text = stale
+            ? Text(usage.fetchedAt, format: .relative(presentation: .numeric, unitsStyle: .abbreviated))
+            : Text("TODAY")
+        if usage.partial {
+            text = text + Text(" ") + Text(Image(systemName: "exclamationmark.triangle.fill"))
+        }
+        return text
     }
 }
 
