@@ -87,14 +87,14 @@ struct ProgressFormatWire: Decodable {
 enum MetricLineWire: Decodable {
     case text(label: String, value: String, subtitle: String?)
     case values(label: String, values: [MetricValueWire], unknownModels: [String], expiriesAt: [Date])
-    case progress(label: String, used: Double, limit: Double, format: ProgressFormatWire, resetsAt: Date?)
+    case progress(label: String, used: Double, limit: Double, format: ProgressFormatWire, resetsAt: Date?, periodDurationMs: Int?)
     case badge(label: String, text: String, subtitle: String?)
     case chart(label: String, points: [ChartPointWire], note: String?)
     case unsupported
 
     var label: String? {
         switch self {
-        case .text(let label, _, _), .values(let label, _, _, _), .progress(let label, _, _, _, _),
+        case .text(let label, _, _), .values(let label, _, _, _), .progress(let label, _, _, _, _, _),
              .badge(let label, _, _), .chart(let label, _, _):
             return label
         case .unsupported:
@@ -103,7 +103,7 @@ enum MetricLineWire: Decodable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, label, value, values, used, limit, format, resetsAt, unknownModels, expiriesAt, text, points, note, subtitle
+        case type, label, value, values, used, limit, format, resetsAt, periodDurationMs, unknownModels, expiriesAt, text, points, note, subtitle
     }
 
     init(from decoder: Decoder) throws {
@@ -129,7 +129,8 @@ enum MetricLineWire: Decodable {
                 used: try container.decode(Double.self, forKey: .used),
                 limit: try container.decode(Double.self, forKey: .limit),
                 format: try container.decode(ProgressFormatWire.self, forKey: .format),
-                resetsAt: try container.decodeIfPresent(Date.self, forKey: .resetsAt)
+                resetsAt: try container.decodeIfPresent(Date.self, forKey: .resetsAt),
+                periodDurationMs: try container.decodeIfPresent(Int.self, forKey: .periodDurationMs)
             )
         case "badge":
             self = .badge(
@@ -182,6 +183,12 @@ enum UsageFormat {
         case .percent: return String(format: "%.0f%%", value.number)
         case .count: return tokens(value.number) + (value.label.map { " \($0)" } ?? "")
         }
+    }
+
+    /// "5h" / "7d" cadence for period-only meters (no exact reset instant on the wire).
+    static func period(ms: Int) -> String {
+        let hours = Double(ms) / 3_600_000
+        return hours < 48 ? "\(Int(hours.rounded()))h" : "\(Int((hours / 24).rounded()))d"
     }
 
     static func remaining(_ remaining: Double, limit: Double, format: ProgressFormatWire) -> String {

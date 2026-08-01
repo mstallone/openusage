@@ -8,7 +8,7 @@ struct MetricLineRow: View {
 
     var body: some View {
         switch line {
-        case .progress(let label, let used, let limit, let format, let resetsAt):
+        case .progress(let label, let used, let limit, let format, let resetsAt, let periodDurationMs):
             // The wire carries raw consumption; render REMAINING (Runway's default meter style),
             // labeled as such, so the phone and a default-configured Mac read the same way.
             let remaining = max(limit - used, 0)
@@ -25,6 +25,11 @@ struct MetricLineRow: View {
                 ProgressView(value: limit > 0 ? min(max(remaining / limit, 0), 1) : 0)
                 if let resetsAt, resetsAt > .now {
                     Text("Resets \(resetsAt, format: .relative(presentation: .named))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if let periodDurationMs, periodDurationMs > 0 {
+                    // Period-only meters (no exact reset instant) still show their cadence.
+                    Text("Resets every \(UsageFormat.period(ms: periodDurationMs))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
