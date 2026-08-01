@@ -128,13 +128,13 @@ final class CopilotProvider: ProviderRuntime {
                         )
                     ]
                 case .temporarilyUnavailable:
-                    lines = [
-                        .badge(
-                            label: "Organization Usage",
-                            text: "Organization Usage Unavailable",
-                            subtitle: "GitHub billing could not be reached. Try again later."
-                        )
-                    ]
+                    // A transient billing outage (rate limit, 5xx) must not overwrite good org
+                    // numbers with an "unavailable" placeholder: failing the refresh keeps the
+                    // previous snapshot on screen with the standard staleness/warning treatment.
+                    return ProviderSnapshot.error(
+                        provider: provider,
+                        error: CopilotUsageError.orgBillingUnavailable
+                    )
                 }
             }
 
@@ -169,6 +169,11 @@ final class CopilotProvider: ProviderRuntime {
         case usage([MetricLine])
         case empty([MetricLine])
         case noAssociation
+        /// The token cannot see enterprise associations at all (missing scope, or the viewer simply
+        /// has none). Says nothing about whether the seat org's own report is trustworthy.
+        case discoveryDenied
+        /// An enterprise association was *proven* but its usage is unreadable — the one case where an
+        /// org-level empty report must not stand in for possibly-consolidated enterprise usage.
         case managed
         case temporarilyUnavailable
     }
@@ -346,11 +351,16 @@ final class CopilotProvider: ProviderRuntime {
                 return .usage(lines)
             case .empty(let lines):
                 return .empty(lines)
-            case .noAssociation:
+            case .noAssociation, .discoveryDenied:
+                // No enterprise claims the seat org (or the token can't see enterprises at all).
+                // Consolidated billing would have made the org endpoint 404, so an associated seat
+                // org's readable empty report below is authoritative — this is every business org at
+                // the start of a billing month, which must read as zero credits, not as "managed".
                 break
             case .managed:
-                // Without enterprise visibility, an empty org report cannot prove that consolidated
-                // usage is zero. Keep the honest managed state instead of publishing false totals.
+                // A proven enterprise association with unreadable usage: an empty org report cannot
+                // prove that consolidated usage is zero. Keep the honest managed state instead of
+                // publishing false totals.
                 if emptyCandidate != nil && !sawTransientFailure {
                     return .managed
                 }
@@ -383,7 +393,9 @@ final class CopilotProvider: ProviderRuntime {
         case .noAssociation:
             return .noAssociation
         case .managed:
-            return .managed
+            // Discovery-level denial: the token can't list enterprises, so nothing was proven about
+            // the seat org's billing home. The caller decides what its org-level evidence is worth.
+            return .discoveryDenied
         case .temporarilyUnavailable:
             return .temporarilyUnavailable
         }

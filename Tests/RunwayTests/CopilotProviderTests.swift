@@ -914,7 +914,7 @@ final class CopilotProviderTests: XCTestCase {
         })
     }
 
-    func testTransientGraphQLErrorShowsOrganizationUsageUnavailable() async {
+    func testTransientGraphQLErrorFailsRefreshInsteadOfReplacingData() async {
         var rateLimited = ok([
             "errors": [[
                 "type": "RATE_LIMITED",
@@ -931,14 +931,14 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        // A transient outage fails the refresh (the store keeps the previous snapshot) rather than
+        // publishing an "unavailable" placeholder over good numbers.
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
-    func testRateLimitedGraphQL403ShowsOrganizationUsageUnavailable() async {
+    func testRateLimitedGraphQL403FailsRefreshInsteadOfReplacingData() async {
         let rateLimited = HTTPResponse(
             statusCode: 403,
             headers: ["x-ratelimit-remaining": "0"],
@@ -953,14 +953,12 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
-    func testRateLimitedGraphQLOrganizationPageShowsOrganizationUsageUnavailable() async {
+    func testRateLimitedGraphQLOrganizationPageFailsRefreshInsteadOfReplacingData() async {
         let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
         let rateLimited = HTTPResponse(
             statusCode: 403,
@@ -988,14 +986,16 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(http.requests.filter { $0.url.path == "/graphql" }.count, 2)
     }
 
-    func testGraphQLAuthorizationErrorKeepsManagedOrganizationState() async {
+    func testGraphQLAuthorizationErrorFallsBackToSeatOrgEmptyReport() async {
+        // The month-rollover regression: at the start of a billing month the seat org legitimately
+        // reports zero usage. A token that can't see enterprise associations at all must not turn
+        // that readable zero report into "Managed by Your Organization" — consolidated billing would
+        // have made the org endpoint 404 instead of answering.
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
             ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
@@ -1005,6 +1005,29 @@ final class CopilotProviderTests: XCTestCase {
                     "message": "Resource not accessible by integration"
                 ]]
             ]))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
+    }
+
+    func testProvenEnterpriseWithUnreadableUsageKeepsManagedState() async {
+        // GraphQL proves octo-enterprise owns the seat org, but its usage endpoint is forbidden. The
+        // org-level empty report cannot rule out consolidated enterprise usage here, so the honest
+        // managed state must survive the empty-report fallback above.
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", ok(makeEnterpriseMembershipBody(
+                enterprises: [("octo-enterprise", ["acme"])]
+            ))),
+            ("/enterprises/octo-enterprise/settings/billing/ai_credit/usage", forbidden)
         ])
         let provider = makeOrgProvider(http: http, defaults: freshDefaults())
 
@@ -1347,9 +1370,10 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
     }
 
-    func testTransientBillingFailureKeepsCachedOrg() async {
+    func testTransientBillingFailureKeepsCachedOrgAndFailsRefresh() async {
         // A 5xx from the cached org's billing endpoint is a brief outage, not a stale org: the cache
-        // must survive (no re-discovery), and the card should describe the temporary failure.
+        // must survive (no re-discovery), and the refresh fails so the store keeps the last-good
+        // snapshot instead of replacing it with a placeholder.
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
             ("/organizations/acme/settings/billing/ai_credit/usage", HTTPResponse(statusCode: 503, headers: [:], body: Data()))
@@ -1360,15 +1384,13 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
     }
 
-    func testRateLimitedBilling403KeepsCachedOrgAndShowsUnavailable() async {
+    func testRateLimitedBilling403KeepsCachedOrgAndFailsRefresh() async {
         let rateLimited = HTTPResponse(
             statusCode: 403,
             headers: ["x-ratelimit-remaining": "0"],
@@ -1384,15 +1406,13 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
     }
 
-    func testRateLimitedOrgList403ShowsOrganizationUsageUnavailable() async {
+    func testRateLimitedOrgList403FailsRefreshInsteadOfReplacingData() async {
         let rateLimited = HTTPResponse(
             statusCode: 403,
             headers: ["retry-after": "60"],
@@ -1406,10 +1426,8 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 

@@ -241,6 +241,7 @@ enum CopilotUsageError: Error, LocalizedError, Equatable {
     case connectionFailed
     case requestFailed(Int)
     case quotaUnavailable
+    case orgBillingUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -252,6 +253,8 @@ enum CopilotUsageError: Error, LocalizedError, Equatable {
             return "Copilot usage request failed (HTTP \(status)). Try again later."
         case .quotaUnavailable:
             return "Copilot usage data is unavailable for this account."
+        case .orgBillingUnavailable:
+            return "GitHub billing could not be reached. Try again later."
         }
     }
 }
