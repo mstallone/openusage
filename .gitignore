@@ -31,4 +31,5 @@ node_modules/
 feed/
 appcast.xml
 ios/build/
+ios/dd/
 xcuserdata/

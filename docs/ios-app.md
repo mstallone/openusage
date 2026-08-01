@@ -17,10 +17,33 @@ The dashboard shows:
 Data refreshes on launch, on returning to the foreground, and with pull-to-refresh. Liveness is
 bounded by the Macs' five-minute publish cadence.
 
+## Widgets
+
+The app ships lock screen and home screen widgets ("Across Your Macs") showing the combined
+totals: Today on every family, plus Yesterday, Last 30 Days, and the usage trend where the size
+allows. Lock screen families are the inline line, the circular Today tile, and the rectangular
+Today/30 Days list; home screen families are small and medium.
+
+Each widget instance can show either cost (the default: dollars when priced, token counts when
+not) or token counts — long-press the widget and choose Edit Widget (on the lock screen, tap the
+widget while customizing), so one slot can show spend while another shows tokens.
+
+The widget extension reads the same CloudKit data itself on WidgetKit's budgeted schedule
+(roughly every half hour), and the app also asks widgets to reload whenever it fetches fresher
+data in the foreground. The last good numbers are cached so a failed refresh shows slightly stale
+totals instead of an empty widget — honestly: cached entries show their fetch age, day tiles
+re-anchor to the current date (a cached "Today" never mislabels an older day), and the cache is
+tied to the iCloud account (and cleared on sign-out), so another account's numbers can never
+appear. Like the dashboard, incomplete totals are never silent: a warning triangle appears when
+payloads were unreadable or models unpriced, and an all-unreadable container says "Update this
+app". Signed-out, restricted, waiting-for-first-sync, and unreachable states each show a short
+notice instead of numbers.
+
 ## Wire contract
 
 The app decodes the versioned payloads the Mac writes (`runway.history.v2`,
-`runway.snapshot.v1`) with tolerant decoders in `ios/RunwayMobile/SyncWire.swift`: unknown JSON
+`runway.snapshot.v1`) with tolerant decoders in `ios/Shared/SyncWire.swift` (shared with the
+widget extension, alongside the CloudKit reader in `UsageSyncReader.swift`): unknown JSON
 keys and unknown row types are ignored, so additive Mac-side changes don't break older phones. A
 schema *bump* shows an "update Runway and this app" notice instead of wrong numbers. When the Mac
 payloads change shape, update `SyncWire.swift` to match.
@@ -40,7 +63,8 @@ them first). Run the app from Xcode instead, which signs simulator and device bu
 
 Debug builds read the development container (`iCloud.com.mattstallone.runway.dev`, Development
 environment — the same place dev Mac builds write); Release builds read the production container.
-The App ID (`com.mattstallone.runway.mobile`) needs the CloudKit capability with both containers;
+The app and widget App IDs (`com.mattstallone.runway.mobile` and
+`com.mattstallone.runway.mobile.widgets`) both need the CloudKit capability with both containers;
 signing is automatic with the development team. On device, the app must be signed into the same
 iCloud account as the Macs.
 
@@ -59,8 +83,9 @@ plays that role).
   injected at build time — the `MARKETING_VERSION` in the Xcode project is never bumped by hand.
   TestFlight rejects a reused build number for the same version, so rerunning a tag that already
   uploaded fails at the upload step; tag a new patch version instead.
-- Signing is manual: an Apple Distribution certificate and App Store provisioning profile stored
-  as repository secrets, the same pattern as the Mac release's Developer ID cert and iCloud
+- Signing is manual: an Apple Distribution certificate and two App Store provisioning profiles
+  (one for the app, one for the widget extension — each bundle ID needs its own) stored as
+  repository secrets, the same pattern as the Mac release's Developer ID cert and iCloud
   profile. The App Store Connect API key (App Manager role) only authenticates the upload and the
   TestFlight distribution calls — cloud signing does not work with API keys below Admin.
 - `script/release_ios.sh` is the whole build; run it locally with `SKIP_TESTFLIGHT_UPLOAD=1` to get
