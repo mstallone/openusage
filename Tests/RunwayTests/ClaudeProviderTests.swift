@@ -88,6 +88,210 @@ final class ClaudeAuthStoreTests: XCTestCase {
         XCTAssertEqual(store.loadCredentialCandidates().first?.oauth.accessToken, "keychain-token")
     }
 
+    func testPlanBadgeUsesStateFileTierWhenLoginBlobTierIsStale() {
+        // The credential blob's rateLimitTier is written at login and never updated on a plan change,
+        // so after an upgrade (Max 5x → 20x) it keeps saying 5x. Claude Code's state file profile is
+        // refetched regularly and carries the current tier — the badge must trust it.
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#,
+            "/tmp/claude/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationRateLimitTier":"default_claude_max_20x"}}"#
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        let state = store.loadCredentialCandidates().first
+
+        XCTAssertEqual(state?.displayOAuth.rateLimitTier, "default_claude_max_20x")
+        // The blob itself stays untouched so a token rotation can never persist the override.
+        XCTAssertEqual(state?.oauth.rateLimitTier, "default_claude_max_5x")
+        XCTAssertEqual(
+            ClaudeUsageMapper.formatPlan(
+                subscriptionType: state?.displayOAuth.subscriptionType,
+                rateLimitTier: state?.displayOAuth.rateLimitTier
+            ),
+            "Max 20x"
+        )
+    }
+
+    func testPlanBadgeFollowsFamilyChangeFromStateFileOrganizationType() {
+        // Upgrading Pro → Max without a re-login: the blob still says "pro", but the state file's
+        // plan-shaped organizationType carries the current family, so the badge must read "Max 20x" —
+        // never the contradictory "Pro 20x".
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"pro"}}"#,
+            "/tmp/claude/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationType":"claude_max","organizationRateLimitTier":"default_claude_max_20x"}}"#
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        let state = store.loadCredentialCandidates().first
+
+        XCTAssertEqual(
+            ClaudeUsageMapper.formatPlan(
+                subscriptionType: state?.displayOAuth.subscriptionType,
+                rateLimitTier: state?.displayOAuth.rateLimitTier
+            ),
+            "Max 20x"
+        )
+    }
+
+    func testPlanBadgeDropsStaleTierWhenProfileFamilyChangesWithoutOne() {
+        // Max 20x → Pro downgrade: the profile names the new family but no tier (Pro has no
+        // multiplier). The profile applies as one snapshot — the blob's old "20x" must not survive
+        // next to the new family as a contradictory "Pro 20x".
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#,
+            "/tmp/claude/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationType":"claude_pro"}}"#
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        let state = store.loadCredentialCandidates().first
+
+        XCTAssertEqual(
+            ClaudeUsageMapper.formatPlan(
+                subscriptionType: state?.displayOAuth.subscriptionType,
+                rateLimitTier: state?.displayOAuth.rateLimitTier
+            ),
+            "Pro"
+        )
+    }
+
+    func testPlanBadgeKeepsBlobValuesWhenStateFileIsMalformed() {
+        // A corrupt state file must not break credential loading or the badge — the login-time
+        // values stand (and the failure is logged rather than silently swallowed).
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#,
+            "/tmp/claude/.claude.json": "not json {"
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        let state = store.loadCredentialCandidates().first
+
+        XCTAssertEqual(state?.oauth.accessToken, "file-token")
+        XCTAssertEqual(state?.displayOAuth.rateLimitTier, "default_claude_max_5x")
+        XCTAssertEqual(state?.displayOAuth.subscriptionType, "max")
+    }
+
+    func testPlanBadgeKeepsBlobFamilyForUnrecognizedOrganizationType() {
+        // A Team seat can ride a `claude_max_*` rate-limit bucket while its organizationType isn't
+        // plan-shaped. The blob's subscriptionType must stand — "Team 5x", never "Max 5x".
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"team","rateLimitTier":"default_claude_max_5x"}}"#,
+            "/tmp/claude/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationType":"team_org","organizationRateLimitTier":"default_claude_max_5x"}}"#
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        let state = store.loadCredentialCandidates().first
+
+        XCTAssertNil(state?.profileSubscriptionType)
+        XCTAssertEqual(
+            ClaudeUsageMapper.formatPlan(
+                subscriptionType: state?.displayOAuth.subscriptionType,
+                rateLimitTier: state?.displayOAuth.rateLimitTier
+            ),
+            "Team 5x"
+        )
+    }
+
+    func testProfilePlanAppliesOnlyToTheHighestPriorityCandidate() {
+        // Keychain and file can hold DIFFERENT accounts (the refresh fall-through exists for exactly
+        // that case), while the state file describes only the login Claude Code last wrote — the
+        // highest-priority source. A fallback candidate served after the first fails auth must show
+        // its own blob plan, never the other account's profile plan.
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"pro"}}"#,
+            "/tmp/claude/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationType":"claude_max","organizationRateLimitTier":"default_claude_max_20x"}}"#
+        ])
+        let keychain = ServiceKeychain()
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: keychain
+        )
+        let service = store.keychainServiceCandidates().first!
+        keychain.currentUserValues[service] = #"{"claudeAiOauth":{"accessToken":"keychain-token","subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#
+
+        let candidates = store.loadCredentialCandidates()
+
+        XCTAssertEqual(candidates.map(\.oauth.accessToken), ["keychain-token", "file-token"])
+        XCTAssertEqual(candidates.first?.displayOAuth.rateLimitTier, "default_claude_max_20x")
+        XCTAssertNil(candidates.last?.profileSubscriptionType)
+        XCTAssertNil(candidates.last?.profileRateLimitTier)
+        XCTAssertEqual(candidates.last?.displayOAuth.subscriptionType, "pro")
+    }
+
+    func testPlanBadgeUserTierOutranksOrganizationTier() {
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#,
+            "/tmp/claude/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationRateLimitTier":"default_claude_max_20x","userRateLimitTier":"custom_claude_max_5x"}}"#
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        XCTAssertEqual(
+            store.loadCredentialCandidates().first?.displayOAuth.rateLimitTier,
+            "custom_claude_max_5x"
+        )
+    }
+
+    func testPlanBadgeKeepsBlobTierWithoutStateFileTier() {
+        // No state file (or one that names no tier) must not blank the badge — the blob tier stands.
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+            files: files,
+            keychain: FakeKeychain()
+        )
+
+        XCTAssertEqual(
+            store.loadCredentialCandidates().first?.displayOAuth.rateLimitTier,
+            "default_claude_max_5x"
+        )
+    }
+
+    func testConfigDirScopeReadsStateFileInsideItsOwnDir() {
+        // A `.configDir` card keeps its state INSIDE the dir (only the default home keeps it next
+        // door at `~/.claude.json`), and must never borrow the default account's tier.
+        let files = FakeFiles([
+            "/Users/dev/.claude-personal/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#,
+            "/Users/dev/.claude-personal/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationRateLimitTier":"default_claude_max_20x"}}"#
+        ])
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: files,
+            keychain: FakeKeychain(),
+            scope: .configDir(path: "/Users/dev/.claude-personal", keychainLiteral: "/Users/dev/.claude-personal")
+        )
+
+        XCTAssertEqual(
+            store.loadCredentialCandidates().first?.displayOAuth.rateLimitTier,
+            "default_claude_max_20x"
+        )
+    }
+
     func testMalformedReadableKeychainItemDoesNotCountAsCredentialFootprint() {
         let store = ClaudeAuthStore(
             environment: FakeEnvironment(),
@@ -334,6 +538,17 @@ final class ClaudeUsageMapperTests: XCTestCase {
 
         let resetsAt = try XCTUnwrap(progress(mapped.lines, "Session")?.resetsAt)
         XCTAssertEqual(resetsAt.timeIntervalSince1970, epochSeconds, accuracy: 1)
+    }
+
+    func testPlanFamilyIsNeverInferredFromTheTierString() {
+        // Rate-limit buckets don't have to track the subscription family: a Team seat can ride a
+        // `claude_max_*` bucket, and must stay "Team 5x", never "Max 5x". Family freshness comes from
+        // the state file's explicit `organizationType`, not from parsing the tier.
+        XCTAssertEqual(
+            ClaudeUsageMapper.formatPlan(subscriptionType: "team", rateLimitTier: "default_claude_max_5x"),
+            "Team 5x"
+        )
+        XCTAssertEqual(ClaudeUsageMapper.formatPlan(subscriptionType: "pro", rateLimitTier: nil), "Pro")
     }
 
     func testRateLimitRetryAfterBadge() {
@@ -1039,6 +1254,61 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertEqual(Self.progress(third.lines, "Session")?.used, 25)
         XCTAssertEqual(third.warning?.hasPrefix("Updates blocked by Anthropic"), true)
         XCTAssertEqual(httpClient.requests.filter { $0.url.absoluteString.hasSuffix("/api/oauth/usage") }.count, 2)
+    }
+
+    func testRateLimitedSnapshotPicksUpTierChangeFromStateFile() async {
+        // A plan change during a rate-limit cooldown must still reach the badge: the cached last-good
+        // usage carries its fetch-time plan, so the 429 and cooldown paths re-derive it from the
+        // freshly loaded credentials (which include the state file's current tier).
+        let t0 = RunwayISO8601.date(from: "2026-02-20T16:00:00.000Z")!
+        let clock = TestClock(t0)
+        let usageCalls = CallCounter()
+        let httpClient = RoutingHTTPClient { request in
+            guard request.url.absoluteString.hasSuffix("/api/oauth/usage") else {
+                return HTTPResponse(statusCode: 200, headers: [:], body: Data())
+            }
+            if usageCalls.next() == 1 {
+                return HTTPResponse(
+                    statusCode: 200,
+                    headers: [:],
+                    body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+                )
+            }
+            return HTTPResponse(statusCode: 429, headers: ["retry-after": "600"], body: Data())
+        }
+        let files = FakeFiles([
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"token","subscriptionType":"max","rateLimitTier":"default_claude_max_5x","scopes":["user:profile"]}}"#,
+            "/tmp/claude/.claude.json": #"{"oauthAccount":{"accountUuid":"a","organizationRateLimitTier":"default_claude_max_5x"}}"#
+        ])
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
+                files: files,
+                keychain: FakeKeychain(),
+                now: { clock.now }
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            now: { clock.now },
+            pricing: { TestPricing.bundled }
+        )
+
+        let first = await provider.refresh()
+        XCTAssertEqual(first.plan, "Max 5x")
+
+        // The user upgrades: Claude Code's profile refetch rewrites the state file tier.
+        files.files["/tmp/claude/.claude.json"] =
+            #"{"oauthAccount":{"accountUuid":"a","organizationRateLimitTier":"default_claude_max_20x"}}"#
+
+        // 429 serving the cached bars: the badge still moves to the new tier.
+        let second = await provider.refresh()
+        XCTAssertEqual(Self.progress(second.lines, "Session")?.used, 25)
+        XCTAssertEqual(second.plan, "Max 20x")
+
+        // Inside the cooldown (live call skipped entirely) the fresh tier also holds.
+        clock.set(t0.addingTimeInterval(60))
+        let third = await provider.refresh()
+        XCTAssertEqual(third.plan, "Max 20x")
     }
 
     func testRefreshSurfacesRequestFailureForNonOAuthRefreshErrorBody() async {

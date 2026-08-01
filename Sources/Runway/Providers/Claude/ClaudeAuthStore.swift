@@ -38,6 +38,29 @@ struct ClaudeCredentialState: Hashable, Sendable {
     var source: Source
     var fullData: ClaudeCredentialsFile?
     var inferenceOnly: Bool
+    /// The account's CURRENT plan family and rate-limit tier from Claude Code's state file
+    /// (`.claude.json`), when the scope has one. The credential blob's copies are written at login and
+    /// never updated on a plan change, so after an upgrade the blob keeps saying e.g. `…_5x` (or `pro`)
+    /// while the profile Claude Code refetches regularly says `…_20x` (`claude_max`). Display-only —
+    /// `save()` never writes either back into the blob.
+    var profileSubscriptionType: String? = nil
+    var profileRateLimitTier: String? = nil
+
+    /// The credential values the plan badge is built from: the login blob with its plan family and
+    /// rate-limit tier replaced by the fresher state-file values when they are known.
+    var displayOAuth: ClaudeOAuth {
+        var display = oauth
+        if let profileSubscriptionType {
+            // A trusted profile family brings the profile's tier with it as one snapshot — even when
+            // that tier is absent (a Max → Pro downgrade nulls it): keeping the blob's old multiplier
+            // would pair values from two points in time and render a contradictory "Pro 20x".
+            display.subscriptionType = profileSubscriptionType
+            display.rateLimitTier = profileRateLimitTier
+        } else if let profileRateLimitTier {
+            display.rateLimitTier = profileRateLimitTier
+        }
+        return display
+    }
 
     /// Whether this candidate carries a non-blank access token — the single definition of "usable"
     /// shared by `refresh()`'s candidate filter and `hasLocalCredentials()`'s first-run detection, so
@@ -203,7 +226,8 @@ enum ClaudeCredentialScope: Hashable, Sendable {
 }
 
 struct ClaudeAuthStore: Sendable {
-    private static let defaultClaudeHome = "~/.claude"
+    /// Shared with `ClaudeProfilePlanReader`, which resolves the state file against the same home.
+    static let defaultClaudeHome = "~/.claude"
     private static let credentialFileName = ".credentials.json"
     private static let keychainServicePrefix = "Claude Code"
     private static let prodBaseAPIURL = "https://api.anthropic.com"
@@ -250,10 +274,31 @@ struct ClaudeAuthStore: Sendable {
     func loadCredentialSet(
         allowKeychainInteraction: Bool = false,
         allowDesktopInteraction: Bool = false,
-        forceDesktopFallback: Bool = false
+        forceDesktopFallback: Bool = false,
+        includeProfileTier: Bool = true
     ) -> ClaudeCredentialLoad {
         let storedLoad = orderedStoredCandidates(allowKeychainInteraction: allowKeychainInteraction)
         var stored = storedLoad.candidates
+        // The state file describes ONE login — the one Claude Code last wrote, which also lands in
+        // the highest-priority stored source (keychain first). Only that candidate gets the profile
+        // plan for its badge: a lower-priority fallback candidate can be a DIFFERENT account (the
+        // refresh fall-through exists for exactly that case) and must keep its own blob metadata
+        // rather than wear another account's plan. The Desktop candidate (inserted below) likewise
+        // keeps its own. A refresh landing between a re-login's two writes (credentials before state
+        // file) can pair them across accounts for ONE cycle; that transient is accepted — the blob
+        // carries no account id to verify against, and both stores converge once the login completes.
+        // If a re-login instead lands in the lower-priority FILE beside a still-valid keychain login,
+        // the state file (and with it the card's whole identity, per DefaultAccountObserver) already
+        // describes the file account while usage comes from the keychain — the badge matching the
+        // card label there is the consistent choice, and a failed keychain login falls through to the
+        // file account's own freshly-written blob. Generation snapshots opt out: their candidates
+        // keep only oauth + source, so the state-file read would be pure overhead there.
+        if includeProfileTier, !stored.isEmpty,
+           let plan = ClaudeProfilePlanReader(environment: environment, files: files, scope: scope).read()
+        {
+            stored[0].profileSubscriptionType = plan.subscriptionType
+            stored[0].profileRateLimitTier = plan.rateLimitTier
+        }
         var desktopStatus: ClaudeDesktopCredentialStatus = .notChecked
         // A working CLI login remains the source of truth and avoids a second Keychain prompt. Desktop
         // is a fallback for people who only use the native app (or whose stored CLI login lacks profile
@@ -304,7 +349,7 @@ struct ClaudeAuthStore: Sendable {
     func hasCredentialFootprint() -> Bool {
         switch scope {
         case .standard:
-            let load = loadCredentialSet()
+            let load = loadCredentialSet(includeProfileTier: false)
             switch load.keychainAccessStatus {
             case .permissionRequired:
                 // The attributes probe confirmed a protected Claude Code item. It is a real footprint
@@ -363,7 +408,9 @@ struct ClaudeAuthStore: Sendable {
             oauth: oauth,
             source: .environment,
             fullData: base?.fullData,
-            inferenceOnly: true
+            inferenceOnly: true,
+            profileSubscriptionType: base?.profileSubscriptionType,
+            profileRateLimitTier: base?.profileRateLimitTier
         )
         return liveCapable.isEmpty ? [envCandidate] : liveCapable + [envCandidate]
     }
@@ -379,7 +426,8 @@ struct ClaudeAuthStore: Sendable {
     ) -> ClaudeCredentialGeneration {
         let load = loadCredentialSet(
             allowKeychainInteraction: allowKeychainInteraction,
-            forceDesktopFallback: forceDesktopFallback
+            forceDesktopFallback: forceDesktopFallback,
+            includeProfileTier: false
         )
         return ClaudeCredentialGeneration(
             load.candidates,
