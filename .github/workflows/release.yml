@@ -16,16 +16,17 @@ on:
 permissions:
   contents: write
 
-# Serialize update-feed publishers: each release reads the existing appcast, regenerates it with
-# generate_appcast, and force-publishes the backing branch. Without this, two publishers could race
-# and drop a feed entry.
-concurrency:
-  group: update-feed-publish
-  cancel-in-progress: false
-
 jobs:
   release:
     runs-on: macos-26
+    # Serialize update-feed publishers: each release reads the existing appcast, regenerates it with
+    # generate_appcast, and force-publishes the backing branch. Without this, two publishers could
+    # race and drop a feed entry. Job-level (not workflow-level) so the lock is held only while this
+    # job runs — the iOS TestFlight jobs never touch update-feed, and the distribute job can spend
+    # up to an hour polling Apple, which must not block pricing-supplement publishes.
+    concurrency:
+      group: update-feed-publish
+      cancel-in-progress: false
     env:
       APPLE_TEAM_ID: 8KZBNZJBAX
     steps:
