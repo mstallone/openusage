@@ -48,7 +48,7 @@ Most providers read the credentials already on your machine (keychain, auth file
 
 Runway for iOS mirrors combined usage from every Mac you run — spend today, yesterday, and over the
 last 30 days — synced privately over iCloud, with lock screen and home screen widgets. Each widget
-can show cost or tokens; see the [iOS app](docs/ios-app.md) for setup and TestFlight access.
+can show cost or tokens; see the [iOS app](docs/ios-app.md) for what it shows and how syncing works.
 
 <p align="center">
   <img src="assets/ios-lockscreen.png" width="270" alt="Runway lock screen widgets showing today's AI spend synced from your Macs">
