@@ -38,15 +38,11 @@ concurrency:
 jobs:
   deploy:
     name: Deploy Update Feed
-    # Deploy on success AND failure: a Release run can conclude "failure" because an iOS TestFlight
-    # job failed even though the macOS job already published a new appcast to update-feed — the
-    # deploy must not be suppressed then, or Sparkle clients never see the release. Deploying after
-    # a genuinely failed publish is a harmless no-op (the branch is only ever updated on a
-    # successful macOS publish, so this just re-deploys its current content).
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success' ||
-      github.event.workflow_run.conclusion == 'failure'
+    # No conclusion filter on purpose: a Release run can end failed, cancelled, or timed out AFTER
+    # its macOS job already published a new appcast to update-feed (the iOS TestFlight jobs keep
+    # the run open long after that publish), and suppressing the deploy then would strand the new
+    # appcast where Sparkle clients never see it. Deploying is always safe — it re-deploys the
+    # update-feed branch as-is, and the branch only ever changes on a successful macOS publish.
     runs-on: ubuntu-latest
     # Use the product-facing environment name so GitHub's repository homepage identifies these
     # deployments by purpose instead of by their Pages transport.
