@@ -57,7 +57,11 @@ struct CopilotEnterpriseDiscovery: Sendable {
                 case .page(let page):
                     membershipPage = page
                 case .managed:
-                    return .managed
+                    // A denial part-way through must not erase associations already proven on
+                    // earlier pages: the caller can still check those enterprises' usage, and an
+                    // unreadable proven target keeps the managed state instead of degrading to
+                    // "nothing was proven" (which would let an empty org report publish as zero).
+                    return targets.isEmpty ? .managed : .targets(targets)
                 case .temporarilyUnavailable:
                     return .temporarilyUnavailable
                 }
@@ -94,7 +98,8 @@ struct CopilotEnterpriseDiscovery: Sendable {
                         case .page(let page):
                             organizationPage = page
                         case .managed:
-                            return .managed
+                            // Same partial-denial rule as the membership pages above.
+                            return targets.isEmpty ? .managed : .targets(targets)
                         case .temporarilyUnavailable:
                             return .temporarilyUnavailable
                         }

@@ -1144,6 +1144,43 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
+    func testPartialDiscoveryDenialKeepsProofFromEarlierPages() async {
+        // Page one proves octo-enterprise owns the seat org; the next enterprise page is denied.
+        // The proof must survive the partial denial: with the proven enterprise's usage unreadable,
+        // the card stays managed instead of publishing the empty org report as zero.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return graphQLVariables(request)["enterpriseCursor"] as? String == "enterprise-page-2"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])],
+                        nextEnterpriseCursor: "enterprise-page-2"
+                    ))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+        XCTAssertTrue(http.requests.contains {
+            $0.url.path == "/enterprises/octo-enterprise/settings/billing/ai_credit/usage"
+        })
+    }
+
     func testEnterpriseDiscoveryPaginatesViewerEnterprises() async {
         let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
         let http = RoutingHTTPClient { request in
