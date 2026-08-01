@@ -26,7 +26,8 @@ struct DashboardView: View {
 
                 // Combined totals stand on the history payloads alone — they must show even when
                 // no snapshot decoded (and hide when no history did, instead of hollow tiles).
-                if !model.combined.trend.isEmpty {
+                // An all-unpriced window has an empty trend but still needs its warning shown.
+                if !model.combined.trend.isEmpty || !model.combined.unknownModels.isEmpty {
                     combinedSection
                 }
 
