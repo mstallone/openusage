@@ -21,10 +21,10 @@ struct PopoverKeyReader: NSViewRepresentable {
     /// Called on plain (unmodified) Return. Return `true` to consume it (e.g. toggling Customize);
     /// `false` lets the key fall through to a focused control.
     var onReturn: @MainActor () -> Bool = { false }
-    /// Called on ⌘, (Settings). Handled on this always-on monitor — the same one as Esc/Return — so it
-    /// works from every screen, including Settings, whose footer has no Settings action. The gear options
-    /// menu's Settings item carries ⌘, only as a *label*: while that menu is open the item handles
-    /// it, while it's closed this monitor does, so they never both fire.
+    /// Called on ⌘, (opens the standalone Settings window). Handled on this always-on monitor — the
+    /// same one as Esc/Return — so it works from every screen. The gear options menu's Settings item
+    /// carries ⌘, only as a *label*: while that menu is open the item handles it, while it's closed
+    /// this monitor does, so they never both fire.
     var onSettings: @MainActor () -> Bool = { false }
     /// Called on plain ⌘Z (undo). Rides this monitor — same reasons as Esc/Return: a hidden SwiftUI
     /// shortcut only fires when the popover is the key window, which the panel isn't always for. By the

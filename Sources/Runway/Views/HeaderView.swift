@@ -14,15 +14,14 @@ import SwiftUI
 /// the glass for contrast; macOS 15 uses that frosted circle as its fallback. The menu renders in its
 /// own `NSMenu`-backed window, which the panel's outside-click policy keeps the popover open for.
 ///
-/// Only the dashboard shows this; the Customize and Settings screens carry their own top-leading back
-/// button (`PopoverTopBar`) to return home — the macOS-native place for it — so the footer control
-/// simply drops away there.
+/// Only the dashboard's footer shows this (`PopoverFooter` renders nothing elsewhere); Customize
+/// carries its own top-leading back button (`PopoverTopBar`) to return home, and Settings lives in
+/// its own window.
 ///
-/// Shortcuts survive: ⌘, (Settings), ⏎ (Customize) and Esc are handled by the always-on
-/// `PopoverKeyReader` monitor, so they fire from every screen (including Settings, whose footer shows
-/// only the identity line — no actions). The menu items only carry their ⌘ key-equivalents as labels
-/// and fire while the menu is open, so the monitor and the items never double-fire. ⌘Q (Quit) is
-/// unowned elsewhere, so it rides its menu item directly.
+/// Shortcuts survive: ⌘, (Settings window), ⏎ (Customize) and Esc are handled by the always-on
+/// `PopoverKeyReader` monitor, so they fire from every screen. The menu items only carry their ⌘
+/// key-equivalents as labels and fire while the menu is open, so the monitor and the items never
+/// double-fire. ⌘Q (Quit) is unowned elsewhere, so it rides its menu item directly.
 struct HeaderView: View {
     @Environment(AppContainer.self) private var container
     @Environment(LayoutStore.self) private var layout
@@ -31,48 +30,36 @@ struct HeaderView: View {
     @Environment(PopoverTransparencyStore.self) private var transparency
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.popoverIsVisible) private var popoverIsVisible
-    /// The current screen. The footer is fixed chrome keyed off `layout.screen` (it no longer slides
-    /// per-page), so this control shows only when that's `.dashboard` and swaps in place on a switch.
-    let screen: PopoverScreen
 
     @State private var isHovered = false
 
     /// Control diameter, so the gear matches the footer's other chrome.
     private static let controlHeight: CGFloat = 28
 
+    /// The gear menu button on one glass circle.
     var body: some View {
-        leadingControl
-    }
-
-    /// On the dashboard, the gear menu button on one glass circle.
-    @ViewBuilder
-    private var leadingControl: some View {
-        if screen == .dashboard {
-            optionsButton
-                .fixedSize()
-                // Hover highlight inside the circle — drawn over the glass, under the glyph — so the
-                // gear reads as hoverable even where the glass shimmer alone is too subtle (and on
-                // macOS 15, where the frosted fallback has no hover response at all).
-                .background {
-                    Circle().fill(Color.primary.opacity(isHovered ? 0.08 : 0))
-                }
-                .interactiveGlass(
-                    in: Circle(),
-                    reinforced: transparency.effectiveStyle.needsChromeLegibilityBacking
-                )
-                .onHover { isHovered = $0 }
-                .animation(.easeOut(duration: 0.12), value: isHovered)
-                // `NSPanel.orderOut` retains this SwiftUI tree and may not deliver a hover exit, so
-                // clear the hover at the panel's authoritative close signal.
-                .onChange(of: popoverIsVisible) { _, isVisible in
-                    if !isVisible { isHovered = false }
-                }
-                // `HeaderView` stays mounted in the footer while this control is conditionally
-                // removed (any non-dashboard screen), and a removed view gets no hover exit — reset
-                // here so the gear can't remount pre-highlighted, and so a close from Settings
-                // (where the `onChange` above isn't mounted) can't strand the state either.
-                .onDisappear { isHovered = false }
-        }
+        optionsButton
+            .fixedSize()
+            // Hover highlight inside the circle — drawn over the glass, under the glyph — so the
+            // gear reads as hoverable even where the glass shimmer alone is too subtle (and on
+            // macOS 15, where the frosted fallback has no hover response at all).
+            .background {
+                Circle().fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+            }
+            .interactiveGlass(
+                in: Circle(),
+                reinforced: transparency.effectiveStyle.needsChromeLegibilityBacking
+            )
+            .onHover { isHovered = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+            // `NSPanel.orderOut` retains this SwiftUI tree and may not deliver a hover exit, so
+            // clear the hover at the panel's authoritative close signal.
+            .onChange(of: popoverIsVisible) { _, isVisible in
+                if !isVisible { isHovered = false }
+            }
+            // This view is conditionally removed with the footer on Customize, and a removed view
+            // gets no hover exit — reset here so the gear can't remount pre-highlighted.
+            .onDisappear { isHovered = false }
     }
 
     /// The options pull-down: a bare gear glyph. `.menuStyle(.button)` + `.buttonStyle(.plain)` strip
@@ -94,13 +81,14 @@ struct HeaderView: View {
         .accessibilityLabel("Options")
     }
 
-    /// The menu's items, mirroring their in-popover entry points. Customize leads, then Settings.
-    /// `autoenablesItems` has no SwiftUI equivalent, so the Check for Updates item disables itself when
-    /// Sparkle can't currently check — e.g. dev builds with no feed, or while a check is already in
-    /// flight. Customize and Settings carry their key equivalents so the menu shows the shortcuts: when
-    /// the menu is open the items handle them; when it's closed the `PopoverKeyReader` monitor
-    /// handles (and consumes) them first, so the equivalents can't double-fire. Same split as the Quit
-    /// ⌘Q item below.
+    /// The menu's items. Customize leads (the in-popover screen users reach for most), then Settings,
+    /// which opens the standalone Settings window (closing the popover on the way, via the installed
+    /// handler). `autoenablesItems` has no SwiftUI equivalent, so the Check for Updates item disables
+    /// itself when Sparkle can't currently check — e.g. dev builds with no feed, or while a check is
+    /// already in flight. Customize and Settings carry their key equivalents so the menu shows the
+    /// shortcuts: when the menu is open the items handle them; when it's closed the `PopoverKeyReader`
+    /// monitor handles (and consumes) them first, so the equivalents can't double-fire. Same split as
+    /// the Quit ⌘Q item below.
     @ViewBuilder
     private var menuItems: some View {
         Button { toggle(.customize) } label: {
@@ -108,7 +96,7 @@ struct HeaderView: View {
         }
         .keyboardShortcut(.return, modifiers: [])
 
-        Button { toggle(.settings) } label: {
+        Button { SettingsWindowLink.open() } label: {
             Label("Settings", systemImage: "gearshape")
         }
         .keyboardShortcut(",")

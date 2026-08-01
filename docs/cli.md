@@ -25,7 +25,7 @@ or account-picking logic.
 
 ## Install on `PATH`
 
-In Runway, open **Settings → Command Line** and click **Install…**. After the standard macOS
+In Runway, open **Settings → Advanced → Command Line** and click **Install…**. After the standard macOS
 administrator prompt, `runway` is available globally in new terminal sessions. The installed symlink
 points to the signed helper inside Runway, so in-place app updates also update the command.
 

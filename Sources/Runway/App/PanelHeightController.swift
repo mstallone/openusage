@@ -166,7 +166,6 @@ final class PanelHeightController {
         switch screen {
         case .dashboard: "runway.panel.height.dashboard"
         case .customize: "runway.panel.height.customize"
-        case .settings: "runway.panel.height.settings"
         }
     }
 }

@@ -25,13 +25,13 @@ struct CustomizeProviderListView: View {
                 }
             }
             .cardSurface()
-            // App behavior/appearance options live on the other screen; catch users who came here
-            // hunting for them once they've scanned past the provider list.
+            // App behavior/appearance options live in the standalone Settings window; catch users
+            // who came here hunting for them once they've scanned past the provider list.
             ScreenCrossLinkRow(
                 systemImage: "gearshape",
                 title: "Settings",
                 subtitle: "Notifications, appearance and more",
-                destination: .settings
+                action: { SettingsWindowLink.open() }
             )
         }
         .animation(Motion.spring, value: orderedRows.map(\.id))

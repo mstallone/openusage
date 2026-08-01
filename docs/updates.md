@@ -11,11 +11,11 @@ they install, so you always get a genuine, unmodified build.
   window popping up behind your other apps. Click **Install Update** to open the update window (release
   notes, download, install) front and center. The banner's close button snoozes it; it comes back the
   next time the app finds the update.
-- **Manual check.** Open **Settings → Updates** and click **Check for Updates…** at any time.
+- **Manual check.** Open **Settings → Advanced → Updates** and click **Check for Updates…** at any time.
   For both manual checks and banner installs, Runway brings itself to the foreground before opening
   Sparkle so the update window doesn't get buried behind another app. Because Runway normally lives
   only in the menu bar, it briefly shows a Dock icon for the update session, then hides again.
-- **Turn it off.** The **Update Automatically** switch in **Settings → Updates** stops the
+- **Turn it off.** The **Update Automatically** switch in **Settings → Advanced → Updates** stops the
   background checks. You can still check manually.
 
 ![Stable-only update settings](assets/updates-stable-only.png)

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The popover content: the provider/metric list (or the Customize / Settings screen) as a scroll
-/// view between fixed chrome — a top back/title bar on Customize/Settings and bottom identity/action
-/// chrome on Dashboard and Settings. Customize uses its top bar and scrolling content without footer
-/// controls.
+/// The popover content: the provider/metric list (or the Customize screen) as a scroll view between
+/// fixed chrome — a top back/title bar on Customize and bottom identity/action chrome on the
+/// dashboard. (Settings is not a popover screen; it lives in its own window, see
+/// `SettingsWindowController`.)
 ///
 /// The chrome is fixed: it's keyed off `layout.screen` and applied uniformly in `screenView`. A screen
 /// switch mounts only its destination and gives it a short directional entrance; keeping the outgoing
@@ -76,11 +76,11 @@ struct DashboardView: View {
     private static let reorderSpace = "popoverReorderSpace"
     /// The popover keeps a fixed width while its compact layout auto-fits vertically.
     private static let popoverWidth: CGFloat = 320
-    /// Fixed height of the Customize / Settings back nav bar — the bar pins itself to exactly this height.
+    /// Fixed height of the Customize back nav bar — the bar pins itself to exactly this height.
     private static let topBarHeight: CGFloat = 44
-    /// Fixed height of the footer bar (Dashboard and Settings; Customize shows none). Like the top
-    /// bar, the footer is fixed-height chrome: the height coordinator sums this constant into each
-    /// screen's morph target, the scroll spacer reserves it, and the overlay bar fills it.
+    /// Fixed height of the footer bar (dashboard only; Customize shows none). Like the top bar, the
+    /// footer is fixed-height chrome: the height coordinator sums this constant into each screen's
+    /// morph target, the scroll spacer reserves it, and the overlay bar fills it.
     private static let footerHeight: CGFloat = 40
     /// A compact directional entrance communicates hierarchy without keeping a second full screen tree
     /// alive. The opaque popover surface fills the small uncovered strip while the page settles.
@@ -125,16 +125,15 @@ struct DashboardView: View {
             .drivesPanelHeight(animatedHeight)
             .coordinateSpace(name: Self.reorderSpace)
             .background(
-                // Esc backs out of Customize / Settings first; only from the dashboard does it close
-                // the popover. Return opens Customize from the dashboard (the same affordance the
+                // Esc backs out of Customize first; only from the dashboard does it close the
+                // popover. Return opens Customize from the dashboard (the same affordance the
                 // footer's gear options menu's Customize item carries) and returns to the
-                // dashboard from Customize or Settings — matching Esc and the back navigation,
-                // never jumping Settings → Customize. Always consumed, so a bare Return can't fall
-                // through and dismiss the popover.
+                // dashboard from Customize — matching Esc and the back navigation. Always
+                // consumed, so a bare Return can't fall through and dismiss the popover.
                 PopoverKeyReader(
                     onEscape: {
-                        // From a provider's L2 detail, back out to the L1 list first; only from L1 /
-                        // Settings drop to the dashboard. Pressing Esc again from L1 closes the popover.
+                        // From a provider's L2 detail, back out to the L1 list first; only from L1
+                        // drop to the dashboard. Pressing Esc again from L1 closes the popover.
                         if layout.customizeProviderID != nil {
                             withAnimation(Motion.spring) { layout.customizeProviderID = nil }
                             return true
@@ -154,14 +153,12 @@ struct DashboardView: View {
                         withAnimation(Motion.modeSwitch) { layout.screen = target }
                         return true
                     },
-                    // ⌘, toggles Settings, on this always-on monitor so it fires from every screen —
-                    // including Settings, whose footer has no Settings action. Handling it here (and
-                    // consuming it) also lets the gear options menu's Settings item carry ⌘, as a label
-                    // without a second SwiftUI registration fighting it.
+                    // ⌘, opens the standalone Settings window (closing the popover on the way, via
+                    // the installed handler). Handled on this always-on monitor so it fires from
+                    // every screen, and so the gear options menu's Settings item can carry ⌘, as a
+                    // label without a second SwiftUI registration fighting it.
                     onSettings: {
-                        withAnimation(Motion.modeSwitch) {
-                            layout.screen = layout.screen == .settings ? .dashboard : .settings
-                        }
+                        SettingsWindowLink.open()
                         return true
                     },
                     // ⌘Z walks back the last customization step (remove/add, reorder, pin/unpin, caret
@@ -340,9 +337,9 @@ struct DashboardView: View {
 
     /// The popover keeps exactly one live screen tree. On a switch the destination's scrolling body
     /// enters from the direction implied by `slideRank`, but the fixed chrome stays in place and the
-    /// outgoing screen is removed immediately instead of remaining mounted beside it. Settings and the
-    /// dashboard are both substantial trees; the former two-page pager made SwiftUI update, measure,
-    /// and draw both throughout the window morph.
+    /// outgoing screen is removed immediately instead of remaining mounted beside it. Customize and
+    /// the dashboard are both substantial trees; the former two-page pager made SwiftUI update,
+    /// measure, and draw both throughout the window morph.
     ///
     /// Why an offset and not a SwiftUI `.transition`: the cards' fill is translucent `.quaternary`
     /// glass. Any transition carrying `.opacity` composites a screen into a transparency layer where
@@ -440,8 +437,6 @@ struct DashboardView: View {
                 reorderSpaceName: Self.reorderSpace,
                 reorderLift: $reorderLift
             )
-        case .settings:
-            SettingsScreen()
         }
     }
 

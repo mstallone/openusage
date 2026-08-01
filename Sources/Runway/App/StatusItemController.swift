@@ -44,6 +44,8 @@ final class StatusItemController: NSObject {
         onDismiss: { [weak self] in self?.hidePanel() }
     )
     private let hostingController: NSHostingController<AnyView>
+    /// Owns the standalone Settings window (created lazily on first open, torn down on close).
+    private let settingsWindow: SettingsWindowController
     /// The panel's backdrop: an opaque tray by default, swapped to a behind-window vibrancy view when
     /// the transparency style is non-opaque. Built once and toggled, so it can't race the style observer.
     private let backdrop = PopoverBackdropView(cornerRadius: StatusItemController.cornerRadius)
@@ -100,6 +102,7 @@ final class StatusItemController: NSObject {
         )
         self.panel = panel
         self.heightController = PanelHeightController(panel: panel) { container.layout.screen }
+        self.settingsWindow = SettingsWindowController(container: container, updater: updater)
 
         super.init()
 
@@ -130,6 +133,11 @@ final class StatusItemController: NSObject {
         MenuBarPopover.showHandler = { [weak self] in
             self?.container.layout.screen = .dashboard
             self?.showPopover()
+        }
+        // Settings entry points everywhere (gear menu, ⌘,, Customize cross-link, context menu) route
+        // through this one chokepoint so they all close the popover and share the same window.
+        SettingsWindowLink.openHandler = { [weak self] in
+            self?.openSettings()
         }
 
         heightController.installBridge()
@@ -298,13 +306,12 @@ final class StatusItemController: NSObject {
         statusItem.menu = nil
     }
 
-    /// Opens the dashboard popover on the Settings screen — Settings is an in-popover screen, not a
-    /// separate window. The screen is set before showing the panel so it opens already sized to Settings.
+    /// Opens the standalone Settings window. The popover closes first: the Settings window activates
+    /// the app and takes key, so leaving the transient panel up would just have the outside-click
+    /// monitor dismiss it a beat later anyway — closing it here makes the hand-off deliberate.
     private func openSettings() {
-        container.layout.screen = .settings
-        if !panel.isVisible {
-            showPanel()
-        }
+        if panel.isVisible { hidePanel() }
+        settingsWindow.show()
     }
 
     func togglePopover() {

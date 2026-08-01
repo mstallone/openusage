@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The scroll container shared by the popover's three full-height screens (dashboard, Customize,
-/// Settings). Each one fills the region the pinned footer leaves and keeps the native scroll edge
-/// effect alive while hiding the scrollbar.
+/// The scroll container shared by the popover's full-height screens (dashboard and Customize). Each
+/// one fills the region the pinned footer leaves and keeps the native scroll edge effect alive while
+/// hiding the scrollbar.
 ///
 /// The scroll edge effect (the blur as content passes under the `safeAreaBar`) needs the scroll view
 /// to keep a vertical scroller, so indicators are not hidden the SwiftUI way (that removes the

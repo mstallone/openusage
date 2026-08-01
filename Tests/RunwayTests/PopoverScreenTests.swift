@@ -1,7 +1,7 @@
 import XCTest
 @testable import Runway
 
-/// The in-popover screen mode (dashboard / Customize / Settings) and its `isEditing` bridge,
+/// The in-popover screen mode (dashboard / Customize) and its `isEditing` bridge,
 /// which older call sites still drive Customize through.
 @MainActor
 final class PopoverScreenTests: XCTestCase {
@@ -21,19 +21,12 @@ final class PopoverScreenTests: XCTestCase {
         XCTAssertEqual(store.screen, .dashboard)
     }
 
-    func testSettingsScreenIsNotEditing() {
-        let store = makeStore("Settings")
-
-        store.screen = .settings
-        XCTAssertFalse(store.isEditing)
-    }
-
     func testScreensReplaceEachOther() {
         let store = makeStore("Switch")
 
         store.screen = .customize
-        store.screen = .settings
-        XCTAssertEqual(store.screen, .settings)
+        store.screen = .dashboard
+        XCTAssertEqual(store.screen, .dashboard)
         XCTAssertFalse(store.isEditing)
 
         store.screen = .customize

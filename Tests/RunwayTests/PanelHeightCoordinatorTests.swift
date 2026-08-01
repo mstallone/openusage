@@ -27,13 +27,6 @@ final class PanelHeightCoordinatorTests: XCTestCase {
         XCTAssertEqual(c.measuredIdeal[.customize], 44 + 300)
     }
 
-    func testSettingsIncludesTopBarAndFooter() {
-        let c = makeCoordinator()
-        c.setScrollContent(300, for: .settings)
-        // Settings pins both fixed bars: ideal = topBar + footer + content.
-        XCTAssertEqual(c.measuredIdeal[.settings], 44 + 40 + 300)
-    }
-
     func testIdealUnsetUntilScrollContentMeasured() {
         let c = makeCoordinator()
         XCTAssertNil(c.measuredIdeal[.dashboard])

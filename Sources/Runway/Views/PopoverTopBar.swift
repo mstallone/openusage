@@ -36,12 +36,6 @@ struct PopoverTopBar: View {
                     Text("Turns providers back on for the tools you have installed and resets every provider's metrics and order. Are you sure?")
                 }
             }
-        case .settings:
-            navigationBar(title: "Settings") {
-                withAnimation(Motion.modeSwitch) { layout.screen = .dashboard }
-            } trailing: {
-                EmptyView()
-            }
         }
     }
 

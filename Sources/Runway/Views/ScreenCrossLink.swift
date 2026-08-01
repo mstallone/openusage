@@ -1,31 +1,25 @@
 import SwiftUI
 
-/// The "wrong door" cross-link pinned under the last card of Customize (L1) and Settings.
-/// Customize and Settings sound alike, so people regularly open one while hunting for the other.
-/// This is the Apple-native shape for "go somewhere else" in a settings surface: a grouped-card
-/// navigation row — icon, label, trailing chevron — matching the provider rows above it, rather
-/// than a text link (footnote text is Apple's idiom for explanations, not navigation). The whole
-/// row is tappable and slides to the destination with the same animation as the footer buttons.
+/// The "wrong door" cross-link pinned under the last card of Customize (L1). Customize and Settings
+/// sound alike, so people regularly open one while hunting for the other. This is the Apple-native
+/// shape for "go somewhere else" in a settings surface: a grouped-card navigation row — icon, label,
+/// trailing chevron — matching the provider rows above it, rather than a text link (footnote text is
+/// Apple's idiom for explanations, not navigation). The whole row is tappable; the caller supplies
+/// the destination action (e.g. opening the standalone Settings window).
 struct ScreenCrossLinkRow: View {
-    @Environment(LayoutStore.self) private var layout
-
     /// SF Symbol leading the row, e.g. "gearshape".
     let systemImage: String
-    /// The row's title, e.g. "App Settings".
+    /// The row's title, e.g. "Settings".
     let title: String
     /// One-line secondary description of what lives there.
     let subtitle: String
-    /// Where the row navigates.
-    let destination: PopoverScreen
+    /// Navigates to the destination.
+    let action: () -> Void
 
     private let density = DensitySetting.compact
 
     var body: some View {
-        Button {
-            withAnimation(Motion.modeSwitch) {
-                layout.screen = destination
-            }
-        } label: {
+        Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: systemImage)
                     .font(.system(size: 14, weight: .medium))
