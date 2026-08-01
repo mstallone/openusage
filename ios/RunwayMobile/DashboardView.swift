@@ -74,9 +74,9 @@ struct DashboardView: View {
                 .padding(.vertical, 4)
             }
             if model.combined.last30Cost != nil {
-                // Synced history covers machine-local providers only, whose spend is always
-                // imputed from token counts — the same ⓘ caveat the Mac tiles carry.
-                Text("Dollar amounts are estimated from token usage at API rates.")
+                // State the rule, not a blanket claim: some synced providers impute spend from
+                // token counts (Claude, Codex), others report billed costs (OpenCode).
+                Text("Where providers don’t report billed costs, dollars are estimated at API rates.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
