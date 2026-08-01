@@ -169,7 +169,9 @@ enum UsageFormat {
         switch magnitude {
         case 1_000_000_000...: return String(format: "%.1fB", value / 1_000_000_000)
         case 1_000_000...: return String(format: "%.1fM", value / 1_000_000)
-        default: return value.formatted(.number.precision(.fractionLength(0)))
+        // Integral counts print whole ('58,342'); fractional counts (a Kimi balance, Copilot
+        // credits) keep their precision instead of rounding to a wrong whole number.
+        default: return value.formatted(.number.precision(.fractionLength(0...2)))
         }
     }
 

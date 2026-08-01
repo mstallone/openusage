@@ -32,6 +32,10 @@ xcodebuild -project ios/RunwayMobile.xcodeproj -target RunwayMobile \
   -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
 ```
 
+That unsigned simulator build is for compile verification only — launching it would abort at
+CloudKit setup, since it carries no iCloud entitlements (iOS offers no public API to probe for
+them first). Run the app from Xcode instead, which signs simulator and device builds alike.
+
 Debug builds read the development container (`iCloud.com.mattstallone.runway.dev`, Development
 environment — the same place dev Mac builds write); Release builds read the production container.
 The App ID (`com.mattstallone.runway.mobile`) needs the CloudKit capability with both containers;
