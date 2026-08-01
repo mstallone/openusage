@@ -101,6 +101,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate, NSToolbarDeleg
         }
         guard let window else { return }
         activation.acquire(.settingsWindow, reason: "settings window opened")
+        // `makeKeyAndOrderFront` does not pull a window back out of the Dock, so a minimized
+        // Settings window would make every entry point look dead.
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
         window.makeKeyAndOrderFront(nil)
     }
 
