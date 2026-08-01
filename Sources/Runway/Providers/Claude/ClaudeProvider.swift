@@ -241,8 +241,8 @@ final class ClaudeProvider: ProviderRuntime {
         var state = initialState
         var mapped = ClaudeMappedUsage(
             plan: ClaudeUsageMapper.formatPlan(
-                subscriptionType: state.oauth.subscriptionType,
-                rateLimitTier: state.oauth.rateLimitTier
+                subscriptionType: state.displayOAuth.subscriptionType,
+                rateLimitTier: state.displayOAuth.rateLimitTier
             ),
             lines: []
         )
@@ -326,7 +326,7 @@ final class ClaudeProvider: ProviderRuntime {
         // constantly-limited endpoint doesn't blank the dashboard (and we don't pile on more 429s).
         if let until = rateLimitedUntil, now() < until {
             AppLog.info(LogTag.plugin("claude"), "rate-limited (cooldown active, serving \(lastGoodUsage == nil ? "badge" : "last-good usage"))")
-            return rateLimitedSnapshot(credentials: state.oauth, retryAfterSeconds: Int(until.timeIntervalSince(now()).rounded(.up)))
+            return rateLimitedSnapshot(credentials: state.displayOAuth, retryAfterSeconds: Int(until.timeIntervalSince(now()).rounded(.up)))
         }
 
         if authStore.needsRefresh(state.oauth),
@@ -384,10 +384,10 @@ final class ClaudeProvider: ProviderRuntime {
             let retryAfterSeconds = ClaudeUsageMapper.parseRetryAfterSeconds(response, now: now())
             rateLimitedUntil = now().addingTimeInterval(TimeInterval(retryAfterSeconds ?? Int(Self.rateLimitCooldown)))
             AppLog.info(LogTag.plugin("claude"), "rate-limited (serving \(lastGoodUsage == nil ? "badge" : "last-good usage"))")
-            return rateLimitedSnapshot(credentials: working.oauth, retryAfterSeconds: retryAfterSeconds)
+            return rateLimitedSnapshot(credentials: working.displayOAuth, retryAfterSeconds: retryAfterSeconds)
         }
 
-        let mapped = try ClaudeUsageMapper.mapUsageResponse(response, credentials: working.oauth, now: now())
+        let mapped = try ClaudeUsageMapper.mapUsageResponse(response, credentials: working.displayOAuth, now: now())
         lastGoodUsage = mapped
         rateLimitedUntil = nil
         return mapped
@@ -401,6 +401,12 @@ final class ClaudeProvider: ProviderRuntime {
         guard var mapped = lastGoodUsage else {
             return ClaudeUsageMapper.rateLimitedUsage(credentials: credentials, retryAfterSeconds: retryAfterSeconds)
         }
+        // The cached mapping's plan is from fetch time; the tier can change during a long cooldown,
+        // so re-derive it from the credentials the caller just loaded.
+        mapped.plan = ClaudeUsageMapper.formatPlan(
+            subscriptionType: credentials.subscriptionType,
+            rateLimitTier: credentials.rateLimitTier
+        )
         mapped.lines.append(ClaudeUsageMapper.rateLimitedNote(retryAfterSeconds: retryAfterSeconds))
         mapped.warning = ClaudeUsageMapper.rateLimitedWarning(retryAfterSeconds: retryAfterSeconds)
         return mapped

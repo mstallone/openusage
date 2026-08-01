@@ -51,6 +51,12 @@ struct DefaultAccountObserver: Sendable {
             var emailAddress: String?
             var organizationUuid: String?
             var organizationName: String?
+            /// Current plan family and tier, refetched with the rest of the profile while Claude Code
+            /// runs — unlike the credential blob's copies, which are written at login and go stale on
+            /// a plan change. `organizationType` is plan-shaped: `claude_pro`, `claude_max`, ….
+            var organizationType: String?
+            var organizationRateLimitTier: String?
+            var userRateLimitTier: String?
         }
 
         var oauthAccount: OAuthAccount?
