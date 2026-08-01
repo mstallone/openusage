@@ -6,12 +6,14 @@ import Foundation
 extension CopilotProvider {
     enum OrgBillingLookup {
         case usage([MetricLine])
-        /// A readable zero report. `enterpriseUnverified` is true when the report is published
-        /// without having ruled out enterprise-consolidated usage (a business seat whose credential
-        /// can't read enterprise associations). The flag only steers the multi-credential
-        /// aggregation; the rendered zero is identical — real usage under the same login surfaces in
-        /// the org report on the next refresh, so a month-start zero corrects itself.
-        case empty([MetricLine], enterpriseUnverified: Bool)
+        /// A readable zero report. `enterpriseVerified` is true only when the owning enterprise's
+        /// own usage report was read — the one zero no ownership proof can displace. An org-only
+        /// zero (no enterprise visible to this credential, or associations unreadable) stays false:
+        /// "no *visible* association" is viewer-relative, so another credential's positive proof of
+        /// an owning enterprise outranks it. The flag only steers the multi-credential aggregation;
+        /// the rendered zero is identical — real usage under the same login surfaces in the org
+        /// report on the next refresh, so a month-start zero corrects itself.
+        case empty([MetricLine], enterpriseVerified: Bool)
         /// `provenEnterpriseAssociation` is true when this credential *proved* an owning enterprise
         /// (whose usage it could not read). Ownership is an account-level fact — independent of
         /// which credential learned it — so the multi-credential aggregation uses the proof to
@@ -52,7 +54,7 @@ extension CopilotProvider {
     ) async -> OrgBillingLookup {
         var sawTransientFailure = false
         var sawProvenEnterpriseAssociation = false
-        var emptyCandidate: (lines: [MetricLine], enterpriseUnverified: Bool)?
+        var emptyCandidate: (lines: [MetricLine], enterpriseVerified: Bool)?
         for (index, token) in tokens.enumerated() {
             if index > 0 {
                 AppLog.info(LogTag.plugin("copilot"), "trying another local GitHub credential for billing")
@@ -64,21 +66,20 @@ extension CopilotProvider {
             ) {
             case .usage(let lines):
                 return .usage(lines)
-            case .empty(let lines, let enterpriseUnverified):
-                // Once any credential has proven an owning enterprise, an unverified zero is exactly
+            case .empty(let lines, let enterpriseVerified):
+                // Once any credential has proven an owning enterprise, an org-only zero is exactly
                 // the claim that proof invalidates — only an enterprise-verified zero may still land.
-                if enterpriseUnverified && sawProvenEnterpriseAssociation {
+                if !enterpriseVerified && sawProvenEnterpriseAssociation {
                     continue
                 }
-                // An enterprise-verified zero beats an unverified one from an earlier credential:
-                // it clears the soft warning the unverified report would carry.
-                if emptyCandidate == nil || (emptyCandidate?.enterpriseUnverified == true && !enterpriseUnverified) {
-                    emptyCandidate = (lines, enterpriseUnverified)
+                // An enterprise-verified zero beats an org-only one from an earlier credential.
+                if emptyCandidate == nil || (emptyCandidate?.enterpriseVerified == false && enterpriseVerified) {
+                    emptyCandidate = (lines, enterpriseVerified)
                 }
             case .managed(let provenEnterpriseAssociation):
                 if provenEnterpriseAssociation {
                     sawProvenEnterpriseAssociation = true
-                    if emptyCandidate?.enterpriseUnverified == true {
+                    if emptyCandidate?.enterpriseVerified == false {
                         emptyCandidate = nil
                     }
                 }
@@ -88,7 +89,7 @@ extension CopilotProvider {
             }
         }
         if let emptyCandidate, !sawTransientFailure {
-            return .empty(emptyCandidate.lines, enterpriseUnverified: emptyCandidate.enterpriseUnverified)
+            return .empty(emptyCandidate.lines, enterpriseVerified: emptyCandidate.enterpriseVerified)
         }
         return sawTransientFailure
             ? .temporarilyUnavailable
@@ -104,10 +105,6 @@ extension CopilotProvider {
         var shouldTryEnterprise = false
         var attemptedOrgKeys: Set<String> = []
         var unresolvedAssociatedOrgKeys: Set<String> = []
-        // Set when a business seat's empty org report is published without enterprise visibility —
-        // consumed by the multi-credential aggregation, where a proven association or a verified
-        // zero from another credential outranks it.
-        var enterpriseUnverified = false
         // Set when GraphQL proved an enterprise owns the seat org (usage unreadable) — carried out
         // so the aggregation across credentials can overrule another credential's unverified zero.
         var provenEnterpriseAssociation = false
@@ -240,7 +237,7 @@ extension CopilotProvider {
                 return .usage(lines)
             case .empty(let lines):
                 // The enterprise itself answered with a zero report — a verified zero.
-                return .empty(lines, enterpriseUnverified: false)
+                return .empty(lines, enterpriseVerified: true)
             case .noAssociation:
                 // Discovery answered and no visible enterprise claims the seat org: the org's own
                 // readable report (including a month-start empty one) is the best available truth.
@@ -256,7 +253,6 @@ extension CopilotProvider {
                 if isEnterpriseSeat, emptyCandidate != nil, !sawTransientFailure {
                     return .managed(provenEnterpriseAssociation: false)
                 }
-                enterpriseUnverified = true
             case .managed:
                 // A proven enterprise association with unreadable usage: an empty org report cannot
                 // prove that consolidated usage is zero. Keep the honest managed state instead of
@@ -274,7 +270,10 @@ extension CopilotProvider {
            !sawTransientFailure,
            unresolvedAssociatedOrgKeys.isEmpty
         {
-            return .empty(emptyCandidate.lines, enterpriseUnverified: enterpriseUnverified)
+            // Whether discovery answered "no visible enterprise" or couldn't be read at all, this
+            // zero rests on the org's own report — org-only, so a later credential's ownership
+            // proof may displace it in the aggregation above.
+            return .empty(emptyCandidate.lines, enterpriseVerified: false)
         }
         return sawTransientFailure
             ? .temporarilyUnavailable

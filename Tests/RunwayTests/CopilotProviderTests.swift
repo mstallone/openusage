@@ -1248,6 +1248,76 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertNil(snapshot.line(label: "Organization Usage"))
     }
 
+    func testProvenAssociationDisplacesOrgOnlyNoAssociationZero() async {
+        // The GitHub CLI credential sees no enterprises at all (its zero is org-only — "no visible
+        // association" is viewer-relative), while the editor credential proves octo-enterprise owns
+        // the seat org but can't read its usage. The positive proof must displace the org-only zero.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(makeEnterpriseMembershipBody(enterprises: []))
+                    : ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testEnterpriseVerifiedZeroSurvivesLaterOwnershipProof() async {
+        // The GitHub CLI credential reads the owning enterprise's own zero report — the one zero no
+        // ownership proof can displace. The editor credential proving the same enterprise without
+        // usage access must not downgrade that verified zero to the managed state.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            case "/graphql":
+                return ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(["usageItems": []])
+                    : HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+    }
+
     func testEnterpriseDiscoveryPaginatesViewerEnterprises() async {
         let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
         let http = RoutingHTTPClient { request in
