@@ -5,7 +5,7 @@ Fast, observable AI usage across every provider and account, right from the macO
 Runway brings multiple accounts across Claude, Codex, Cursor, Grok, Devin, and more into one focused view of limits, credits, and spend. Cached data appears instantly, live refreshes stay out of the way, and the metrics you care about can sit directly in the menu bar.
 
 <p align="center">
-  <img src="assets/screenshot.jpg?v=20260706" alt="Runway menu bar tracker showing Claude and Codex session, weekly, and spend usage" width="900">
+  <img src="assets/hero.png" alt="Runway hero: menu bar pins and the dashboard popover with the Total Spend ring plus Claude and Codex meters in normal, warning, and critical states" width="900">
 </p>
 
 ## Installation
@@ -44,7 +44,17 @@ Most providers read the credentials already on your machine (keychain, auth file
 - **Native settings.** Launch at login, global shortcut, icon style, theme, 12/24-hour time — see [Settings](docs/settings.md).
 - **[Automatic updates](docs/updates.md).** Signed, notarized stable updates via Sparkle.
 
+## iPhone Companion
 
+Runway for iOS mirrors combined usage from every Mac you run — spend today, yesterday, and over the
+last 30 days — synced privately over iCloud, with lock screen and home screen widgets. Each widget
+can show cost or tokens; see the [iOS app](docs/ios-app.md) for setup and TestFlight access.
+
+<p align="center">
+  <img src="assets/ios-lockscreen.png" width="270" alt="Runway lock screen widgets showing today's AI spend synced from your Macs">
+  &nbsp;&nbsp;
+  <img src="assets/ios-home-widgets.png" width="510" alt="Runway home screen widgets with today, yesterday, and 30-day spend plus a usage trend chart">
+</p>
 
 ## Documentation
 
