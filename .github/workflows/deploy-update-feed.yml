@@ -32,8 +32,15 @@ concurrency:
 jobs:
   deploy:
     name: Deploy Update Feed
-    # Deploy after a successful publish; a failed Release never touched update-feed, so skip.
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # Deploy on success AND failure: a Release run can conclude "failure" because an iOS TestFlight
+    # job failed even though the macOS job already published a new appcast to update-feed — the
+    # deploy must not be suppressed then, or Sparkle clients never see the release. Deploying after
+    # a genuinely failed publish is a harmless no-op (the branch is only ever updated on a
+    # successful macOS publish, so this just re-deploys its current content).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
     # Use the product-facing environment name so GitHub's repository homepage identifies these
     # deployments by purpose instead of by their Pages transport.
