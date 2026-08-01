@@ -5,7 +5,7 @@ description: Cut a stable release of Runway (Swift menu-bar app): pick a version
 
 # Release Swift
 
-Pushing a `v*` tag on `main` runs `.github/workflows/release.yml`, which builds, signs, notarizes, attaches `Runway-<version>.dmg` to the GitHub Release, and updates the Sparkle `appcast.xml` on `update-feed`. The same run's independent **iOS TestFlight** job builds the iOS companion app at the tag's version and uploads it to App Store Connect, where TestFlight distributes it to internal testers automatically after processing. CI creates the release with an EMPTY body, so this skill generates the changelog, records it in `CHANGELOG.md`, and publishes the notes onto the release.
+Pushing a `v*` tag on `main` runs `.github/workflows/release.yml`, which builds, signs, notarizes, attaches `Runway-<version>.dmg` to the GitHub Release, and updates the Sparkle `appcast.xml` on `update-feed`. The same run's independent **iOS TestFlight** job builds the iOS companion app at the tag's version and uploads it to App Store Connect, where TestFlight distributes it to internal testers automatically after processing; a follow-up **TestFlight External** job then adds the processed build to the external tester group(s) and submits it for Beta App Review. CI creates the release with an EMPTY body, so this skill generates the changelog, records it in `CHANGELOG.md`, and publishes the notes onto the release.
 
 Runway has one stable release channel. Tags use `vMAJOR.MINOR.PATCH`; suffixed prerelease tags are
 rejected. The tag is the version (`v0.7.1` becomes `CFBundleShortVersionString = 0.7.1`), and
@@ -102,13 +102,19 @@ The second check matters: publishing is two hops — Release (or pricing-supplem
 Require `isDraft=false`, `isPrerelease=false`, `Runway-<version>.dmg` and
 `Runway-<version>.dmg.sha256` assets, `bodyLen>0`, and the version present in the appcast.
 
-Also confirm the **iOS TestFlight** job in the same run succeeded (`gh run view` shows both jobs).
-A green job means the build was uploaded; Apple-side processing typically takes minutes, after
-which TestFlight pushes it to internal testers on its own — the owner can watch it in App Store
-Connect → TestFlight. An iOS-only failure does not invalidate the Mac release: fix the cause and
-rerun just the failed job (`gh run rerun <run-id> --failed`) — but only if the upload itself never
-happened; a rerun after a successful upload is rejected as a duplicate build number, and the fix
-then ships with the next tag instead. If a
+Also confirm the two iOS jobs in the same run succeeded (`gh run view` shows all jobs):
+
+- **iOS TestFlight** green means the build was uploaded; TestFlight pushes it to internal testers
+  on its own once Apple finishes processing (minutes).
+- **TestFlight External** green means the processed build was added to the external group(s) and
+  submitted for Beta App Review — external testers receive it when Apple approves (hours to ~a
+  day; visible in App Store Connect → TestFlight). Approval is Apple-side; nothing to babysit.
+
+An iOS-only failure does not invalidate the Mac release: fix the cause and rerun just the failed
+job (`gh run rerun <run-id> --failed`). That is always safe for **TestFlight External** (it is
+idempotent), but for **iOS TestFlight** only if the upload itself never happened — a rerun after
+a successful upload is rejected as a duplicate build number, and the fix then ships with the next
+tag instead. If a
 draft was left behind, migrate its notes/assets onto the published release, then delete it — but only
 once a separate PUBLISHED release for the tag already exists:
 

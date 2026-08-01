@@ -45,10 +45,13 @@ iCloud account as the Macs.
 ## Releasing (TestFlight)
 
 The iOS app ships from the same `v*` tag as the Mac app: the release workflow's "iOS TestFlight"
-job archives the app, signs it, and uploads it to App Store Connect, which serves it to TestFlight
-testers once Apple finishes processing. Testers install and update through the TestFlight app —
-there is no Sparkle feed on iOS, and no notarization either (the App Store Connect upload plays
-that role).
+job archives the app, signs it, and uploads it to App Store Connect, which serves it to internal
+TestFlight testers once Apple finishes processing. A follow-up "TestFlight External" job then
+waits for that processing, adds the build to the external tester group(s), and submits it for
+Beta App Review — external testers receive it when Apple approves (`script/testflight_distribute.mjs`
+does that through the App Store Connect API). Testers install and update through the TestFlight
+app — there is no Sparkle feed on iOS, and no notarization either (the App Store Connect upload
+plays that role).
 
 - The version is the tag (`v0.7.1` → `0.7.1`) and the build number is the git commit count, both
   injected at build time — the `MARKETING_VERSION` in the Xcode project is never bumped by hand.
@@ -59,6 +62,9 @@ that role).
   Manager role.
 - `script/release_ios.sh` is the whole build; run it locally with `SKIP_TESTFLIGHT_UPLOAD=1` to get
   a signed `.ipa` in `dist/ios/` without uploading.
+- The upload can never be repeated, but the external-distribution job is idempotent: if it fails
+  (say, before the one-time Test Information is filled in), rerun just that job with
+  `gh run rerun <run-id> --failed` — the uploaded build is untouched.
 
 The one-time App Store Connect setup (app record, tester group, key role) is documented in the
 release-swift skill under `.agents/skills/release-swift/`.
