@@ -6,8 +6,37 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A200000000000000000000C5 /* RunwayMobileWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B1 /* RunwayMobileWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A200000000000000000000E2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A100000000000000000000F1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A200000000000000000000E1;
+			remoteInfo = RunwayMobileWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A200000000000000000000C4 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A200000000000000000000C5 /* RunwayMobileWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		A100000000000000000000B1 /* RunwayMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RunwayMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A200000000000000000000B1 /* RunwayMobileWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = RunwayMobileWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +45,27 @@
 			path = RunwayMobile;
 			sourceTree = "<group>";
 		};
+		A200000000000000000000A1 /* RunwayMobileWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = RunwayMobileWidgets;
+			sourceTree = "<group>";
+		};
+		A300000000000000000000A1 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A100000000000000000000C1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A200000000000000000000C1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +79,8 @@
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000A1 /* RunwayMobile */,
+				A200000000000000000000A1 /* RunwayMobileWidgets */,
+				A300000000000000000000A1 /* Shared */,
 				A100000000000000000000D2 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +89,7 @@
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000B1 /* RunwayMobile.app */,
+				A200000000000000000000B1 /* RunwayMobileWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,18 +104,42 @@
 				A100000000000000000000C2 /* Sources */,
 				A100000000000000000000C1 /* Frameworks */,
 				A100000000000000000000C3 /* Resources */,
+				A200000000000000000000C4 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A200000000000000000000E3 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A100000000000000000000A1 /* RunwayMobile */,
+				A300000000000000000000A1 /* Shared */,
+			);
+			name = RunwayMobile;
+			productName = RunwayMobile;
+			productReference = A100000000000000000000B1 /* RunwayMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A200000000000000000000E1 /* RunwayMobileWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A200000000000000000000F3 /* Build configuration list for PBXNativeTarget "RunwayMobileWidgets" */;
+			buildPhases = (
+				A200000000000000000000C2 /* Sources */,
+				A200000000000000000000C1 /* Frameworks */,
+				A200000000000000000000C3 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				A100000000000000000000A1 /* RunwayMobile */,
+				A200000000000000000000A1 /* RunwayMobileWidgets */,
+				A300000000000000000000A1 /* Shared */,
 			);
-			name = RunwayMobile;
-			productName = RunwayMobile;
-			productReference = A100000000000000000000B1 /* RunwayMobile.app */;
-			productType = "com.apple.product-type.application";
+			name = RunwayMobileWidgets;
+			productName = RunwayMobileWidgets;
+			productReference = A200000000000000000000B1 /* RunwayMobileWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -78,6 +151,9 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					A100000000000000000000E1 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					A200000000000000000000E1 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -97,12 +173,20 @@
 			projectRoot = "";
 			targets = (
 				A100000000000000000000E1 /* RunwayMobile */,
+				A200000000000000000000E1 /* RunwayMobileWidgets */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A100000000000000000000C3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A200000000000000000000C3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -119,7 +203,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A200000000000000000000C2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A200000000000000000000E3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A200000000000000000000E1 /* RunwayMobileWidgets */;
+			targetProxy = A200000000000000000000E2 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000101 /* Debug */ = {
@@ -219,6 +318,54 @@
 			};
 			name = Release;
 		};
+		A20000000000000000000103 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/RunwayMobileWidgets.Debug.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8KZBNZJBAX;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/RunwayMobileWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Runway Widgets";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mattstallone.runway.mobile.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A20000000000000000000104 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/RunwayMobileWidgets.Release.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8KZBNZJBAX;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/RunwayMobileWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Runway Widgets";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mattstallone.runway.mobile.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -236,6 +383,15 @@
 			buildConfigurations = (
 				A10000000000000000000103 /* Debug */,
 				A10000000000000000000104 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A200000000000000000000F3 /* Build configuration list for PBXNativeTarget "RunwayMobileWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20000000000000000000103 /* Debug */,
+				A20000000000000000000104 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

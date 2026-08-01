@@ -336,6 +336,7 @@ jobs:
           APPLE_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
           APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
           APPLE_IOS_APP_STORE_PROFILE: ${{ secrets.APPLE_IOS_APP_STORE_PROFILE }}
+          APPLE_IOS_WIDGET_APP_STORE_PROFILE: ${{ secrets.APPLE_IOS_WIDGET_APP_STORE_PROFILE }}
         run: |
           set -euo pipefail
           for name in \
@@ -344,7 +345,8 @@ jobs:
             APPLE_NOTARY_ISSUER_ID \
             APPLE_DISTRIBUTION_CERTIFICATE_BASE64 \
             APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD \
-            APPLE_IOS_APP_STORE_PROFILE
+            APPLE_IOS_APP_STORE_PROFILE \
+            APPLE_IOS_WIDGET_APP_STORE_PROFILE
           do
             if [[ -z "${!name:-}" ]]; then
               echo "::error::Missing required repository secret: $name"
@@ -360,13 +362,16 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
 
-      - name: Write App Store provisioning profile
+      - name: Write App Store provisioning profiles
         env:
           IOS_PROFILE_BASE64: ${{ secrets.APPLE_IOS_APP_STORE_PROFILE }}
+          IOS_WIDGET_PROFILE_BASE64: ${{ secrets.APPLE_IOS_WIDGET_APP_STORE_PROFILE }}
         run: |
           set -euo pipefail
           printf '%s' "$IOS_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/runway-ios-appstore.mobileprovision"
           echo "IOS_PROVISIONING_PROFILE=$RUNNER_TEMP/runway-ios-appstore.mobileprovision" >> "$GITHUB_ENV"
+          printf '%s' "$IOS_WIDGET_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/runway-ios-widgets-appstore.mobileprovision"
+          echo "IOS_WIDGET_PROVISIONING_PROFILE=$RUNNER_TEMP/runway-ios-widgets-appstore.mobileprovision" >> "$GITHUB_ENV"
 
       - name: Write App Store Connect API key
         env:
@@ -393,6 +398,7 @@ jobs:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
         run: |
           rm -f "$RUNNER_TEMP/runway-ios-appstore.mobileprovision"
+          rm -f "$RUNNER_TEMP/runway-ios-widgets-appstore.mobileprovision"
           if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
             rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           fi
