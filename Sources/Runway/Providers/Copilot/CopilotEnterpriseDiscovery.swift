@@ -4,7 +4,11 @@ import Foundation
 /// enterprises and each enterprise's organizations as independent cursor connections.
 struct CopilotEnterpriseDiscovery: Sendable {
     enum Result: Sendable {
-        case targets([CopilotOrgBillingMapper.EnterpriseTarget])
+        /// `complete` is false when a denial cut discovery short after some associations were
+        /// already proven. A proven target fully resolves its own organization either way (an org
+        /// has one owning enterprise); the flag tells the caller that seat orgs *without* a proven
+        /// target may still have an unseen enterprise, so their empty reports stay provisional.
+        case targets([CopilotOrgBillingMapper.EnterpriseTarget], complete: Bool)
         case noAssociation
         case managed
         case temporarilyUnavailable
@@ -57,7 +61,11 @@ struct CopilotEnterpriseDiscovery: Sendable {
                 case .page(let page):
                     membershipPage = page
                 case .managed:
-                    return .managed
+                    // A denial part-way through must not erase associations already proven on
+                    // earlier pages: the caller can still check those enterprises' usage, and an
+                    // unreadable proven target keeps the managed state instead of degrading to
+                    // "nothing was proven" (which would let an empty org report publish as zero).
+                    return targets.isEmpty ? .managed : .targets(targets, complete: false)
                 case .temporarilyUnavailable:
                     return .temporarilyUnavailable
                 }
@@ -94,7 +102,8 @@ struct CopilotEnterpriseDiscovery: Sendable {
                         case .page(let page):
                             organizationPage = page
                         case .managed:
-                            return .managed
+                            // Same partial-denial rule as the membership pages above.
+                            return targets.isEmpty ? .managed : .targets(targets, complete: false)
                         case .temporarilyUnavailable:
                             return .temporarilyUnavailable
                         }
@@ -113,7 +122,7 @@ struct CopilotEnterpriseDiscovery: Sendable {
                 enterpriseCursor = nextCursor
             }
         }
-        return targets.isEmpty ? .noAssociation : .targets(targets)
+        return targets.isEmpty ? .noAssociation : .targets(targets, complete: true)
     }
 
     private func membershipPage(

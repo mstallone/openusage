@@ -293,7 +293,13 @@ struct WidgetRowView: View {
     }
 
     private var unboundedRowContent: some View {
-        HStack(alignment: .center, spacing: 10) {
+        // A numeric value ("1,503 left") must never truncate, so it holds its width rigid. A text
+        // badge ("Managed by Your Organization") can be a full sentence: if it also held rigid, the
+        // row's minimum width would exceed the panel's content slot, and — because every provider
+        // card stretches to the widest sibling — one such row strips the outer padding from the
+        // entire dashboard. Badge text yields instead: it wraps to two lines and then truncates.
+        let isTextBadge = data.valueTextOverride != nil
+        return HStack(alignment: .center, spacing: 10) {
             labelColumn
             Spacer(minLength: 12)
             VStack(alignment: .trailing, spacing: 2) {
@@ -303,8 +309,8 @@ struct WidgetRowView: View {
                         .font(supportingFont)
                         .foregroundStyle(.primary) // the value is the row's payload — match the bounded headline
                         .contentTransition(.numericText())
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .lineLimit(isTextBadge ? 2 : 1)
+                        .fixedSize(horizontal: !isTextBadge, vertical: false)
                         // Hover target is the value text itself, not the whole row — the same
                         // per-element pattern the bounded row uses for "x left" and "Resets in …". Reveals
                         // the exact figures the compact value shortens, or "No usage in this period" on a
@@ -317,11 +323,12 @@ struct WidgetRowView: View {
                 }
                 if let subtitle = data.unboundedSubtitle {
                     // Secondary, not tertiary: the subtitle is informational ("on-device estimate"),
-                    // and tertiary is reserved for inactive content on glass.
+                    // and tertiary is reserved for inactive content on glass. Badge subtitles are
+                    // sentences, so they get the same two-line room as the badge value above.
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(isTextBadge ? 2 : 1)
                 }
             }
             .multilineTextAlignment(.trailing)

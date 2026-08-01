@@ -670,6 +670,8 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
+        // Positive org-local usage needs no enterprise caveat.
+        XCTAssertNil(snapshot.warning)
         // The placeholder's `overage_permitted: true` must not leave a meaningless Extra Usage row.
         XCTAssertNil(snapshot.lines.first(where: { $0.label == "Extra Usage" }))
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
@@ -914,7 +916,7 @@ final class CopilotProviderTests: XCTestCase {
         })
     }
 
-    func testTransientGraphQLErrorShowsOrganizationUsageUnavailable() async {
+    func testTransientGraphQLErrorFailsRefreshInsteadOfReplacingData() async {
         var rateLimited = ok([
             "errors": [[
                 "type": "RATE_LIMITED",
@@ -931,14 +933,14 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        // A transient outage fails the refresh (the store keeps the previous snapshot) rather than
+        // publishing an "unavailable" placeholder over good numbers.
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
-    func testRateLimitedGraphQL403ShowsOrganizationUsageUnavailable() async {
+    func testRateLimitedGraphQL403FailsRefreshInsteadOfReplacingData() async {
         let rateLimited = HTTPResponse(
             statusCode: 403,
             headers: ["x-ratelimit-remaining": "0"],
@@ -953,14 +955,12 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
-    func testRateLimitedGraphQLOrganizationPageShowsOrganizationUsageUnavailable() async {
+    func testRateLimitedGraphQLOrganizationPageFailsRefreshInsteadOfReplacingData() async {
         let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
         let rateLimited = HTTPResponse(
             statusCode: 403,
@@ -988,16 +988,47 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(http.requests.filter { $0.url.path == "/graphql" }.count, 2)
     }
 
-    func testGraphQLAuthorizationErrorKeepsManagedOrganizationState() async {
+    func testGraphQLAuthorizationErrorFallsBackToSeatOrgEmptyReport() async {
+        // The month-rollover regression: at the start of a billing month the seat org legitimately
+        // reports zero usage. A token that can't see enterprise associations at all must not turn
+        // that readable zero report into "Managed by Your Organization" — consolidated billing would
+        // have made the org endpoint 404 instead of answering.
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", ok([
+                "errors": [[
+                    "type": "FORBIDDEN",
+                    "message": "Resource not accessible by integration"
+                ]]
+            ]))
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
+        // No warning even though the zero couldn't be enterprise-verified: real usage under the same
+        // login surfaces in the org report on the next refresh, so the zero corrects itself.
+        XCTAssertNil(snapshot.warning)
+    }
+
+    func testEnterpriseSeatWithDeniedDiscoveryKeepsManagedState() async {
+        // A Copilot Enterprise seat guarantees an owning enterprise exists. When the token can't
+        // read enterprise associations, an empty org report can't rule out consolidated usage —
+        // unlike the business seat above, this must stay in the managed state, not read as zero.
+        var body = makeBusinessPlaceholderBody(seatOrgs: ["acme"])
+        body["copilot_plan"] = "enterprise"
+        let http = routedClient([
+            ("/copilot_internal/user", ok(body)),
             ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
             ("/graphql", ok([
                 "errors": [[
@@ -1015,6 +1046,276 @@ final class CopilotProviderTests: XCTestCase {
         }
         XCTAssertEqual(text, "Managed by Your Organization")
         XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testProvenEnterpriseWithUnreadableUsageKeepsManagedState() async {
+        // GraphQL proves octo-enterprise owns the seat org, but its usage endpoint is forbidden. The
+        // org-level empty report cannot rule out consolidated enterprise usage here, so the honest
+        // managed state must survive the empty-report fallback above.
+        let forbidden = HTTPResponse(statusCode: 403, headers: [:], body: Data())
+        let http = routedClient([
+            ("/copilot_internal/user", ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))),
+            ("/organizations/acme/settings/billing/ai_credit/usage", ok(["usageItems": []])),
+            ("/graphql", ok(makeEnterpriseMembershipBody(
+                enterprises: [("octo-enterprise", ["acme"])]
+            ))),
+            ("/enterprises/octo-enterprise/settings/billing/ai_credit/usage", forbidden)
+        ])
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testProvenAssociationFromSecondCredentialOverridesUnverifiedZero() async {
+        // The GitHub CLI credential can't see enterprise associations (its empty org report is only
+        // provisional), but the editor credential proves octo-enterprise owns the seat org and can't
+        // read its usage. The proof is an account-level fact: the unverified zero must yield to the
+        // managed state instead of being published with a warning.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testProvenAssociationFromFirstCredentialBlocksLaterUnverifiedZero() async {
+        // Same combination in the other order: the proof arrives before the unverified empty report,
+        // which must then be rejected rather than stored.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+                    : ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testPartialDiscoveryDenialKeepsProofFromEarlierPages() async {
+        // Page one proves octo-enterprise owns the seat org; the next enterprise page is denied.
+        // The proof must survive the partial denial: with the proven enterprise's usage unreadable,
+        // the card stays managed instead of publishing the empty org report as zero.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return graphQLVariables(request)["enterpriseCursor"] as? String == "enterprise-page-2"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])],
+                        nextEnterpriseCursor: "enterprise-page-2"
+                    ))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+        XCTAssertTrue(http.requests.contains {
+            $0.url.path == "/enterprises/octo-enterprise/settings/billing/ai_credit/usage"
+        })
+    }
+
+    func testPartialDiscoveryDenialKeepsOtherSeatOrgsProvisional() async {
+        // Two seat orgs: discovery proves acme's enterprise, then the denial cuts scanning short
+        // before beta's association is known. Acme's enterprise report is a readable zero, but that
+        // must not publish as a verified zero — beta may have an unseen enterprise carrying usage.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme", "beta"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage",
+                 "/organizations/beta/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return graphQLVariables(request)["enterpriseCursor"] as? String == "enterprise-page-2"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])],
+                        nextEnterpriseCursor: "enterprise-page-2"
+                    ))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testPartialDiscoveryDenialStillVerifiesFullyResolvedSeatOrg() async {
+        // Single seat org with a proven enterprise: the org is fully resolved by its target (an org
+        // has one owning enterprise), so a denial on a later discovery page changes nothing — the
+        // enterprise's readable zero still renders as zero usage.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return graphQLVariables(request)["enterpriseCursor"] as? String == "enterprise-page-2"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])],
+                        nextEnterpriseCursor: "enterprise-page-2"
+                    ))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+    }
+
+    func testProvenAssociationDisplacesOrgOnlyNoAssociationZero() async {
+        // The GitHub CLI credential sees no enterprises at all (its zero is org-only — "no visible
+        // association" is viewer-relative), while the editor credential proves octo-enterprise owns
+        // the seat org but can't read its usage. The positive proof must displace the org-only zero.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(makeEnterpriseMembershipBody(enterprises: []))
+                    : ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testEnterpriseVerifiedZeroSurvivesLaterOwnershipProof() async {
+        // The GitHub CLI credential reads the owning enterprise's own zero report — the one zero no
+        // ownership proof can displace. The editor credential proving the same enterprise without
+        // usage access must not downgrade that verified zero to the managed state.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            case "/graphql":
+                return ok(makeEnterpriseMembershipBody(enterprises: [("octo-enterprise", ["acme"])]))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return request.headers["Authorization"] == "token gho_billing"
+                    ? ok(["usageItems": []])
+                    : HTTPResponse(statusCode: 403, headers: [:], body: Data())
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = CopilotProvider(
+            authStore: editorAndGhTokenStore(),
+            usageClient: CopilotUsageClient(http: http),
+            orgBillingClient: CopilotOrgBillingClient(http: http),
+            defaults: freshDefaults()
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
     }
 
     func testEnterpriseDiscoveryPaginatesViewerEnterprises() async {
@@ -1108,6 +1409,8 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        // The enterprise itself reported the zero — verified, so no caveat.
+        XCTAssertNil(snapshot.warning)
     }
 
     func testOrganizationBillingRequestsOnlyCopilotProduct() async {
@@ -1202,6 +1505,8 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        // Discovery answered (no owning enterprise), so this zero is verified — no warning.
+        XCTAssertNil(snapshot.warning)
         XCTAssertNil(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey))
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
         XCTAssertTrue(http.requests.contains { $0.url.path == "/graphql" })
@@ -1347,9 +1652,10 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
     }
 
-    func testTransientBillingFailureKeepsCachedOrg() async {
+    func testTransientBillingFailureKeepsCachedOrgAndFailsRefresh() async {
         // A 5xx from the cached org's billing endpoint is a brief outage, not a stale org: the cache
-        // must survive (no re-discovery), and the card should describe the temporary failure.
+        // must survive (no re-discovery), and the refresh fails so the store keeps the last-good
+        // snapshot instead of replacing it with a placeholder.
         let http = routedClient([
             ("/copilot_internal/user", ok(makeBusinessPlaceholderBody())),
             ("/organizations/acme/settings/billing/ai_credit/usage", HTTPResponse(statusCode: 503, headers: [:], body: Data()))
@@ -1360,15 +1666,13 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
     }
 
-    func testRateLimitedBilling403KeepsCachedOrgAndShowsUnavailable() async {
+    func testRateLimitedBilling403KeepsCachedOrgAndFailsRefresh() async {
         let rateLimited = HTTPResponse(
             statusCode: 403,
             headers: ["x-ratelimit-remaining": "0"],
@@ -1384,15 +1688,13 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
     }
 
-    func testRateLimitedOrgList403ShowsOrganizationUsageUnavailable() async {
+    func testRateLimitedOrgList403FailsRefreshInsteadOfReplacingData() async {
         let rateLimited = HTTPResponse(
             statusCode: 403,
             headers: ["retry-after": "60"],
@@ -1406,10 +1708,8 @@ final class CopilotProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
-            return XCTFail("expected organization status")
-        }
-        XCTAssertEqual(text, "Organization Usage Unavailable")
+        XCTAssertTrue(snapshot.lines.contains { $0.isError })
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertNil(snapshot.line(label: "Org Credits"))
     }
 
