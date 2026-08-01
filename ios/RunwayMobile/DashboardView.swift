@@ -171,16 +171,26 @@ private struct ProviderCard: View {
             HStack(spacing: 8) {
                 Text(provider.displayName)
                     .font(.body.weight(.medium))
+                    .lineLimit(1)
+                if let plan = provider.plan {
+                    Text(plan)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 if provider.warning != nil || error != nil {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .imageScale(.small)
                 }
                 Spacer()
-                if let plan = provider.plan {
-                    Text(plan)
-                        .font(.caption)
+                // The headline number while the card is collapsed. Providers without a weekly meter
+                // leave the trailing edge empty rather than showing a different window's number.
+                if let weekly = provider.weeklyRemainingPercent {
+                    Text(String(format: "%.0f%%", weekly))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .monospacedDigit()
                 }
             }
         }

@@ -8,9 +8,11 @@ The dashboard shows:
 
 - **Across Your Macs** — Today, Yesterday, and Last 30 Days spend/token tiles plus a usage trend,
   day-summed from every device's history payload (the same additive model the Mac uses).
-- **One section per Mac** — that device's live snapshot: each provider's rendered rows (quota
-  meters with reset countdowns, spend tiles, status badges, charts), its plan, warnings, and
-  refresh errors, with the record's age in the header.
+- **One section per Mac** — that device's live snapshot, one collapsed row per provider showing the
+  account name, its plan beside it, and the percent of the weekly quota still left at the trailing
+  edge (blank for providers with no weekly meter). Expanding a row reveals its rendered metrics
+  (quota meters with reset countdowns, spend tiles, status badges, charts), warnings, and refresh
+  errors; the record's age sits in the section header.
 
 Data refreshes on launch, on returning to the foreground, and with pull-to-refresh. Liveness is
 bounded by the Macs' five-minute publish cadence.

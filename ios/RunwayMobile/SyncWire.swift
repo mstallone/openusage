@@ -66,6 +66,27 @@ struct ProviderSnapshotWire: Decodable {
     var lines: [MetricLineWire]
 }
 
+extension ProviderSnapshotWire {
+    /// Share of the weekly quota still available (0…100), shown at the right edge of the collapsed
+    /// provider row. Providers label that meter differently ("Weekly", "Weekly quota", "Weekly
+    /// Usage"), so the label is matched loosely first and a roughly-seven-day meter period is the
+    /// fallback. Providers with two weekly windows (Codex's Spark, Antigravity's Claude pool) list
+    /// the primary one first, so the first match wins; providers with no weekly meter (Cursor,
+    /// Copilot) show nothing rather than borrowing another window's number.
+    var weeklyRemainingPercent: Double? {
+        weeklyPercent { label, _ in label.localizedCaseInsensitiveContains("weekly") }
+            ?? weeklyPercent { _, periodMs in periodMs.map { (6...8).contains($0 / 86_400_000) } ?? false }
+    }
+
+    private func weeklyPercent(where matches: (String, Int?) -> Bool) -> Double? {
+        for case .progress(let label, let used, let limit, _, _, let periodMs) in lines
+        where limit > 0 && matches(label, periodMs) {
+            return min(max(limit - used, 0) / limit * 100, 100)
+        }
+        return nil
+    }
+}
+
 struct MetricValueWire: Decodable {
     var number: Double
     var kind: MetricKindWire
