@@ -287,12 +287,14 @@ extension CopilotProvider {
         unresolvedOrgKeys: Set<String>
     ) async -> EnterpriseBillingLookup {
         let targets: [CopilotOrgBillingMapper.EnterpriseTarget]
+        let discoveryComplete: Bool
         switch await CopilotEnterpriseDiscovery(client: orgBillingClient).lookup(
             token: token,
             seatOrgLogins: seatOrgLogins
         ) {
-        case .targets(let discoveredTargets):
+        case .targets(let discoveredTargets, let complete):
             targets = discoveredTargets
+            discoveryComplete = complete
         case .noAssociation:
             return .noAssociation
         case .managed:
@@ -304,7 +306,14 @@ extension CopilotProvider {
         }
 
         let targetOrgKeys = Set(targets.map { $0.organization.lowercased() })
+        let seatOrgKeys = Set(seatOrgLogins.map { $0.lowercased() })
+        // Unresolved when an org-endpoint failure isn't covered by a proven target, or when a
+        // partial discovery denial left some seat org without a proven billing home. A seat org
+        // *with* a proven target is fully resolved by it regardless of how discovery ended — an
+        // organization has one owning enterprise — so a truncated discovery only taints the orgs
+        // that never got one.
         var sawUnresolvedTarget = !unresolvedOrgKeys.isSubset(of: targetOrgKeys)
+            || (!discoveryComplete && !seatOrgKeys.isSubset(of: targetOrgKeys))
         var sawTransientFailure = false
         var emptyCandidate: [MetricLine]?
         for target in targets {

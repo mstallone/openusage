@@ -1181,6 +1181,73 @@ final class CopilotProviderTests: XCTestCase {
         })
     }
 
+    func testPartialDiscoveryDenialKeepsOtherSeatOrgsProvisional() async {
+        // Two seat orgs: discovery proves acme's enterprise, then the denial cuts scanning short
+        // before beta's association is known. Acme's enterprise report is a readable zero, but that
+        // must not publish as a verified zero — beta may have an unseen enterprise carrying usage.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme", "beta"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage",
+                 "/organizations/beta/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return graphQLVariables(request)["enterpriseCursor"] as? String == "enterprise-page-2"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])],
+                        nextEnterpriseCursor: "enterprise-page-2"
+                    ))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        guard case .badge(_, let text, _, _) = snapshot.line(label: "Organization Usage") else {
+            return XCTFail("expected organization status")
+        }
+        XCTAssertEqual(text, "Managed by Your Organization")
+        XCTAssertNil(snapshot.line(label: "Org Credits"))
+    }
+
+    func testPartialDiscoveryDenialStillVerifiesFullyResolvedSeatOrg() async {
+        // Single seat org with a proven enterprise: the org is fully resolved by its target (an org
+        // has one owning enterprise), so a denial on a later discovery page changes nothing — the
+        // enterprise's readable zero still renders as zero usage.
+        let http = RoutingHTTPClient { request in
+            switch request.url.path {
+            case "/copilot_internal/user":
+                return ok(makeBusinessPlaceholderBody(seatOrgs: ["acme"]))
+            case "/organizations/acme/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            case "/graphql":
+                return graphQLVariables(request)["enterpriseCursor"] as? String == "enterprise-page-2"
+                    ? ok(["errors": [["type": "FORBIDDEN", "message": "Resource not accessible by integration"]]])
+                    : ok(makeEnterpriseMembershipBody(
+                        enterprises: [("octo-enterprise", ["acme"])],
+                        nextEnterpriseCursor: "enterprise-page-2"
+                    ))
+            case "/enterprises/octo-enterprise/settings/billing/ai_credit/usage":
+                return ok(["usageItems": []])
+            default:
+                return HTTPResponse(statusCode: 404, headers: [:], body: Data())
+            }
+        }
+        let provider = makeOrgProvider(http: http, defaults: freshDefaults())
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
+        XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
+        XCTAssertNil(snapshot.line(label: "Organization Usage"))
+    }
+
     func testEnterpriseDiscoveryPaginatesViewerEnterprises() async {
         let notFound = HTTPResponse(statusCode: 404, headers: [:], body: Data())
         let http = RoutingHTTPClient { request in
