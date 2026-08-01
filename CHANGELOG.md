@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.8.4
+
+### Bug Fixes
+- Refresh README graphics and ship the flat Climb-out app icon ([#41](https://github.com/mstallone/runway/pull/41)) by @mstallone
+- Replace the in-popover Settings screen with a standalone Settings window ([#43](https://github.com/mstallone/runway/pull/43)) by @mstallone
+
+### Chores
+- Changelog for v0.8.3 ([#39](https://github.com/mstallone/runway/pull/39)) by @mstallone
+- Scope release workflow permissions to least privilege ([#40](https://github.com/mstallone/runway/pull/40)) by @mstallone
+- Fix release skill for protected main and add iOS signing preflight ([#42](https://github.com/mstallone/runway/pull/42)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.3...v0.8.4](https://github.com/mstallone/runway/compare/v0.8.3...v0.8.4)
+
+- [04081e5](https://github.com/mstallone/runway/commit/04081e5f28bb1fe050faf61e2f867692aece2c5d) docs: changelog for v0.8.3 (#39) by @mstallone
+- [a3a2123](https://github.com/mstallone/runway/commit/a3a212327cf7553a241997c49bec5fe59810570f) ci: scope release workflow permissions to least privilege (#40) by @mstallone
+- [ccbc065](https://github.com/mstallone/runway/commit/ccbc0657e4bb604199c32a9a958231bdf6f74839) docs: fix release skill for protected main and add iOS signing preflight (#42) by @mstallone
+- [94fbe15](https://github.com/mstallone/runway/commit/94fbe15806e995a5b24bf98755f5c31ef1129586) Refresh README graphics and ship the flat Climb-out app icon (#41) by @mstallone
+- [0c152f8](https://github.com/mstallone/runway/commit/0c152f81a38cfb5b7604e587b1d7002cd823c1e9) Replace the in-popover Settings screen with a standalone Settings window (#43) by @mstallone
+
 ## v0.8.3
 
 ### New Features
