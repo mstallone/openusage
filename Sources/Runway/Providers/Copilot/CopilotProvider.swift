@@ -101,6 +101,7 @@ final class CopilotProvider: ProviderRuntime {
             // credits and spend, while everyone else gets an explicit managed-account state. Gated on
             // the mapper's explicit flag, never on `lines` being empty (issue #839).
             var lines = mapped.lines
+            var warning: String?
             if mapped.isOrgManagedSeat {
                 // A second local token may belong to another GitHub account. It is safe for billing
                 // only when Copilot named the seat org; otherwise `/user/orgs` must stay tied to the
@@ -118,8 +119,15 @@ final class CopilotProvider: ProviderRuntime {
                     seatOrgLogins: mapped.organizationLogins,
                     isEnterpriseSeat: mapped.isEnterpriseSeat
                 ) {
-                case .usage(let usageLines), .empty(let usageLines):
+                case .usage(let usageLines):
                     lines = usageLines
+                case .empty(let usageLines, let enterpriseUnverified):
+                    lines = usageLines
+                    if enterpriseUnverified {
+                        // The zero is the org's own answer, but this credential couldn't rule out
+                        // enterprise-consolidated usage — say so instead of presenting a silent zero.
+                        warning = "Enterprise-billed usage can't be checked with this GitHub login."
+                    }
                 case .managed:
                     lines = [
                         .badge(
@@ -148,7 +156,8 @@ final class CopilotProvider: ProviderRuntime {
                     for: lines,
                     isOrgManagedSeat: mapped.isOrgManagedSeat,
                     usesFreeTierQuotas: mapped.usesFreeTierQuotas
-                )
+                ),
+                warning: warning
             )
         } catch let error as CopilotUsageError {
             return ProviderSnapshot.error(provider: provider, error: error)
@@ -161,7 +170,11 @@ final class CopilotProvider: ProviderRuntime {
 
     private enum OrgBillingLookup {
         case usage([MetricLine])
-        case empty([MetricLine])
+        /// A readable zero report. `enterpriseUnverified` is true when the report is published
+        /// without having ruled out enterprise-consolidated usage (a business seat whose credential
+        /// can't read enterprise associations) — the snapshot then carries a soft warning so the
+        /// zero is never silent.
+        case empty([MetricLine], enterpriseUnverified: Bool)
         case managed
         case temporarilyUnavailable
     }
@@ -197,7 +210,7 @@ final class CopilotProvider: ProviderRuntime {
         isEnterpriseSeat: Bool
     ) async -> OrgBillingLookup {
         var sawTransientFailure = false
-        var emptyCandidate: [MetricLine]?
+        var emptyCandidate: (lines: [MetricLine], enterpriseUnverified: Bool)?
         for (index, token) in tokens.enumerated() {
             if index > 0 {
                 AppLog.info(LogTag.plugin("copilot"), "trying another local GitHub credential for billing")
@@ -209,8 +222,12 @@ final class CopilotProvider: ProviderRuntime {
             ) {
             case .usage(let lines):
                 return .usage(lines)
-            case .empty(let lines):
-                emptyCandidate = emptyCandidate ?? lines
+            case .empty(let lines, let enterpriseUnverified):
+                // An enterprise-verified zero beats an unverified one from an earlier credential:
+                // it clears the soft warning the unverified report would carry.
+                if emptyCandidate == nil || (emptyCandidate?.enterpriseUnverified == true && !enterpriseUnverified) {
+                    emptyCandidate = (lines, enterpriseUnverified)
+                }
             case .managed:
                 continue
             case .temporarilyUnavailable:
@@ -218,7 +235,7 @@ final class CopilotProvider: ProviderRuntime {
             }
         }
         if let emptyCandidate, !sawTransientFailure {
-            return .usage(emptyCandidate)
+            return .empty(emptyCandidate.lines, enterpriseUnverified: emptyCandidate.enterpriseUnverified)
         }
         return sawTransientFailure ? .temporarilyUnavailable : .managed
     }
@@ -232,6 +249,9 @@ final class CopilotProvider: ProviderRuntime {
         var shouldTryEnterprise = false
         var attemptedOrgKeys: Set<String> = []
         var unresolvedAssociatedOrgKeys: Set<String> = []
+        // Set when a business seat's empty org report is published without enterprise visibility;
+        // the snapshot carries a soft warning so that zero is never a silent claim.
+        var enterpriseUnverified = false
         var rememberedEmpty: (org: String, lines: [MetricLine])?
         if let cached = defaults.string(forKey: Self.billingOrgDefaultsKey) {
             let cachedKey = cached.lowercased()
@@ -360,7 +380,8 @@ final class CopilotProvider: ProviderRuntime {
             case .usage(let lines):
                 return .usage(lines)
             case .empty(let lines):
-                return .empty(lines)
+                // The enterprise itself answered with a zero report — a verified zero.
+                return .empty(lines, enterpriseUnverified: false)
             case .noAssociation:
                 // Discovery answered and no visible enterprise claims the seat org: the org's own
                 // readable report (including a month-start empty one) is the best available truth.
@@ -370,11 +391,13 @@ final class CopilotProvider: ProviderRuntime {
                 // still prove depends on the seat: a Copilot Enterprise seat guarantees an owning
                 // enterprise exists, so possibly-consolidated usage stays unverifiable — keep the
                 // managed state. A Business seat's org normally bills itself, so its readable empty
-                // report stands: every business org reads as zero credits at the start of a billing
-                // month, not as "managed".
+                // report stands — every business org reads as zero credits at the start of a billing
+                // month, not as "managed" — but the zero is published with a soft warning, since a
+                // business org owned by an enterprise could consolidate usage this credential can't see.
                 if isEnterpriseSeat, emptyCandidate != nil, !sawTransientFailure {
                     return .managed
                 }
+                enterpriseUnverified = true
             case .managed:
                 // A proven enterprise association with unreadable usage: an empty org report cannot
                 // prove that consolidated usage is zero. Keep the honest managed state instead of
@@ -391,7 +414,7 @@ final class CopilotProvider: ProviderRuntime {
            !sawTransientFailure,
            unresolvedAssociatedOrgKeys.isEmpty
         {
-            return .empty(emptyCandidate.lines)
+            return .empty(emptyCandidate.lines, enterpriseUnverified: enterpriseUnverified)
         }
         return sawTransientFailure ? .temporarilyUnavailable : .managed
     }

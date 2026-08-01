@@ -670,6 +670,8 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits") ?? -1, 298.698546, accuracy: 0.0001)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
+        // Positive org-local usage needs no enterprise caveat.
+        XCTAssertNil(snapshot.warning)
         // The placeholder's `overage_permitted: true` must not leave a meaningless Extra Usage row.
         XCTAssertNil(snapshot.lines.first(where: { $0.label == "Extra Usage" }))
         XCTAssertEqual(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey), "acme")
@@ -1014,6 +1016,8 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertNil(snapshot.line(label: "Organization Usage"))
         XCTAssertEqual(snapshot.applicableMetricIDs, ["copilot.orgCredits", "copilot.orgSpend"])
+        // The zero couldn't be enterprise-verified, so it must not be a silent claim.
+        XCTAssertNotNil(snapshot.warning)
     }
 
     func testEnterpriseSeatWithDeniedDiscoveryKeepsManagedState() async {
@@ -1158,6 +1162,8 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        // The enterprise itself reported the zero — verified, so no caveat.
+        XCTAssertNil(snapshot.warning)
     }
 
     func testOrganizationBillingRequestsOnlyCopilotProduct() async {
@@ -1252,6 +1258,8 @@ final class CopilotProviderTests: XCTestCase {
         XCTAssertEqual(orgCount(snapshot.lines, "Org Credits"), 0)
         XCTAssertEqual(orgDollars(snapshot.lines, "Org Spend"), 0)
         XCTAssertNil(snapshot.line(label: "Organization Usage"))
+        // Discovery answered (no owning enterprise), so this zero is verified — no warning.
+        XCTAssertNil(snapshot.warning)
         XCTAssertNil(defaults.string(forKey: CopilotProvider.billingOrgDefaultsKey))
         XCTAssertFalse(http.requests.contains { $0.url.absoluteString.contains("/user/orgs") })
         XCTAssertTrue(http.requests.contains { $0.url.path == "/graphql" })

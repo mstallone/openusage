@@ -36,8 +36,11 @@ Since June 2026 GitHub Copilot bills all plans by **AI credits**, so what each a
     the credential can't see enterprise associations at all — the managed-account state is kept. For
     a **Business** seat, when no enterprise claims the organization (or associations can't be read),
     a readable empty organization report stands: at the start of a billing month the card shows zero
-    credits used, not the managed-account message. An unrelated empty report is never attributed to
-    the seat.
+    credits used, not the managed-account message. When that zero was published without being able to
+    check enterprise associations, the provider header carries an amber warning ("Enterprise-billed
+    usage can't be checked with this GitHub login") so the zero is never a silent claim; it clears as
+    soon as usage appears or a credential with enterprise read access verifies the report. An
+    unrelated empty report is never attributed to the seat.
 - AI Credits Used is shown as a plain count, not a percentage. The API reports total, discounted/included, and additional usage, but not the organization's full available pool; Runway doesn't fabricate a denominator.
 
 A dollar credit figure (e.g. "$12 of $15 used") isn't shown: GitHub only exposes that through its logged-in web billing page, which would require reading browser cookies — Runway does not do that. Editors like VS Code show the same credit *percentage* from this endpoint, not a dollar amount.
