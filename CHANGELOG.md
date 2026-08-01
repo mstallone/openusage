@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.8.3
+
+### New Features
+- Add hover states to the footer refresh button and settings gear ([#23](https://github.com/mstallone/runway/pull/23)) by @mstallone
+- Add an iOS companion app that reads synced usage ([#35](https://github.com/mstallone/runway/pull/35)) by @mstallone
+- Add lock screen and home screen widgets to the iOS app ([#38](https://github.com/mstallone/runway/pull/38)) by @mstallone
+
+### Bug Fixes
+- Prevent Keychain prompts during automatic refreshes; show an actionable error card ([#24](https://github.com/mstallone/runway/pull/24)) by @mstallone
+- Move the header warning triangle to the trailing edge; marquee long names ([#25](https://github.com/mstallone/runway/pull/25)) by @mstallone
+- Reprice GPT-5.6 Terra/Luna and 2x fast mode; add Gemini 3.6 Flash and Kimi K3 aliases ([#28](https://github.com/mstallone/runway/pull/28)) by @mstallone
+- Sit the plan badge flush at the header edge until the copy button reveals ([#29](https://github.com/mstallone/runway/pull/29)) by @mstallone
+- Keep the Claude plan badge current after plan changes without a re-login ([#32](https://github.com/mstallone/runway/pull/32)) by @mstallone
+- Fix truncated items and clunky opening in the Total Spend metric dropdown ([#31](https://github.com/mstallone/runway/pull/31)) by @mstallone
+- Derive dev build version from git instead of a hardcoded 0.7.0 ([#33](https://github.com/mstallone/runway/pull/33)) by @mstallone
+- Show real org billing at month start and stop badge rows breaking the dashboard layout ([#34](https://github.com/mstallone/runway/pull/34)) by @mstallone
+- Lead provider rows with the plan and weekly quota left ([#37](https://github.com/mstallone/runway/pull/37)) by @mstallone
+
+### Refactor
+- Move iCloud sync from iCloud Drive files to CloudKit device records ([#30](https://github.com/mstallone/runway/pull/30)) by @mstallone
+
+### Chores
+- Remove the account-first phase plan ([#26](https://github.com/mstallone/runway/pull/26)) by @mstallone
+- Align contribution docs with the fork's reality ([#27](https://github.com/mstallone/runway/pull/27)) by @mstallone
+- Ship the iOS companion app to TestFlight from the release tag ([#36](https://github.com/mstallone/runway/pull/36)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.2...v0.8.3](https://github.com/mstallone/runway/compare/v0.8.2...v0.8.3)
+
+- [8cf5c54](https://github.com/mstallone/runway/commit/8cf5c542ed0a20bdd316081319634e5abaedbacf) Add hover states to the footer refresh button and settings gear (#23) by @mstallone
+- [958b7b1](https://github.com/mstallone/runway/commit/958b7b1b98d3c8e929d21e91b20c74a1f053cc31) Prevent Keychain prompts during automatic refreshes; show an actionable error card (#24) by @mstallone
+- [59182a4](https://github.com/mstallone/runway/commit/59182a4bb3fe3d5bb07d4fd70b77ff55915e34fa) Move the header warning triangle to the trailing edge; marquee long names (#25) by @mstallone
+- [01557b2](https://github.com/mstallone/runway/commit/01557b22f463f5c3bcc63aeb32c3359f97d2e756) Remove the account-first phase plan (#26) by @mstallone
+- [c0a87eb](https://github.com/mstallone/runway/commit/c0a87eb839ef1d1da31b85fa36afd9f2460f3d32) Align contribution docs with the fork's reality (#27) by @mstallone
+- [31a64a6](https://github.com/mstallone/runway/commit/31a64a654d3c018ecacb0ab72018e023dd650851) Reprice GPT-5.6 Terra/Luna, 2x fast mode; add Gemini 3.6 Flash and Kimi K3 aliases (#28) by @mstallone
+- [decd6a5](https://github.com/mstallone/runway/commit/decd6a5acb198e8ccca3d8870bbb6a04728cffc4) Sit the plan badge flush at the header edge until the copy button reveals (#29) by @mstallone
+- [1dbaa34](https://github.com/mstallone/runway/commit/1dbaa3404dd3ab27fc4a032af0a198f811db8926) Move iCloud sync from iCloud Drive files to CloudKit device records (#30) by @mstallone
+- [0057492](https://github.com/mstallone/runway/commit/005749241a81de3f5a4bf2abf9f97b779efaa970) Keep the Claude plan badge current after plan changes without a re-login (#32) by @mstallone
+- [cc56171](https://github.com/mstallone/runway/commit/cc56171e8f3a6b6b473922aa320df293c1565f82) Fix truncated items and clunky opening in the Total Spend metric dropdown (#31) by @mstallone
+- [24b2667](https://github.com/mstallone/runway/commit/24b266767be6eec50392fbfceac470d58e8c2e50) Derive dev build version from git instead of a hardcoded 0.7.0 (#33) by @mstallone
+- [6a67d1b](https://github.com/mstallone/runway/commit/6a67d1bd3595c2a854531c5cf8076400aaaf1ee9) Show real org billing at month start and stop badge rows breaking the dashboard layout (#34) by @mstallone
+- [a43b553](https://github.com/mstallone/runway/commit/a43b553d22b527d324310d409f9210fcb2336c0a) Add an iOS companion app that reads synced usage (#35) by @mstallone
+- [121e70c](https://github.com/mstallone/runway/commit/121e70ce5569222f2f9974452ef8ace4c214879e) Ship the iOS companion app to TestFlight from the release tag (#36) by @mstallone
+- [29486e6](https://github.com/mstallone/runway/commit/29486e6ebf14b5fab975e23ab7c2c85325c2d32e) Lead provider rows with the plan and weekly quota left (#37) by @mstallone
+- [b394711](https://github.com/mstallone/runway/commit/b3947113548071aac61090d0e4326529a712fd4d) Add lock screen and home screen widgets to the iOS app (#38) by @mstallone
+
 ## v0.8.2
 
 ### Bug Fixes
