@@ -27,10 +27,15 @@ ICLOUD_CONTAINER_ID="iCloud.com.mattstallone.runway.dev"
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-8KZBNZJBAX}"
 export APPLE_TEAM_ID
 MIN_SYSTEM_VERSION="15.0"
-APP_VERSION="0.7.0"
-APP_BUILD="0.7.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Version the dev build from git instead of a hand-maintained constant, so the footer/About
+# string tracks the latest stable release tag (v0.8.2 -> "0.8.2", shown as "0.8.2-dev").
+# CFBundleVersion is the commit count — the same default release.sh uses. Fails loudly if the
+# tags aren't available (e.g. a shallow clone).
+APP_VERSION="$(git -C "$ROOT_DIR" describe --tags --match 'v*' --exclude '*-*' --abbrev=0 | sed 's/^v//')"
+APP_BUILD="$(git -C "$ROOT_DIR" rev-list --count HEAD)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_DISPLAY.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
