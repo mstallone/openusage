@@ -5,7 +5,7 @@ Fast, observable AI usage across every provider and account, right from the macO
 Runway brings multiple accounts across Claude, Codex, Cursor, Grok, Devin, and more into one focused view of limits, credits, and spend. Cached data appears instantly, live refreshes stay out of the way, and the metrics you care about can sit directly in the menu bar.
 
 <p align="center">
-  <img src="assets/screenshot.jpg?v=20260706" alt="Runway menu bar tracker showing Claude and Codex session, weekly, and spend usage" width="900">
+  <img src="assets/hero.png" alt="Runway hero: menu bar pins and the dashboard popover with the Total Spend ring plus Claude and Codex meters in normal, warning, and critical states" width="900">
 </p>
 
 ## Installation
@@ -44,7 +44,17 @@ Most providers read the credentials already on your machine (keychain, auth file
 - **Native settings.** Launch at login, global shortcut, icon style, theme, 12/24-hour time — see [Settings](docs/settings.md).
 - **[Automatic updates](docs/updates.md).** Signed, notarized stable updates via Sparkle.
 
+## iPhone Companion
 
+Runway for iOS mirrors combined usage from every Mac you run — spend today, yesterday, and over the
+last 30 days — synced privately over iCloud, with lock screen and home screen widgets. Each widget
+can show cost or tokens; see the [iOS app](docs/ios-app.md) for what it shows and how syncing works.
+
+<p align="center">
+  <img src="assets/ios-lockscreen.png" width="270" alt="Runway lock screen widgets showing today's AI spend synced from your Macs">
+  &nbsp;&nbsp;
+  <img src="assets/ios-home-widgets.png" width="510" alt="Runway home screen widgets with today, yesterday, and 30-day spend plus a usage trend chart">
+</p>
 
 ## Documentation
 
@@ -63,7 +73,7 @@ are estimated with [model pricing](docs/pricing.md).
 
 
 
-## Building
+## Development
 
 ```sh
 swift build            # debug build
@@ -71,48 +81,9 @@ swift test             # run the test suite
 ./script/build_and_run.sh   # build and launch the dev app from dist/ (no install)
 ```
 
-
-
-## Architecture
-
 SwiftPM package, SwiftUI content hosted in an AppKit-owned `NSStatusItem` + custom key-capable `NSPanel`, Swift 6 strict concurrency. The app and CLI share one module: providers implement a small `ProviderRuntime` protocol (auth store → usage client → mapper → `ProviderSnapshot`), and both surfaces read the same normalized data — see the [architecture overview](docs/architecture.md) for how the pieces fit together and [AGENTS.md](AGENTS.md) for engineering conventions.
 
-## Releasing
-
-Releases are automated: pushing a stable tag such as `v0.7.1` on `main` tests, builds, signs, notarizes, and publishes a new version with its SHA-256 checksum. Prerelease suffixes are rejected. The pipeline lives in [.github/workflows/release.yml](.github/workflows/release.yml), and the step-by-step is in the `release-swift` skill.
-
-### Release setup (one-time)
-
-The release workflow needs these repository secrets (Settings → Secrets and variables → Actions):
-
-
-| Secret                       | What it is                                                            |
-| ---------------------------- | --------------------------------------------------------------------- |
-| `DEVELOPER_ID_CERTIFICATE_BASE64` | base64 of the Runway Developer ID Application `.p12`          |
-| `DEVELOPER_ID_CERTIFICATE_PASSWORD` | the password set when exporting that `.p12`                     |
-| `APPLE_NOTARY_PRIVATE_KEY_BASE64` | base64 of an App Store Connect API private key (`.p8`)            |
-| `APPLE_NOTARY_KEY_ID`        | the App Store Connect API key ID                                      |
-| `APPLE_NOTARY_ISSUER_ID`     | the App Store Connect API issuer ID                                   |
-| `APPLE_DEVELOPER_ID_ICLOUD_PROFILE` | base64 Developer ID provisioning profile for the production iCloud container |
-| `SPARKLE_PUBLIC_KEY`         | base64 EdDSA public key, baked into the build as `SUPublicEDKey`      |
-| `SPARKLE_PRIVATE_KEY`        | base64 EdDSA private key used to sign the DMG                         |
-| `APPLE_DISTRIBUTION_CERTIFICATE_BASE64` | base64 of the Apple Distribution `.p12` that signs the iOS app |
-| `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD` | the password set when exporting that `.p12`                 |
-| `APPLE_IOS_APP_STORE_PROFILE` | base64 App Store provisioning profile for the iOS app                |
-| `APPLE_IOS_WIDGET_APP_STORE_PROFILE` | base64 App Store provisioning profile for the iOS widget extension |
-
-
-Export the NextByte Developer ID Application cert (with its private key) from Keychain Access as a `.p12`, then `base64 -i DeveloperID.p12 | pbcopy`. Create an App Store Connect API key with the **App Manager** role (it both notarizes the Mac app and cloud-signs/uploads the iOS app), download its `.p8` file once, and base64-encode it the same way. The certificate, API key, and iCloud profile must all belong to NextByte team `8KZBNZJBAX`. Generate the Sparkle EdDSA key pair once with Sparkle's `generate_keys` tool; the public and private values must be a matching pair or signing is silently skipped.
-
-The iOS TestFlight jobs sign manually with the `APPLE_DISTRIBUTION_*` cert and the two `APPLE_IOS_*_PROFILE` secrets (one App Store profile per bundle ID: the app `com.mattstallone.runway.mobile` and the widget extension `com.mattstallone.runway.mobile.widgets`) and reuse the three `APPLE_NOTARY_*` secrets for the upload and TestFlight API calls. Xcode cloud signing is deliberately not used: an App Manager API key cannot access cloud-managed distribution certificates ("Cloud signing permission error"). The Apple Distribution certificate and App Store profiles can all be created through the App Store Connect API with the App Manager key (generate an RSA-2048 CSR, `POST /v1/certificates` with type `DISTRIBUTION`, then `POST /v1/profiles` with type `IOS_APP_STORE` referencing the bundle ID and certificate — once per bundle ID); package the cert + private key as a `.p12` **with OpenSSL 3's `-legacy` flag** (its modern defaults produce a `.p12` macOS `security import` rejects with "MAC verification failed") and include the WWDR G3 intermediate. Store the `.p12`, its password, and the profiles in 1Password alongside the other signing material.
-
-One-time App Store Connect setup beyond the secrets: create the app record (My Apps → New App, iOS, bundle ID `com.mattstallone.runway.mobile`, any unique SKU), and add an internal TestFlight tester group with **automatic distribution** so every uploaded build reaches internal testers without a manual step. The App ID must already carry the CloudKit capability with both Runway containers (see [iOS app](docs/ios-app.md)).
-
-For external testers, the workflow's TestFlight External job submits every release for Beta App Review and testers receive it when Apple approves. Its one-time setup: create an external group named `External` under TestFlight → External Testing (add testers by email or enable a public link; the workflow's `TESTFLIGHT_EXTERNAL_GROUPS` env lists the group names it ships to), and fill in the app's TestFlight **Test Information** — beta app description, feedback email, and the review contact/sign-in details the first submission asks for. The app needs no demo account: it reads the tester's own iCloud data, so mark it as not requiring sign-in and say so in the review notes.
-
-For iCloud Sync, store the original development and Developer ID provisioning profiles in 1Password as secure documents. Install the development profile on each registered Mac; base64-encode the Developer ID profile and store it only in the `APPLE_DEVELOPER_ID_ICLOUD_PROFILE` Actions secret. See [iCloud Sync](docs/icloud-sync.md#development-and-release-setup) for the container identifiers, build command, and file-inspection command.
-
-The repository must be public (Sparkle fetches the DMG and appcast anonymously), and the update feed is served through GitHub Pages. Set Settings → Pages → Build and deployment → Source to **GitHub Actions**; the publishing workflows create and maintain the `update-feed` branch and deploy through the **Update Feed** environment.
+Releases are automated: pushing a stable tag on `main` tests, builds, signs, notarizes, and publishes. The pipeline and its one-time setup are documented in [Releasing](docs/releasing.md).
 
 ## Contributing
 

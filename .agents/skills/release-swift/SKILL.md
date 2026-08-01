@@ -221,4 +221,4 @@ selecting it.
 - Editing App ID capabilities invalidates existing provisioning profiles; regenerate them and
   refresh the secrets before tagging.
 
-Release secrets and one-time setup live in the README under [Release setup](../../../README.md#release-setup-one-time).
+Release secrets and one-time setup live in [docs/releasing.md](../../../docs/releasing.md#release-setup-one-time).

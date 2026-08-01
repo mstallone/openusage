@@ -74,7 +74,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const apps = await api("GET", `/v1/apps?filter[bundleId]=${encodeURIComponent(BUNDLE_ID)}`);
 if (apps.status !== 200) fail("Could not query App Store Connect apps.", apps);
 const app = apps.json.data?.[0];
-if (!app) fail(`No App Store Connect app record for ${BUNDLE_ID} — create it first (README "Release setup").`);
+if (!app) fail(`No App Store Connect app record for ${BUNDLE_ID} — create it first (docs/releasing.md "Release setup").`);
 
 // The upload job finishing only means Apple received the build; it appears in the API a few
 // minutes later and stays PROCESSING for a while before it can be distributed.
@@ -113,7 +113,7 @@ for (const name of GROUPS) {
   if (res.status !== 200) fail(`Could not query TestFlight groups.`, res);
   const group = res.json.data?.find((g) => g.attributes.name === name);
   if (!group) {
-    fail(`No TestFlight group named "${name}" — create it under TestFlight → External Testing (README "Release setup").`);
+    fail(`No TestFlight group named "${name}" — create it under TestFlight → External Testing (docs/releasing.md "Release setup").`);
   }
   if (group.attributes.isInternalGroup) {
     fail(`TestFlight group "${name}" is internal — internal groups receive every build automatically; list only external groups in TESTFLIGHT_EXTERNAL_GROUPS.`);

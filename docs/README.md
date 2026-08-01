@@ -45,3 +45,4 @@ How the app is built and how to extend it.
 - [Adding a provider](adding-a-provider.md) — the metric contract and the register/test/document steps
 - [Debugging & capturing logs](debugging.md) — running a local build and streaming logs
 - [Logging](logging.md) — the file log, log levels, subsystem tags, and what is never logged
+- [Releasing](releasing.md) — the automated release pipeline and its one-time signing/TestFlight setup (maintainer-only)
