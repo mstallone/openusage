@@ -14,7 +14,7 @@ struct DashboardView: View {
                     }
                 }
 
-                if model.devices.isEmpty, model.lastError == nil, model.lastRefreshAt != nil {
+                if model.devices.isEmpty, model.combined.trend.isEmpty, model.lastError == nil, model.lastRefreshAt != nil {
                     Section {
                         ContentUnavailableView(
                             "Waiting for Your Macs",
@@ -24,7 +24,9 @@ struct DashboardView: View {
                     }
                 }
 
-                if !model.devices.isEmpty {
+                // Combined totals stand on the history payloads alone — they must show even when
+                // no snapshot decoded (and hide when no history did, instead of hollow tiles).
+                if !model.combined.trend.isEmpty {
                     combinedSection
                 }
 
