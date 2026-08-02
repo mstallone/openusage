@@ -93,6 +93,14 @@ struct DailyUsageAccumulator {
         )
     }
 
+    /// Identity of the calendar configuration day keys derive from. Memoized aggregates include it
+    /// in their keys: a mid-session change of the user's preferred calendar or time zone changes
+    /// the emitted day keys without changing the logs, so the memo must miss and re-aggregate.
+    static var calendarMemoKey: String {
+        let calendar = Calendar.current
+        return "\(calendar.identifier)|\(calendar.timeZone.identifier)"
+    }
+
     /// Memoized `dayKey` for aggregation loops: log entries cluster by day, so remembering the
     /// current day's boundaries answers almost every lookup without `Calendar.dateComponents` or a
     /// string build. One instance per pass; not thread-safe.
