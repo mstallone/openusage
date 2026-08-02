@@ -100,9 +100,11 @@ enum UIProfiler {
                 await pause(0.5)
             }
 
-            mark("PHASE screen-switch (10x)")
+            // The setup open happens BEFORE the phase marker so a slow open's stall bills to the
+            // preceding (unlabeled) gap, not to the screen-switch numbers.
             open()
             await pause(1.5)
+            mark("PHASE screen-switch (10x)")
             for i in 1...10 {
                 let target: PopoverScreen = i.isMultiple(of: 2) ? .dashboard : .customize
                 withAnimation(Motion.modeSwitch) { layout.screen = target }
@@ -141,10 +143,13 @@ enum UIProfiler {
                 await pause(0.5)
             }
             if !dataStore.refreshingProviderIDs.isEmpty {
-                mark("WARNING refresh phase started with providers still in flight: \(dataStore.refreshingProviderIDs.sorted().joined(separator: ","))")
+                // Fatal, not advisory: a forced pass that silently skips still-in-flight providers
+                // benchmarks less than it claims. profile_ui.sh exits non-zero on this marker.
+                mark("ERROR refresh phase aborted: providers still in flight after 60s: \(dataStore.refreshingProviderIDs.sorted().joined(separator: ","))")
+            } else {
+                await dataStore.refreshAll(force: true)
+                mark("refresh returned")
             }
-            await dataStore.refreshAll(force: true)
-            mark("refresh returned")
             await pause(3)
 
             mark("PHASE idle-open (40s)")
