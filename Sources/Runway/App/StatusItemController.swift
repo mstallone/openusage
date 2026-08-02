@@ -44,6 +44,17 @@ final class StatusItemController: NSObject {
         onInsidePanelClick: { [weak self] in self?.clearStrayFocus() },
         onDismiss: { [weak self] in self?.hidePanel() }
     )
+    /// Invisible first-open warm-up passes (layout, raster, window materialization) — the whole
+    /// lifecycle lives in `PanelPrewarmer`; this controller only reports the first real open.
+    private lazy var prewarmer = PanelPrewarmer(
+        panel: panel,
+        hostView: hostingController.view,
+        heightController: heightController,
+        anchorRect: { [weak self] in
+            guard let button = self?.statusItem.button, let window = button.window else { return nil }
+            return window.convertToScreen(button.convert(button.bounds, to: nil))
+        }
+    )
     private let hostingController: NSHostingController<AnyView>
     /// Owns the standalone Settings window (created lazily on first open, torn down on close).
     private let settingsWindow: SettingsWindowController
@@ -157,34 +168,9 @@ final class StatusItemController: NSObject {
 
         AppLog.info(.statusItem, "Status item ready (button: \(self.statusItem.button != nil), shortcut: \(KeyboardShortcuts.getShortcut(for: .togglePopover)?.description ?? "none"))")
 
-        // Pre-warm the first open. The hidden tree is laid out at panel setup, but nothing RENDERS
-        // and the window is never MATERIALIZED until the first click, so that click used to pay
-        // every one-time cost — font glyph caches, glass materials, CoreAnimation layer
-        // construction, and the window server creating the panel — on top of the normal open
-        // (measured ~87ms cold vs ~35ms warm). Two passes after launch settles move all of it to
-        // idle time: the early one pays the one-time costs, the later one re-lays-out the content
-        // the first refresh batch delivered in between. Each pass is invisible (offscreen raster
-        // via `cacheDisplay`, window ordered front at alpha 0 and straight back out) and skipped
-        // once the user has opened the panel for real.
-        // RUNWAY_UI_PROFILE_COLD=1 disables pre-warming so the harness can measure the true cold
-        // path (with it, the scripted "cold open" measures the shipped first-click experience —
-        // see docs/debugging.md).
-        if ProcessInfo.processInfo.environment["RUNWAY_UI_PROFILE_COLD"] != "1" {
-            Task { @MainActor [weak self] in
-                // Absolute offsets from launch, not sequential sleeps: the second pass must land
-                // AT +12s (right after the first refresh batch), not at 12s-plus-however-long the
-                // first pass took — users opening in that drift window would still pay the
-                // refreshed-content layout this pass exists to absorb.
-                let launch = ContinuousClock.now
-                for offset in [Duration.seconds(2), .seconds(12)] {
-                    try? await Task.sleep(until: launch + offset, clock: .continuous)
-                    // A real open (even one already closed again) warmed everything a warm-up pass
-                    // would — rendering the same content again on the main actor is pure waste.
-                    guard let self, !self.hasOpenedPanel, !self.panel.isVisible else { return }
-                    self.prewarmPanel()
-                }
-            }
-        }
+        // Pre-warm the first open so the first click runs at warm speed — the passes, their
+        // scheduling, and the COLD escape hatch live in `PanelPrewarmer`.
+        prewarmer.scheduleWarmups()
 
         // UI profiling driver — inert unless RUNWAY_UI_PROFILE=1 (see UIProfiler / script/profile_ui.sh).
         UIProfiler.startDriverIfEnabled(
@@ -372,12 +358,9 @@ final class StatusItemController: NSObject {
         showPanel()
     }
 
-    /// True after the first real open; later warm-up passes are skipped (the open warmed everything).
-    private var hasOpenedPanel = false
-
     private func showPanel() {
         let openStart = CFAbsoluteTimeGetCurrent()
-        hasOpenedPanel = true
+        prewarmer.noteOpened()
         guard let button = statusItem.button, let buttonWindow = button.window else {
             AppLog.error(.statusItem, "Cannot show panel: status item has no button")
             return
@@ -426,34 +409,6 @@ final class StatusItemController: NSObject {
         clearStrayFocus()
         button.highlight(true)
         outsideClickMonitor.start()
-    }
-
-    /// One invisible warm-up pass over everything the first open would otherwise pay for the first
-    /// time: the real opening frame, a full layout at it, an offscreen raster (fonts, materials,
-    /// layer construction), and the window server's panel materialization. See the launch task above.
-    private func prewarmPanel() {
-        UIProfiler.measure("prewarm.render") {
-            // Anchor at the real opening frame first — warming up at the setup-time default frame
-            // leaves the first open re-laying-out everything at the actual anchor size anyway.
-            if let button = statusItem.button, let buttonWindow = button.window {
-                let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-                heightController.prepareForOpening(below: buttonRect)
-            }
-            let view = hostingController.view
-            view.layoutSubtreeIfNeeded()
-            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                view.cacheDisplay(in: view.bounds, to: rep)
-            }
-            // First-ever ordering makes the window server create the panel (~30ms billed to the
-            // first open otherwise). Do it invisibly: alpha 0, no key, straight back out. The real
-            // open runs `prepareForOpening` again, so no anchor state leaks from here.
-            let alpha = panel.alphaValue
-            panel.alphaValue = 0
-            panel.orderFront(nil)
-            panel.orderOut(nil)
-            panel.alphaValue = alpha
-            heightController.finishClosing()
-        }
     }
 
     private func hidePanel() {
