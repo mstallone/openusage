@@ -28,6 +28,26 @@ First launch on this machine's corpus (caches cold — what a new install pays o
 | CPU spent in the first 30 s | 165 s | 12.7 s | 13× less |
 | Peak memory during the initial scan | 12.9 GB | 1.7 GB | 7.5× less |
 
+## CodexBar (best effort)
+
+[CodexBar](https://github.com/steipete/CodexBar) 0.46.0 (build 110, `7760f349`), installed via its
+Homebrew cask and measured **as shipped** on the same machine and day — a different footing from
+the OpenUsage comparison, so its column is deliberately partial:
+
+- **No shared harness.** CodexBar's popup, refresh internals, and first-launch scan aren't
+  externally measurable without instrumenting its source, so those rows are marked —.
+- **Measured rows.** Launch → menu bar comes from its own unified-log markers ("CodexBar starting"
+  → first icon render), 0.9–1.4 s across runs. Memory comes from `ps` sampling: ~250–365 MB steady
+  depending on what its adaptive refresh has done recently, ~365 MB peak observed.
+- **CPU rows are omitted, not hidden.** CodexBar gates work behind an adaptive refresh (it backs
+  off to 30-minute cycles when idle), so its launch-window CPU swung 1.3–6.8 s between runs purely
+  on which work the gate admitted — and Runway's swung similarly in the same windows because live
+  agent sessions were actively growing the log corpus during measurement. Neither side's number
+  would be honest.
+- **Different scope.** CodexBar tracked its 3 enabled providers (Codex, Claude, Gemini) with no
+  multi-provider spend aggregation; Runway tracked 7 providers plus Total Spend over the same
+  corpus. Where Runway still leads (launch, peak memory), it does so while doing more.
+
 ## Methodology
 
 Both apps ran the same scripted workload on the same machine (Apple Silicon MacBook Pro,
