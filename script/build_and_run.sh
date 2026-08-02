@@ -242,7 +242,10 @@ else
 fi
 
 launch_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  # open(1) forwards this shell's environment to the launched app. Drop the per-session agent
+  # overrides (Claude Code exports CLAUDE_CONFIG_DIR, Codex exports CODEX_HOME) so the dev app
+  # scans the user's real ~/.claude and ~/.codex homes instead of the agent's sandboxed ones.
+  env -u CLAUDE_CONFIG_DIR -u CODEX_HOME /usr/bin/open -n "$APP_BUNDLE"
 }
 
 case "$MODE" in
