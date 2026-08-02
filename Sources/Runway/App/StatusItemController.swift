@@ -1,5 +1,6 @@
 import AppKit
 import KeyboardShortcuts
+import QuartzCore
 import SwiftUI
 
 /// The dashboard's host window: a borderless, **non-activating** panel that can still become key.
@@ -377,10 +378,12 @@ final class StatusItemController: NSObject {
         }
         if UIProfiler.enabled {
             UIProfiler.mark("open.syncTotal: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
-            // The first display pass (CA commit) happens when this runloop turn ends; a marker queued
-            // now runs right after it, so its delta ≈ click-to-first-frame latency.
-            DispatchQueue.main.async {
-                UIProfiler.mark("open.toFirstRunloopTurn: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
+            // Completion of the transaction that carries the open's first frame: it fires after that
+            // transaction COMMITS (layer tree handed to the window server), which tracks presentation
+            // far better than a bare main-queue hop — a queued async block can run before any pixels
+            // exist when rendering is what's slow.
+            CATransaction.setCompletionBlock {
+                UIProfiler.mark("open.toFirstFrame: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
             }
         }
         // Becoming key, AppKit auto-focuses the first control in the key-view loop (the first row's
@@ -422,7 +425,6 @@ final class StatusItemController: NSObject {
         panel.orderOut(nil)
         outsideClickMonitor.stop()
         statusItem.button?.highlight(false)
-        heightController.finishClosing()
         // Settle the hidden tree NOW, while nothing is on screen. Every close queues SwiftUI work —
         // the card collapse above, plus the scroll-to-top/height/screen resets DashboardView runs off
         // the `popoverShown` flip — and without this flush that work sat in pending transactions
@@ -431,7 +433,19 @@ final class StatusItemController: NSObject {
         // work ran a beat after close anyway as a ~70–100ms main-thread stall on the display cycle;
         // doing it synchronously here moves it where it's invisible and leaves the open path a
         // clean tree (measured: warm open drops to roughly a third).
+        //
+        // Order matters: this runs BEFORE `finishClosing()` so the settle's height targets clamp
+        // against the closing display's real maximum (the anchor is still recorded). Settling after
+        // the anchor reset clamped against the 800pt fallback, so on a display shorter than that
+        // the hidden tree kept an over-tall height the next open had to correct — the exact
+        // pre-show work this settle exists to remove.
         hostingController.view.layoutSubtreeIfNeeded()
+        // The settle's collapsed re-measure changed the height after `saveBeforeClosing` recorded
+        // the still-expanded value; persist the settled one so the next launch's opening guess
+        // matches what the panel will actually show. (The morph-settle timer that used to do this
+        // save is cancelled by `finishClosing` below.)
+        heightController.saveAfterHiddenSettle()
+        heightController.finishClosing()
     }
 
     /// Drops keyboard focus inside the panel so a clicked plain-styled control (a metric row's
