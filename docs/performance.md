@@ -36,17 +36,21 @@ the OpenUsage comparison, so its column is deliberately partial:
 
 - **No shared harness.** CodexBar's popup, refresh internals, and first-launch scan aren't
   externally measurable without instrumenting its source, so those rows are marked —.
-- **Measured rows.** Launch → menu bar comes from its own unified-log markers ("CodexBar starting"
-  → first icon render), 0.9–1.4 s across runs. Memory comes from `ps` sampling: ~250–365 MB steady
+- **Measured rows.** Launch → menu bar is the interval between two lines in its debug-level
+  unified log (`log stream --level debug --predicate 'subsystem == "com.steipete.codexbar"'`):
+  "CodexBar starting" and the first "[perf] refresh cycle: updateIcons()" entry — the earliest
+  icon-render evidence its logs expose, so an upper-bound proxy rather than a first-frame
+  measurement; 0.9–1.4 s across runs. Memory comes from `ps` sampling: ~250–365 MB steady
   depending on what its adaptive refresh has done recently, ~365 MB peak observed.
 - **CPU rows are omitted, not hidden.** CodexBar gates work behind an adaptive refresh (it backs
   off to 30-minute cycles when idle), so its launch-window CPU swung 1.3–6.8 s between runs purely
   on which work the gate admitted — and Runway's swung similarly in the same windows because live
   agent sessions were actively growing the log corpus during measurement. Neither side's number
   would be honest.
-- **Different scope.** CodexBar tracked its 3 enabled providers (Codex, Claude, Gemini) with no
-  multi-provider spend aggregation; Runway tracked 7 providers plus Total Spend over the same
-  corpus. Where Runway still leads (launch, peak memory), it does so while doing more.
+- **Different scope.** CodexBar tracked its 3 enabled providers (Codex, Claude, Gemini) in its
+  default configuration — it does offer usage/spend views of its own; Runway tracked 7 providers
+  plus Total Spend over the same corpus. Where Runway still leads (launch, peak memory), it does
+  so while watching more providers.
 
 ## Methodology
 
