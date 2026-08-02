@@ -71,9 +71,10 @@ iCloud account as the Macs.
 ## Releasing (TestFlight)
 
 The iOS app ships from the same `v*` tag as the Mac app — when the release actually touches it.
-An "iOS Gate" job (`script/testflight_gate.mjs`) checks what changed since the previous stable
-tag: a Mac-only release skips the iOS jobs entirely, because every upload is a new version that
-goes through a fresh Beta App Review and pushes a pointless update at testers. When the gate says
+An "iOS Gate" job (`script/testflight_gate.mjs`) checks what changed since the last build
+TestFlight actually received: a Mac-only release skips the iOS jobs entirely, because every
+upload is a new version that goes through a fresh Beta App Review and pushes a pointless update
+at testers. When the gate says
 ship, the "iOS TestFlight" job archives the app, signs it, and uploads it to App Store Connect,
 which serves it to internal TestFlight testers once Apple finishes processing. A follow-up
 "TestFlight External" job then waits for that processing, adds the build to the external tester
@@ -83,9 +84,10 @@ and update through the TestFlight app — there is no Sparkle feed on iOS, and n
 either (the App Store Connect upload plays that role).
 
 The gate ships when anything under `ios/` or the TestFlight pipeline scripts changed since the
-previous stable tag, and also when the newest TestFlight upload is older than 60 days — TestFlight
-builds expire 90 days after upload, so an unchanged app still re-ships before testers' installs
-go dark. This means TestFlight can lag the Mac version (say, 0.8.9 on the Mac while TestFlight
+newest build that finished App Store processing (its version names the tag it was built from, so
+a failed upload never advances the baseline and its changes cannot be stranded by a later
+Mac-only tag), and also when that build is older than 60 days — TestFlight builds expire 90 days
+after upload, so an unchanged app still re-ships before testers' installs go dark. This means TestFlight can lag the Mac version (say, 0.8.9 on the Mac while TestFlight
 shows 0.8.5); that is expected and harmless — a Mac-side change that matters to the phone must
 update the wire decoders in `ios/`, which trips the gate. To ship iOS regardless, run the Release
 workflow manually with the `force_ios` input checked.

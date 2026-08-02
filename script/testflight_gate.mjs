@@ -5,9 +5,11 @@
 // Mac-only releases therefore skip the upload. Ships when ANY of:
 //   - FORCE_IOS=1 (the workflow_dispatch override),
 //   - there is no previous stable release tag (first release),
-//   - iOS-relevant paths changed since the previous stable tag,
-//   - the newest TestFlight upload is older than TESTFLIGHT_MAX_BUILD_AGE_DAYS (default 60).
-//     TestFlight builds expire 90 days after upload, so an unchanged app must still re-ship
+//   - iOS-relevant paths changed since the last build TestFlight actually received — the newest
+//     VALID build's version names its tag; a failed upload never moves that baseline, so its
+//     changes cannot be stranded by a later Mac-only tag,
+//   - the newest valid TestFlight upload is older than TESTFLIGHT_MAX_BUILD_AGE_DAYS (default
+//     60). TestFlight builds expire 90 days after upload, so an unchanged app must still re-ship
 //     periodically or testers' installs go dark; 60 leaves a 30-day margin.
 // Writes `ship=true|false` to $GITHUB_OUTPUT and always logs the reason. Any git or App Store
 // Connect failure fails the job loudly — rerun it, or force with the workflow_dispatch input.
@@ -88,14 +90,20 @@ const previous = git("tag", "--list", "--sort=-v:refname")
   .filter((t) => STABLE_TAG.test(t) && lessThan(version(t), tagVersion))[0];
 if (!previous) decide(true, "no previous stable release tag — first release.");
 
-const changed = git("diff", "--name-only", previous, TAG, "--", ...IOS_PATHS)
-  .split("\n")
-  .filter(Boolean);
-if (changed.length) {
-  decide(true, `iOS-relevant changes since ${previous}:\n  ${changed.join("\n  ")}`);
+const diffAgainst = (base) =>
+  git("diff", "--name-only", base, TAG, "--", ...IOS_PATHS).split("\n").filter(Boolean);
+
+// Fast path, no App Store Connect needed: changes since the previous stable tag are new to
+// testers no matter which older build they actually have.
+const sincePrevious = diffAgainst(previous);
+if (sincePrevious.length) {
+  decide(true, `iOS-relevant changes since ${previous}:\n  ${sincePrevious.join("\n  ")}`);
 }
 
-// Nothing changed — ship anyway if the newest upload is nearing TestFlight's 90-day expiry.
+// No changes since the previous tag — but that only proves freshness if the previous tag's iOS
+// build actually reached TestFlight. Ask App Store Connect what testers really have. Only VALID
+// builds count: an upload that failed processing (or is still processing) never reached anyone,
+// so it must neither serve as the diff baseline nor vouch for the expiry backstop.
 const api = createClient({
   keyPath: env("APPLE_NOTARY_KEY_PATH"),
   keyId: env("APPLE_NOTARY_KEY_ID"),
@@ -109,15 +117,38 @@ if (!app) {
   fail(`No App Store Connect app record for ${BUNDLE_ID} — create it first (docs/releasing.md "Release setup").`);
 }
 
-const builds = await api("GET", `/v1/builds?filter[app]=${app.id}&sort=-uploadedDate&limit=1`);
+const builds = await api(
+  "GET",
+  `/v1/builds?filter[app]=${app.id}&filter[processingState]=VALID` +
+    `&sort=-uploadedDate&limit=1&include=preReleaseVersion`,
+);
 if (builds.status !== 200) fail("Could not query builds.", builds);
 const newest = builds.json.data?.[0];
-if (!newest) decide(true, "no TestFlight build has ever been uploaded.");
+if (!newest) decide(true, "no processed TestFlight build has ever been uploaded.");
+
+// The build's marketing version names the tag it was built from (the version IS the tag). When
+// that is not the previous tag, an earlier release's iOS job failed or was skipped after a
+// failure — diff against what testers actually have so those changes cannot be stranded.
+const preId = newest.relationships?.preReleaseVersion?.data?.id;
+const shippedVersion = builds.json.included?.find(
+  (i) => i.type === "preReleaseVersions" && i.id === preId,
+)?.attributes?.version;
+if (!shippedVersion) fail("Could not read the newest valid build's marketing version.", builds);
+const shippedTag = `v${shippedVersion}`;
+if (shippedTag !== previous) {
+  if (!STABLE_TAG.test(shippedTag) || !git("tag", "--list", shippedTag)) {
+    decide(true, `newest valid TestFlight build is ${shippedVersion}, which matches no local release tag — shipping to be safe.`);
+  }
+  const sinceShipped = diffAgainst(shippedTag);
+  if (sinceShipped.length) {
+    decide(true, `iOS-relevant changes since the last shipped build (${shippedTag}):\n  ${sinceShipped.join("\n  ")}`);
+  }
+}
 
 const ageDays = (Date.now() - Date.parse(newest.attributes.uploadedDate)) / 86_400_000;
-if (!Number.isFinite(ageDays)) fail("Could not read the newest build's uploadedDate.", builds);
-const age = `build ${newest.attributes.version} uploaded ${Math.floor(ageDays)} days ago`;
+if (!Number.isFinite(ageDays)) fail("Could not read the newest valid build's uploadedDate.", builds);
+const age = `build ${newest.attributes.version} of ${shippedVersion} uploaded ${Math.floor(ageDays)} days ago`;
 if (ageDays > MAX_AGE_DAYS) {
-  decide(true, `newest TestFlight upload is stale (${age}; limit ${MAX_AGE_DAYS}, expiry 90).`);
+  decide(true, `newest valid TestFlight upload is stale (${age}; limit ${MAX_AGE_DAYS}, expiry 90).`);
 }
-decide(false, `no iOS-relevant changes since ${previous} and the newest upload is fresh (${age}).`);
+decide(false, `no iOS-relevant changes since the last shipped build (${shippedTag}) and it is fresh (${age}).`);

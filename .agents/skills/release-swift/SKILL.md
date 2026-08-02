@@ -5,7 +5,7 @@ description: Cut a stable release of Runway (Swift menu-bar app): pick a version
 
 # Release Swift
 
-Pushing a `v*` tag on `main` runs `.github/workflows/release.yml`, which builds, signs, notarizes, attaches `Runway-<version>.dmg` to the GitHub Release, and updates the Sparkle `appcast.xml` on `update-feed`. The same run's independent **iOS Gate** job (`script/testflight_gate.mjs`) decides whether this tag ships the iOS companion app: it skips Mac-only releases (no iOS-relevant changes since the previous stable tag, newest TestFlight upload under 60 days old) so an unchanged app is not re-submitted for Beta App Review. When it ships, the **iOS TestFlight** job builds the iOS app at the tag's version and uploads it to App Store Connect, where TestFlight distributes it to internal testers automatically after processing; a follow-up **TestFlight External** job then adds the processed build to the external tester group(s) and submits it for Beta App Review. CI creates the release with an EMPTY body, so this skill generates the changelog, records it in `CHANGELOG.md`, and publishes the notes onto the release.
+Pushing a `v*` tag on `main` runs `.github/workflows/release.yml`, which builds, signs, notarizes, attaches `Runway-<version>.dmg` to the GitHub Release, and updates the Sparkle `appcast.xml` on `update-feed`. The same run's independent **iOS Gate** job (`script/testflight_gate.mjs`) decides whether this tag ships the iOS companion app: it skips Mac-only releases (no iOS-relevant changes since the last build TestFlight actually received, and that build is under 60 days old) so an unchanged app is not re-submitted for Beta App Review. When it ships, the **iOS TestFlight** job builds the iOS app at the tag's version and uploads it to App Store Connect, where TestFlight distributes it to internal testers automatically after processing; a follow-up **TestFlight External** job then adds the processed build to the external tester group(s) and submits it for Beta App Review. CI creates the release with an EMPTY body, so this skill generates the changelog, records it in `CHANGELOG.md`, and publishes the notes onto the release.
 
 Runway has one stable release channel. Tags use `vMAJOR.MINOR.PATCH`; suffixed prerelease tags are
 rejected. The tag is the version (`v0.7.1` becomes `CFBundleShortVersionString = 0.7.1`), and
@@ -16,7 +16,7 @@ rejected. The tag is the version (`v0.7.1` becomes `CFBundleShortVersionString =
 ### 0. Preflight: iOS signing assets
 
 Only needed when the release will actually ship iOS — anything under `ios/` or the TestFlight
-pipeline changed since the previous stable tag, the newest TestFlight upload is over 60 days old,
+pipeline changed since the last shipped TestFlight build, that build is over 60 days old,
 or the run will use the `force_ios` dispatch input. For a Mac-only release the iOS Gate skips the
 iOS jobs and none of this applies.
 
