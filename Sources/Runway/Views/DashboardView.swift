@@ -65,6 +65,12 @@ struct DashboardView: View {
     /// Debounce for measurement-driven re-targets: armed on every `measuredIdeal` change while the
     /// popover is shown, fired ~2 quiet frames after the last one (see the `onChange` below).
     @State private var measurementSettleTask: Task<Void, Never>?
+    /// Explicit caret-morph-in-flight marker: set by every caret toggle, cleared only when the
+    /// settle actually lands (or the popover closes / the screen changes). Branch selection and
+    /// learning eligibility key off THIS, not off `pendingExpansion` — a superseding toggle clears
+    /// `pendingExpansion`, and inferring "clean" from that let a third rapid toggle learn from an
+    /// intermediate measurement.
+    @State private var expansionSettling = false
     /// Drives the macOS-native confirmation sheet for the Customize "reset all" button. The alert
     /// attaches to this panel as a sheet (see `StatusItemController`'s attached-sheet guard), so a
     /// click on its buttons can't be misread as an outside click that dismisses the popover.
@@ -201,6 +207,12 @@ struct DashboardView: View {
             .onChange(of: layout.screen) {
                 reorderLift = nil
                 layout.cancelDrag()
+                // A caret morph can't outlive its screen: leaving the dashboard mid-settle must
+                // not let Customize measurements learn a delta or take the caret debounce path.
+                measurementSettleTask?.cancel()
+                measurementSettleTask = nil
+                pendingExpansion = nil
+                expansionSettling = false
             }
             // The Reset All alert attaches to the Customize L1 nav bar. Leaving the list — back to the
             // dashboard or into a provider's L2 detail — unmounts that host, which dismisses the alert
@@ -274,7 +286,7 @@ struct DashboardView: View {
                     measurementSettleTask?.cancel()
                     measurementSettleTask = nil
                     if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
-                } else if pendingExpansion == nil {
+                } else if !expansionSettling {
                     // Ordinary content change (the update banner or first-run hint dismissing, a
                     // refresh loading rows): re-target throughout the change so the panel
                     // co-animates with the content instead of trailing it by a debounce and
@@ -311,16 +323,19 @@ struct DashboardView: View {
                     let fromIdeal = heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight
                     let key = expansionDeltaKey(for: providerID)
                     let delta = expansionDeltas[key] ?? estimatedExpansionDelta(for: providerID)
-                    // Learn only from a clean toggle: if an earlier toggle hasn't settled (or any
-                    // measurement is still in flight), `fromIdeal` is a partial mid-animation value
-                    // and the settled delta would be cached wrong — e.g. a rapid expand/collapse
-                    // learning a fraction of the section height. Skipping just means the estimate
-                    // covers this toggle and the next clean one re-learns exactly.
-                    if pendingExpansion == nil, measurementSettleTask == nil {
+                    // Learn only from a clean toggle: while an earlier caret morph is still
+                    // settling (`expansionSettling` — an explicit marker cleared only when the
+                    // settle actually lands, so a third rapid toggle can't sneak through the
+                    // window where a second one already cancelled the debounce) or any measurement
+                    // is in flight, `fromIdeal` is a partial mid-animation value and the settled
+                    // delta would be cached wrong. Skipping just means the estimate covers this
+                    // toggle and the next clean one re-learns exactly.
+                    if !expansionSettling, measurementSettleTask == nil {
                         pendingExpansion = (key, fromIdeal)
                     } else {
                         pendingExpansion = nil
                     }
+                    expansionSettling = true
                     let ideal = fromIdeal + (expanding ? delta : -delta)
                     // Plain assignment: this runs inside the caret's `withAnimation(Motion.spring)`, so
                     // the change rides that same transaction. The measurement that follows only issues
@@ -370,14 +385,20 @@ struct DashboardView: View {
     /// has gone quiet, learns a pending caret toggle's exact expanded-section height from the settled
     /// value, and issues at most ONE spring re-target for the whole morph.
     private func applySettledMeasurement() {
+        // The morph this settle belongs to is over either way; every exit below must drop the
+        // in-flight marker or the next ordinary content change would wrongly take the debounce path.
+        expansionSettling = false
         // Belt over the close path's cancel: a settle that somehow fires after `orderOut` must not
         // spring a hidden panel or learn from a collapsed tree.
-        guard transparency.popoverShown else { return }
+        guard transparency.popoverShown else { pendingExpansion = nil; return }
+        // Consumed on another screen (the user opened Customize before the dashboard settle fired):
+        // never learn from Customize measurements, and never leave the stale pending state to
+        // misclassify later Customize changes or the next dashboard toggle.
+        guard layout.screen == .dashboard else { pendingExpansion = nil; return }
         guard let target = heightCoordinator.target(for: layout.screen) else { return }
         // A caret toggle's measurement just settled: learn the provider's exact expanded-section
         // height so the NEXT toggle co-animates with zero correction.
-        if let pending = pendingExpansion, layout.screen == .dashboard,
-           let ideal = heightCoordinator.measuredIdeal[.dashboard] {
+        if let pending = pendingExpansion, let ideal = heightCoordinator.measuredIdeal[.dashboard] {
             expansionDeltas[pending.cacheKey] = abs(ideal - pending.fromTarget)
             pendingExpansion = nil
         }
@@ -413,6 +434,7 @@ struct DashboardView: View {
         // (collapsed) measurement would record a wrong — even zero — expanded-section delta and the
         // provider's next caret toggle would co-animate to a bogus height until re-learned.
         pendingExpansion = nil
+        expansionSettling = false
         // The driven height is deliberately KEPT across the close (it used to reset to the 0
         // sentinel here). The close-time settle re-measures the collapsed dashboard while hidden and
         // the `measuredIdeal` onChange walks the retained value to the collapsed target, so the next
