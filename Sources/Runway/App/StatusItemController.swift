@@ -53,6 +53,9 @@ final class StatusItemController: NSObject {
         anchorRect: { [weak self] in
             guard let button = self?.statusItem.button, let window = button.window else { return nil }
             return window.convertToScreen(button.convert(button.bounds, to: nil))
+        },
+        isRefreshInFlight: { [weak self] in
+            !(self?.container.dataStore.refreshingProviderIDs.isEmpty ?? true)
         }
     )
     private let hostingController: NSHostingController<AnyView>
