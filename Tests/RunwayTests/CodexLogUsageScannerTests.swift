@@ -222,6 +222,48 @@ final class CodexLogUsageScannerTests: XCTestCase {
         XCTAssertEqual(CodexLogUsageScanner.parseFile(Data(lines.utf8)).first?.model, "gpt-5.4")
     }
 
+    // MARK: - Chunked (tail) parsing
+
+    func testChunkedParseMatchesWholeFileParseAtEveryLineBoundary() throws {
+        // A fixture exercising every piece of carried parser state: a child session's replay gate,
+        // the totals delta baseline, turn_context model tracking, and the fast-tier flag.
+        let lines = [
+            CodexLogFixture.subagentSessionMeta(timestamp: "2026-05-12T08:03:00.000Z"),
+            CodexLogFixture.taskStarted(timestamp: "2026-05-12T08:03:00.100Z", startedAt: childCreationEpoch - 900),
+            CodexLogFixture.tokenCount(
+                timestamp: "2026-05-12T08:03:00.100Z",
+                totals: CodexLogFixture.usage(input: 1000, cached: 100, output: 200)
+            ),
+            CodexLogFixture.taskStarted(timestamp: "2026-05-12T08:03:01.000Z", startedAt: childCreationEpoch + 1),
+            CodexLogFixture.turnContext(timestamp: "2026-05-12T08:03:30.000Z", model: "gpt-5.3-codex"),
+            CodexLogFixture.threadSettingsApplied(timestamp: "2026-05-12T08:03:40.000Z", serviceTier: "fast"),
+            CodexLogFixture.tokenCount(
+                timestamp: "2026-05-12T08:04:00.000Z",
+                totals: CodexLogFixture.usage(input: 1500, cached: 150, output: 300)
+            ),
+            CodexLogFixture.tokenCount(
+                timestamp: "2026-05-12T08:05:00.000Z",
+                totals: CodexLogFixture.usage(input: 1600, cached: 160, output: 350)
+            )
+        ]
+        let whole = lines.joined(separator: "\n") + "\n"
+        let expected = CodexLogUsageScanner.parseFile(Data(whole.utf8))
+        XCTAssertFalse(expected.isEmpty)
+
+        for boundary in 1..<lines.count {
+            let head = lines[..<boundary].joined(separator: "\n") + "\n"
+            let tail = lines[boundary...].joined(separator: "\n") + "\n"
+            let first = try XCTUnwrap(CodexLogUsageScanner.tailParser.parseChunk(Data(head.utf8), nil))
+            let second = try XCTUnwrap(
+                CodexLogUsageScanner.tailParser.parseChunk(Data(tail.utf8), first.state)
+            )
+            XCTAssertEqual(
+                first.items + second.items, expected,
+                "chunked parse split before line \(boundary) must match the whole-file parse"
+            )
+        }
+    }
+
     // MARK: - Child-session replay (subagents and forks)
 
     /// Epoch seconds of the child sessions' creation instant used across the replay tests.

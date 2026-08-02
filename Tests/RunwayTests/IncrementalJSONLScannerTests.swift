@@ -410,6 +410,146 @@ final class IncrementalJSONLScannerTests: XCTestCase {
         XCTAssertEqual(warnings.counts, [])
     }
 
+    // MARK: - Tail parsing
+
+    func testTailParserReparsesOnlyAppendedBytes() async throws {
+        let base = try makeDirectory("TailAppend")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n2\n".utf8).write(to: url)
+        let recorder = ChunkRecorder()
+        let scanner = IncrementalJSONLScanner<Int>()
+
+        let first = await scanner.items(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        XCTAssertEqual(first, [1, 2])
+
+        try append("3\n", to: url)
+        let second = await scanner.items(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        XCTAssertEqual(second, [1, 2, 3])
+        XCTAssertEqual(recorder.chunks, ["1\n2\n", "3\n"], "the second scan must read only the appended bytes")
+    }
+
+    func testTailParserStateCarriesAcrossAppends() async throws {
+        let base = try makeDirectory("TailState")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n2\n".utf8).write(to: url)
+        // Each item is the running sum including its line, carried between chunks as parser state.
+        let parser = JSONLTailParser<Int> { chunk, stateData in
+            var sum = stateData.flatMap { try? JSONDecoder().decode(Int.self, from: $0) } ?? 0
+            var items: [Int] = []
+            for line in chunk.split(separator: UInt8(ascii: "\n")) {
+                guard let value = Int(String(decoding: line, as: UTF8.self)) else { continue }
+                sum += value
+                items.append(sum)
+            }
+            return (items, try? JSONEncoder().encode(sum))
+        }
+        let scanner = IncrementalJSONLScanner<Int>()
+
+        let first = await scanner.items(from: [try discovered(url)], since: .distantPast, tailParser: parser)
+        XCTAssertEqual(first, [1, 3])
+
+        try append("3\n", to: url)
+        let second = await scanner.items(from: [try discovered(url)], since: .distantPast, tailParser: parser)
+        XCTAssertEqual(second, [1, 3, 6], "the tail chunk must resume from the previous chunk's state")
+    }
+
+    func testRewrittenFileForcesFullReparse() async throws {
+        let base = try makeDirectory("TailRewrite")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n2\n".utf8).write(to: url)
+        let recorder = ChunkRecorder()
+        let scanner = IncrementalJSONLScanner<Int>()
+        _ = await scanner.items(from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser)
+
+        // Larger than before, but rewritten rather than appended — the fingerprint must catch it.
+        try Data("9\n8\n7\n".utf8).write(to: url)
+        let items = await scanner.items(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        XCTAssertEqual(items, [9, 8, 7])
+        XCTAssertEqual(recorder.chunks, ["1\n2\n", "9\n8\n7\n"])
+    }
+
+    func testTailResumeSurvivesRelaunch() async throws {
+        let base = try makeDirectory("TailPersistence")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n2\n".utf8).write(to: url)
+        let persistence = JSONLScanCachePersistence(
+            namespace: "test", schemaVersion: 1,
+            directory: base.appendingPathComponent("cache"), writeDebounce: .milliseconds(1)
+        )
+        let firstRecorder = ChunkRecorder()
+        let first = IncrementalJSONLScanner<Int>(persistence: persistence)
+        _ = await first.items(
+            from: [try discovered(url)], since: .distantPast, cacheIdentity: "home",
+            tailParser: firstRecorder.parser
+        )
+        await first.waitForPendingWritesForTesting()
+
+        try append("3\n", to: url)
+        let relaunchedRecorder = ChunkRecorder()
+        let relaunched = IncrementalJSONLScanner<Int>(persistence: persistence)
+        let items = await relaunched.items(
+            from: [try discovered(url)], since: .distantPast, cacheIdentity: "home",
+            tailParser: relaunchedRecorder.parser
+        )
+        XCTAssertEqual(items, [1, 2, 3])
+        XCTAssertEqual(
+            relaunchedRecorder.chunks, ["3\n"],
+            "the persisted resume point must let a fresh scanner parse only the appended bytes"
+        )
+        await relaunched.waitForPendingWritesForTesting()
+    }
+
+    func testUnterminatedFinalLineParsesButDisablesResume() async throws {
+        let base = try makeDirectory("TailFragment")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n2".utf8).write(to: url)
+        let recorder = ChunkRecorder()
+        let scanner = IncrementalJSONLScanner<Int>()
+
+        let first = await scanner.items(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        XCTAssertEqual(first, [1, 2], "an unterminated final line still parses, matching the whole-file path")
+
+        // The fragment's items are already cached, so growth must re-parse in full — a tail resume
+        // would re-present the fragment's bytes and double-count them.
+        try append("\n3\n", to: url)
+        let second = await scanner.items(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        XCTAssertEqual(second, [1, 2, 3])
+        XCTAssertEqual(recorder.chunks, ["1\n2", "1\n2\n3\n"])
+    }
+
+    private func append(_ text: String, to url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(text.utf8))
+    }
+
+    private func discovered(_ url: URL) throws -> JSONLScanning.DiscoveredFile {
+        // Not `URL.resourceValues` — it caches per URL instance, and these tests re-stat a file
+        // they just appended to.
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return JSONLScanning.DiscoveredFile(
+            path: url.path,
+            size: try XCTUnwrap(attributes[.size] as? Int),
+            mtime: try XCTUnwrap(attributes[.modificationDate] as? Date)
+        )
+    }
+
     private func makeDirectory(_ suffix: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("RunwayScanner\(suffix)-\(UUID().uuidString)", isDirectory: true)

@@ -67,12 +67,24 @@ struct JSONLScanCacheRecord<Item: Codable & Sendable>: Codable, Sendable {
     var size: Int
     var mtime: Date
     var items: [Item]
+    /// Byte offset of the append-only resume point (just past the file's last parsed newline).
+    /// `nil` disables tail resumes — records from before tail support, whole-file parsers, and
+    /// files whose final line was unterminated at parse time — forcing a full reparse on change.
+    var parsedOffset: Int?
+    /// Opaque provider parser state at `parsedOffset`; `nil` for stateless parsers.
+    var resumeState: Data?
+    /// Bit pattern of the FNV-1a hash over the trailing bytes before `parsedOffset`. A mismatch on
+    /// the next scan means the file was rewritten rather than appended, forcing a full reparse.
+    var tailFingerprint: Int64?
 }
 
 struct JSONLScanCachedFile<Item: Codable & Sendable>: Sendable {
     var size: Int
     var mtime: Date
     var items: [Item]
+    var parsedOffset: Int?
+    var resumeState: Data?
+    var tailFingerprint: Int64?
 }
 
 struct JSONLScanCacheReadSnapshot<Item: Codable & Sendable>: Sendable {
@@ -301,7 +313,10 @@ actor JSONLScanCacheWriter {
                     files[path] = JSONLScanCachedFile(
                         size: record.size,
                         mtime: record.mtime,
-                        items: record.items
+                        items: record.items,
+                        parsedOffset: record.parsedOffset,
+                        resumeState: record.resumeState,
+                        tailFingerprint: record.tailFingerprint
                     )
                 }
             }

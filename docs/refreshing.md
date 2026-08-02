@@ -26,6 +26,10 @@ Claude, Codex, and pi spend history has a separate local-log parse cache under
 `~/Library/Application Support/Runway/log-scan-cache/`. It stores parsed usage events before Runway
 applies model-rate estimates, so pricing updates take effect without re-reading unchanged JSONL. On
 relaunch, an entry is reused only when its path, size, modification time, and parser version still match.
+A Claude or Codex session log that only *grew* since its last parse doesn't re-read from the start:
+the cache remembers how far it parsed (plus a fingerprint of the bytes just before that point, so a
+rewritten file is still detected and re-parsed in full), and only the newly appended lines are read.
+This keeps refreshes cheap while a long agent session appends to a very large log file.
 Same-home cards share parsed data, and changing one source file rewrites only that file's record. Old files
 leave the cache as the history window advances, and identities unused for 35 days are removed. App writes
 are debounced until after refresh; the one-shot CLI drains pending writes before it exits.
