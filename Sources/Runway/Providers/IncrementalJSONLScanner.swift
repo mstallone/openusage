@@ -25,13 +25,14 @@ enum JSONLScanning {
         // Resolve first so the enumeration sees the real directory.
         let dir = dir.resolvingSymlinksInPath()
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        let keySet = Set(keys)
         guard let enumerator = FileManager.default.enumerator(
             at: dir, includingPropertiesForKeys: keys, options: []
         ) else { return [] }
         var files: [DiscoveredFile] = []
         for case let url as URL in enumerator {
             guard url.pathExtension == "jsonl",
-                  let values = try? url.resourceValues(forKeys: Set(keys)),
+                  let values = try? url.resourceValues(forKeys: keySet),
                   values.isRegularFile == true
             else { continue }
             files.append(DiscoveredFile(

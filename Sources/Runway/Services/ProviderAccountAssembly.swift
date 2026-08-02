@@ -74,7 +74,7 @@ struct ProviderAccountAssembly {
         defaults: UserDefaults = .standard,
         accountsStore: ProviderAccountsStore? = nil,
         waitsForLoginShell: Bool
-    ) -> ProviderAccountAssembly {
+    ) async -> ProviderAccountAssembly {
         // The identity read needs the login shell's exports (CLAUDE_CONFIG_DIR/CODEX_HOME name the
         // default homes), and it reads them through the very same reader the provider auth stores
         // use — `ProcessEnvironmentReader`, which pins identity-relevant keys to the persisted
@@ -101,15 +101,117 @@ struct ProviderAccountAssembly {
             return ProviderAccountAssembly(identityKeysByCard: [:])
         }
         let codexIdentityCache = CodexHomeIdentityCache(defaults: defaults)
-        var assembly = make(
-            observer: DefaultAccountObserver(codexIdentityCache: codexIdentityCache),
-            accountsStore: accountsStore ?? ProviderAccountsStore(defaults: defaults),
+        let observer = DefaultAccountObserver(codexIdentityCache: codexIdentityCache)
+        let claudeDiscovery = ClaudeConfigDirDiscovery()
+        let codexDiscovery = CodexHomeDiscovery(identityCache: codexIdentityCache)
+        // The observation + discovery half is pure filesystem/keychain IO (up to ~0.8s of directory
+        // walks and non-interactive keychain probes). Run the two family chains concurrently off
+        // the main actor, then assemble on it — before this split, all of that IO ran synchronously
+        // on the main actor and delayed the menu-bar icon.
+        let readout = await observeAndDiscover(
+            observer: observer,
             families: families,
-            claudeDiscovery: ClaudeConfigDirDiscovery(),
-            codexDiscovery: CodexHomeDiscovery(identityCache: codexIdentityCache)
+            claudeDiscovery: claudeDiscovery,
+            codexDiscovery: codexDiscovery
+        )
+        var assembly = assemble(
+            readout: readout,
+            accountsStore: accountsStore ?? ProviderAccountsStore(defaults: defaults),
+            codexKeychain: codexDiscovery.keychain
         )
         assembly.codexIdentityCache = codexIdentityCache
         return assembly
+    }
+
+    /// The Sendable payload the off-main half hands the main-actor assembly: default-home identity
+    /// outcomes plus the custom-home scan results (already gated on those outcomes).
+    struct DiscoveryReadout: Sendable {
+        var claudeOutcome: DefaultAccountObserver.Outcome?
+        var codexOutcome: DefaultAccountObserver.Outcome?
+        var hasAmbientClaudeToken = false
+        var claudeScan: ClaudeConfigDirDiscovery.Result?
+        var codexScan: CodexHomeDiscovery.Result?
+    }
+
+    /// Run both family chains (observe the default home, then scan custom homes) concurrently off
+    /// the caller's actor. Each chain is sequential internally — the scan's gating and exclusions
+    /// depend on its family's default-home outcome.
+    nonisolated static func observeAndDiscover(
+        observer: DefaultAccountObserver,
+        families: Set<String>,
+        claudeDiscovery: ClaudeConfigDirDiscovery?,
+        codexDiscovery: CodexHomeDiscovery?
+    ) async -> DiscoveryReadout {
+        async let claude = claudeReadout(
+            observer: observer, discovery: claudeDiscovery, enabled: families.contains("claude")
+        )
+        async let codex = codexReadout(
+            observer: observer, discovery: codexDiscovery, enabled: families.contains("codex")
+        )
+        let (claudePart, codexPart) = await (claude, codex)
+        return DiscoveryReadout(
+            claudeOutcome: claudePart.outcome,
+            codexOutcome: codexPart.outcome,
+            hasAmbientClaudeToken: claudePart.hasAmbientToken,
+            claudeScan: claudePart.scan,
+            codexScan: codexPart.scan
+        )
+    }
+
+    private nonisolated static func claudeReadout(
+        observer: DefaultAccountObserver,
+        discovery: ClaudeConfigDirDiscovery?,
+        enabled: Bool
+    ) -> (outcome: DefaultAccountObserver.Outcome?, scan: ClaudeConfigDirDiscovery.Result?, hasAmbientToken: Bool) {
+        guard enabled else { return (nil, nil, false) }
+        let outcome = observer.observeClaude()
+        var scan: ClaudeConfigDirDiscovery.Result?
+        // Guarded on the default read: when a default login clearly EXISTS but can't be named
+        // (`unresolved`), accepting candidates could render the very account the default card shows
+        // as a second card — skip them this launch instead. A machine with no default login at all
+        // keeps accepting: there is nothing to duplicate, and a custom-dir-only login should still
+        // get its card.
+        if let discovery {
+            if case .unresolved = outcome {
+                AppLog.info(.config, "discovery: claude default login present but its identity is unreadable → skipping extra-account candidates this launch")
+            } else {
+                let result = discovery.run()
+                for note in result.notes {
+                    AppLog.info(.config, "discovery: \(note)")
+                }
+                scan = result
+            }
+        }
+        return (outcome, scan, observer.hasAmbientClaudeToken)
+    }
+
+    private nonisolated static func codexReadout(
+        observer: DefaultAccountObserver,
+        discovery: CodexHomeDiscovery?,
+        enabled: Bool
+    ) -> (outcome: DefaultAccountObserver.Outcome?, scan: CodexHomeDiscovery.Result?) {
+        guard enabled else { return (nil, nil) }
+        let outcome = observer.observeCodex()
+        guard let discovery else { return (outcome, nil) }
+        let defaultAnchor: String? = if case .resolved(_, _, let anchor) = outcome {
+            anchor
+        } else {
+            nil
+        }
+        // Run even when the default identity is unresolved: verified findings remain suppressed
+        // (the assembly skips them), but unverified exact-item homes still need the post-launch
+        // warming plan.
+        let scan = discovery.run(excluding: Set(defaultAnchor.map { [$0] } ?? []))
+        for note in scan.notes {
+            AppLog.info(.config, "discovery: \(note)")
+        }
+        if case .unresolved = outcome {
+            AppLog.info(
+                .config,
+                "discovery: codex default login present but its identity is unreadable → skipping extra-account candidates this launch"
+            )
+        }
+        return (outcome, scan)
     }
 
     /// The environment variable that relocates each family's default home — the fact whose
@@ -125,6 +227,9 @@ struct ProviderAccountAssembly {
     /// launch (see `make(defaults:waitsForLoginShell:)`); a family left out is simply not observed —
     /// no identity key, no reconciliation, exactly as if the pass never ran for it. `claudeDiscovery`
     /// is skipped alongside the claude family (its exclusion set needs the same home facts).
+    /// Synchronous (sequential readouts) — the app's launch path goes through the async
+    /// `make(defaults:accountsStore:waitsForLoginShell:)`, which runs the same readouts in parallel
+    /// off the main actor.
     static func make(
         observer: DefaultAccountObserver,
         accountsStore: ProviderAccountsStore,
@@ -132,14 +237,40 @@ struct ProviderAccountAssembly {
         claudeDiscovery: ClaudeConfigDirDiscovery? = nil,
         codexDiscovery: CodexHomeDiscovery? = nil
     ) -> ProviderAccountAssembly {
+        let claude = claudeReadout(
+            observer: observer, discovery: claudeDiscovery, enabled: families.contains("claude")
+        )
+        let codex = codexReadout(
+            observer: observer, discovery: codexDiscovery, enabled: families.contains("codex")
+        )
+        return assemble(
+            readout: DiscoveryReadout(
+                claudeOutcome: claude.outcome,
+                codexOutcome: codex.outcome,
+                hasAmbientClaudeToken: claude.hasAmbientToken,
+                claudeScan: claude.scan,
+                codexScan: codex.scan
+            ),
+            accountsStore: accountsStore,
+            codexKeychain: codexDiscovery?.keychain
+        )
+    }
+
+    /// The main-actor half: group the scans' findings, reconcile the account registry, and build
+    /// the per-card identity map plus the extra-card build plans.
+    static func assemble(
+        readout: DiscoveryReadout,
+        accountsStore: ProviderAccountsStore,
+        codexKeychain: (any KeychainAccessing)?
+    ) -> ProviderAccountAssembly {
         var identityKeys: [String: String] = [:]
         var observations: [ProviderAccountsStore.AccountObservation] = []
 
         let outcomes: [(family: String, outcome: DefaultAccountObserver.Outcome)] = [
-            ("claude", { observer.observeClaude() }),
-            ("codex", { observer.observeCodex() }),
-        ].compactMap { family, observe in
-            families.contains(family) ? (family, observe()) : nil
+            ("claude", readout.claudeOutcome),
+            ("codex", readout.codexOutcome),
+        ].compactMap { family, outcome in
+            outcome.map { (family, $0) }
         }
         for (family, outcome) in outcomes {
             switch outcome {
@@ -160,57 +291,46 @@ struct ProviderAccountAssembly {
             }
         }
 
-        // Extra Claude logins in custom config dirs. Guarded on the default read: when a default
-        // login clearly EXISTS but can't be named (`unresolved`), accepting candidates could render
-        // the very account the default card shows as a second card — skip them this launch instead.
-        // A machine with no default login at all keeps accepting: there is nothing to duplicate,
-        // and a custom-dir-only login should still get its card.
+        // Extra Claude logins in custom config dirs. The unresolved-default gating already happened
+        // in the readout (an unresolved default yields no scan) — see `claudeReadout`.
         var foundClaudeAccounts: [(identityKey: String, label: String?, dirs: [ClaudeConfigDirDiscovery.Finding])] = []
         var defaultClaudeExtraLogRoots: [URL] = []
-        let claudeOutcome = outcomes.first { $0.family == "claude" }?.outcome
-        if let claudeDiscovery, let claudeOutcome {
-            if case .unresolved = claudeOutcome {
-                AppLog.info(.config, "discovery: claude default login present but its identity is unreadable → skipping extra-account candidates this launch")
-            } else {
-                let defaultKey = identityKeys["claude"]
-                let scan = claudeDiscovery.run()
-                for note in scan.notes {
-                    AppLog.info(.config, "discovery: \(note)")
+        let claudeOutcome = readout.claudeOutcome
+        if let scan = readout.claudeScan {
+            let defaultKey = identityKeys["claude"]
+            var order: [String] = []
+            var grouped: [String: [ClaudeConfigDirDiscovery.Finding]] = [:]
+            for finding in scan.findings {
+                if grouped[finding.identityKey] == nil { order.append(finding.identityKey) }
+                grouped[finding.identityKey, default: []].append(finding)
+            }
+            for identityKey in order {
+                let findings = grouped[identityKey] ?? []
+                let sources = findings.map {
+                    ProviderAccountSource(
+                        kind: .configDir,
+                        anchor: $0.anchorPath,
+                        holdsDefaultSource: false,
+                        keychainLiteral: $0.keychainLiteral
+                    )
                 }
-                var order: [String] = []
-                var grouped: [String: [ClaudeConfigDirDiscovery.Finding]] = [:]
-                for finding in scan.findings {
-                    if grouped[finding.identityKey] == nil { order.append(finding.identityKey) }
-                    grouped[finding.identityKey, default: []].append(finding)
-                }
-                for identityKey in order {
-                    let findings = grouped[identityKey] ?? []
-                    let sources = findings.map {
-                        ProviderAccountSource(
-                            kind: .configDir,
-                            anchor: $0.anchorPath,
-                            holdsDefaultSource: false,
-                            keychainLiteral: $0.keychainLiteral
-                        )
+                if identityKey == defaultKey {
+                    // Same account as the default card: its dirs are extra spend-log roots on
+                    // that card, never a second card — duplicate cards are structurally
+                    // impossible because identity routes the source to the existing record.
+                    defaultClaudeExtraLogRoots += findings.map { URL(fileURLWithPath: $0.anchorPath) }
+                    if let index = observations.firstIndex(where: { $0.family == "claude" && $0.identityKey == identityKey }) {
+                        observations[index].sources += sources
                     }
-                    if identityKey == defaultKey {
-                        // Same account as the default card: its dirs are extra spend-log roots on
-                        // that card, never a second card — duplicate cards are structurally
-                        // impossible because identity routes the source to the existing record.
-                        defaultClaudeExtraLogRoots += findings.map { URL(fileURLWithPath: $0.anchorPath) }
-                        if let index = observations.firstIndex(where: { $0.family == "claude" && $0.identityKey == identityKey }) {
-                            observations[index].sources += sources
-                        }
-                        AppLog.info(.config, "discovery: \(findings.count) config dir(s) fold onto the default claude card (same account)")
-                    } else {
-                        observations.append(ProviderAccountsStore.AccountObservation(
-                            family: "claude",
-                            identityKey: identityKey,
-                            label: findings.first?.label,
-                            sources: sources
-                        ))
-                        foundClaudeAccounts.append((identityKey, findings.first?.label, findings))
-                    }
+                    AppLog.info(.config, "discovery: \(findings.count) config dir(s) fold onto the default claude card (same account)")
+                } else {
+                    observations.append(ProviderAccountsStore.AccountObservation(
+                        family: "claude",
+                        identityKey: identityKey,
+                        label: findings.first?.label,
+                        sources: sources
+                    ))
+                    foundClaudeAccounts.append((identityKey, findings.first?.label, findings))
                 }
             }
         }
@@ -223,27 +343,18 @@ struct ProviderAccountAssembly {
         ] = []
         var hasScopedCodexDefault = false
         var unverifiedCodexKeyringHomes: Set<String> = []
-        let codexOutcome = outcomes.first { $0.family == "codex" }?.outcome
-        if let codexDiscovery, let codexOutcome {
+        let codexOutcome = readout.codexOutcome
+        if let scan = readout.codexScan, let codexOutcome {
             let defaultAnchor: String? = if case .resolved(_, _, let anchor) = codexOutcome {
                 anchor
             } else {
                 nil
             }
-            // Run even when the default identity is unresolved: verified findings remain suppressed,
-            // but unverified exact-item homes still need the post-launch warming plan.
-            let scan = codexDiscovery.run(
-                excluding: Set(defaultAnchor.map { [$0] } ?? [])
-            )
             unverifiedCodexKeyringHomes = scan.unverifiedKeyringHomes
-            for note in scan.notes {
-                AppLog.info(.config, "discovery: \(note)")
-            }
+            // An unresolved default suppresses the verified findings (logged in `codexReadout`) but
+            // the unverified exact-item homes above still feed the post-launch warming plan.
             if case .unresolved = codexOutcome {
-                AppLog.info(
-                    .config,
-                    "discovery: codex default login present but its identity is unreadable → skipping extra-account candidates this launch"
-                )
+                // Findings intentionally unprocessed this launch.
             } else {
                 let defaultKey = identityKeys["codex"]
 
@@ -353,7 +464,7 @@ struct ProviderAccountAssembly {
 
         let claudeDefaultDisplayName: String?
         var cardsRejectingAccountStampedCache: Set<String> = []
-        if claudeOutcome == .absent, observer.hasAmbientClaudeToken {
+        if claudeOutcome == .absent, readout.hasAmbientClaudeToken {
             // The ambient token cannot prove it belongs to the state file's former account. Even
             // when Desktop fallback remains possible, force one refresh rather than serving that
             // account's cached limits under an unverified runtime source.
@@ -362,7 +473,7 @@ struct ProviderAccountAssembly {
         if let resolvedClaudeDefaultDisplayName {
             claudeDefaultDisplayName = resolvedClaudeDefaultDisplayName
         } else if claudeOutcome == .absent,
-                  observer.hasAmbientClaudeToken,
+                  readout.hasAmbientClaudeToken,
                   !claudeCards.isEmpty
         {
             // With scoped cards present, Desktop fallback is disabled so an identity-less standard
@@ -409,7 +520,7 @@ struct ProviderAccountAssembly {
             claudeDefaultDisplayName: claudeDefaultDisplayName,
             defaultClaudeExtraLogRoots: defaultClaudeExtraLogRoots,
             codexCards: codexCards,
-            codexIdentityWarmKeychain: codexDiscovery?.keychain,
+            codexIdentityWarmKeychain: codexKeychain,
             unverifiedCodexKeyringHomes: unverifiedCodexKeyringHomes
         )
     }

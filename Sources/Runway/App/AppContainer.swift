@@ -78,7 +78,7 @@ final class AppContainer {
         // the config-dir scan for extra Claude logins. Feeds the snapshot cache's account stamp,
         // reconciles the account registry, and hands the catalog its extra-card build plan.
         let accounts = ProviderAccountsStore()
-        let accountAssembly = ProviderAccountAssembly.make(accountsStore: accounts, waitsForLoginShell: true)
+        let accountAssembly = await ProviderAccountAssembly.make(accountsStore: accounts, waitsForLoginShell: true)
         self.accounts = accounts
         self.codexIdentityWarmTask = accountAssembly.startCodexIdentityWarmTask()
 
