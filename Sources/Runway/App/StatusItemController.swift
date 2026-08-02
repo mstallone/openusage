@@ -425,7 +425,6 @@ final class StatusItemController: NSObject {
         panel.orderOut(nil)
         outsideClickMonitor.stop()
         statusItem.button?.highlight(false)
-        heightController.finishClosing()
         // Settle the hidden tree NOW, while nothing is on screen. Every close queues SwiftUI work —
         // the card collapse above, plus the scroll-to-top/height/screen resets DashboardView runs off
         // the `popoverShown` flip — and without this flush that work sat in pending transactions
@@ -434,7 +433,19 @@ final class StatusItemController: NSObject {
         // work ran a beat after close anyway as a ~70–100ms main-thread stall on the display cycle;
         // doing it synchronously here moves it where it's invisible and leaves the open path a
         // clean tree (measured: warm open drops to roughly a third).
+        //
+        // Order matters: this runs BEFORE `finishClosing()` so the settle's height targets clamp
+        // against the closing display's real maximum (the anchor is still recorded). Settling after
+        // the anchor reset clamped against the 800pt fallback, so on a display shorter than that
+        // the hidden tree kept an over-tall height the next open had to correct — the exact
+        // pre-show work this settle exists to remove.
         hostingController.view.layoutSubtreeIfNeeded()
+        // The settle's collapsed re-measure changed the height after `saveBeforeClosing` recorded
+        // the still-expanded value; persist the settled one so the next launch's opening guess
+        // matches what the panel will actually show. (The morph-settle timer that used to do this
+        // save is cancelled by `finishClosing` below.)
+        heightController.saveAfterHiddenSettle()
+        heightController.finishClosing()
     }
 
     /// Drops keyboard focus inside the panel so a clicked plain-styled control (a metric row's
