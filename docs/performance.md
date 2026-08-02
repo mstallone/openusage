@@ -82,4 +82,8 @@ only the current Runway tree:
    60 s idle window (with a poller recording peak RSS), and refresh wall time from each app's own
    "batch end" log lines.
 4. Run each app twice: the first run measures the cold caches ("first launch" table), the second
-   the steady state.
+   the steady state. For the first run to actually be cold, delete each app's persisted scan cache
+   beforehand — `~/Library/Application Support/Runway/log-scan-cache/` (upstream:
+   `OpenUsage/log-scan-cache/`) — while leaving the matched provider/account defaults in place; a
+   revision that has ever been profiled on the machine otherwise starts warm and silently reports
+   another steady-state run.
