@@ -38,7 +38,7 @@ are debounced until after refresh; the one-shot CLI drains pending writes before
 
 A failed refresh **never wipes your data**: the last good values stay on screen, and a small warning triangle appears at the right edge of the provider's header — hover it for the error message (e.g. "Not logged in"). The error clears on the next successful refresh.
 
-A provider that stops responding is cut off after 90 seconds — above the slowest legitimate provider flow (Cursor's full probe can take ~70s on a slow connection), so only genuinely dead work gets cut. The attempt counts as a failed refresh — same warning triangle, message "Refresh timed out after 90s" — instead of leaving the refresh spinner running forever. Like any failure, the provider backs off briefly before the next attempt, and a new attempt never overlaps a timed-out one that is still winding down.
+A provider that stops responding is cut off after 2.5 minutes — above the slowest legitimate provider flow (Kimi's token-refresh retries can legitimately take ~90 seconds; Cursor's full probe ~70), so only genuinely dead work gets cut. The attempt counts as a failed refresh — same warning triangle, message "Refresh timed out after 150s" — instead of leaving the refresh spinner running forever. Like any failure, the provider backs off briefly before the next attempt, and a new attempt never overlaps a timed-out one that is still winding down.
 
 The last good normalized history is preserved too, so a temporary provider failure—or a successful
 limit refresh whose local log scan is temporarily unavailable—does not remove this Mac's previous

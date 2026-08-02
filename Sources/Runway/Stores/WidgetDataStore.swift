@@ -32,11 +32,13 @@ final class WidgetDataStore {
     /// refresh indicator forever (the in-flight guard also blocked every later attempt for that
     /// provider). Injectable for tests; see `defaultProviderRefreshTimeout`.
     private let providerRefreshTimeout: TimeInterval
-    /// 90s: above the slowest legitimate provider path — Cursor's probe sequentially budgets
-    /// usage + plan + credits + Stripe + CSV export at 10+10+10+10+30 ≈ 70s, and Codex's claim
-    /// probe ≈ 45s — so the ceiling only ever cuts genuinely dead work, while a dead connection
-    /// still surfaces as a provider error card instead of an infinite spinner.
-    static let defaultProviderRefreshTimeout: TimeInterval = 90
+    /// 150s: above every provider's complete built-in request budget — the known worst paths are
+    /// Kimi's OAuth refresh (three 30s attempts + backoffs ≈ 93s, plus credential loading and the
+    /// usage request), Cursor's sequential probe (≈ 70s), and Codex's claim probe (≈ 45s) — so the
+    /// ceiling only ever cuts genuinely dead work, while a dead connection still surfaces as a
+    /// provider error card instead of an infinite spinner. When adding a provider whose internal
+    /// budgets approach this, raise it: the ceiling exists for hangs, not latency policing.
+    static let defaultProviderRefreshTimeout: TimeInterval = 150
     /// Providers whose timed-out refresh is still running detached (the deadline race resumed
     /// without awaiting it). Blocks new attempts for that provider so network/auth work never
     /// overlaps on one runtime — cleared ONLY when the straggler actually exits. Deliberately no
