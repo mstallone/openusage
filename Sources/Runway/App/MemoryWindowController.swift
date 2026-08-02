@@ -184,7 +184,8 @@ final class MemoryWindowController: NSObject, NSWindowDelegate {
         window.delegate = self
         // The title stays set for Mission Control and accessibility, but the bar itself dissolves:
         // `MemoryRootView`'s vibrancy backdrop owns the whole window surface and the traffic lights
-        // float over it (the sidebar clears them with top padding).
+        // float over it (the sidebar reserves their clearance with top padding and paints a
+        // frosted fade behind them — see `SidebarTitlebarFade`).
         window.title = "Memory"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
