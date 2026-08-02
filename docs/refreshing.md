@@ -2,7 +2,7 @@
 
 ## When data updates
 
-- All enabled providers refresh together: once at launch, then every 5 minutes (a fixed cadence — there's no setting for it). Opening the popover does not start a second automatic pass. Providers fetch in parallel, so fast cards update without waiting for a slow one. The batch itself still finishes only after every provider returns; notifications, history sync, and the next five-minute wait begin after that point.
+- All enabled providers refresh together: once at launch, then every 5 minutes (a fixed cadence — there's no setting for it). Opening the popover does not start a second automatic pass. Providers fetch in parallel, so fast cards update without waiting for a slow one — results landing close together are briefly coalesced (a fraction of a second) so a burst publishes as one update. The batch itself still finishes only after every provider returns; notifications, history sync, and the next five-minute wait begin after that point.
 - Turning a provider on (yourself in Customize, or automatically by first-launch/new-provider detection) fetches it promptly instead of waiting out the interval — even when the change lands in the middle of a refresh that's already running.
 - The dashboard footer shows a compact countdown to the next update (like `5m` or `45s`). **Clicking it (or pressing ⌘R while that footer is present)** refreshes immediately, skipping the cache.
 - The one-shot `runway` command reuses this same persisted cache for five minutes, refreshes missing or stale entries without starting the app, and exits. `runway --force` runs the same forced provider refresh as ⌘R regardless of cache age.

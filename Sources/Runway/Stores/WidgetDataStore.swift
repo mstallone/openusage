@@ -93,6 +93,13 @@ final class WidgetDataStore {
     /// produces one write.
     @ObservationIgnored var onLocalStateChanged: (@MainActor () -> Void)?
     @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
+    /// Non-zero while `refreshAll` is coalescing per-provider completion work into short debounced
+    /// rebuilds plus one batch-end rebuild + cache persist. Plain counters — everything here is
+    /// MainActor-serialized.
+    @ObservationIgnored private var snapshotRebuildDeferrals = 0
+    @ObservationIgnored private var pendingSnapshotRebuild = false
+    /// The in-flight debounce for mid-batch publishing; see `requestSnapshotRebuild`.
+    @ObservationIgnored private var coalescedRebuildTask: Task<Void, Never>?
     /// Accounts synced from other Macs that have NO card here: surfaced in Total Spend only (their
     /// synthesized snapshots carry the usual Today/Yesterday/Last 30 Days lines), never as cards.
     private(set) var remoteOnlySpend: [(provider: Provider, snapshot: ProviderSnapshot)] = []
@@ -190,6 +197,10 @@ final class WidgetDataStore {
         let providerIDs = registry.providers.map(\.id).filter { isProviderEnabled($0) }
         let start = monotonicNow()
         AppLog.info(.refresh, "batch start (\(providerIDs.count) providers, force=\(force))")
+        // Coalesce per-provider completion work: with N providers finishing in one pass, rebuilding
+        // the rendered union and re-encoding the snapshot blob once per provider is O(N²) — defer
+        // both to a single batch-end rebuild + persist.
+        snapshotRebuildDeferrals += 1
         let tasks = providerIDs.map { providerID in
             Task { await self.refresh(providerID: providerID, force: force, notifyStateChange: false) }
         }
@@ -197,6 +208,12 @@ final class WidgetDataStore {
         outcomes.reserveCapacity(tasks.count)
         for task in tasks {
             outcomes.append(await task.value)
+        }
+        snapshotRebuildDeferrals -= 1
+        if snapshotRebuildDeferrals == 0 {
+            coalescedRebuildTask?.cancel()
+            coalescedRebuildTask = nil
+            flushPendingSnapshotWork()
         }
         // Stamp the end of the pass so the footer countdown targets the next scheduled refresh
         // (this time + one refresh interval), mirroring the periodic loop that sleeps one interval
@@ -228,6 +245,21 @@ final class WidgetDataStore {
     func evaluateNotifications(now: Date = Date()) async {
         guard let settingsProvider = notificationSettings else { return }
         let toggles = settingsProvider().toggles
+        // All triggers off (the default): nothing can fire, so skip resolving and formatting every
+        // visible metric. Present metrics keep their evaluator state UNTOUCHED — the pace logic
+        // deliberately keeps `previousBucket` behind while a trigger is off so an unconsumed
+        // worsening fires when the trigger comes back on (see `testOffToggleDoesNotConsumeTheEdge`).
+        // Metrics no longer in the layout still prune (cheap — descriptor keys only, no data
+        // resolution), so re-adding one starts fresh instead of firing on stale state.
+        guard toggles.underTenPercent || toggles.healthyToClose || toggles.closeToRunningOut else {
+            let presentKeys = Set(
+                orderedDescriptors()
+                    .filter { isProviderEnabled($0.providerID) }
+                    .map { "\($0.providerID).\($0.id)" }
+            )
+            notificationEvaluator.prune(keeping: presentKeys)
+            return
+        }
         // Gather this pass's enabled, bounded, visible metrics — unbounded rows and charts have no pace
         // story (their meterState never fires), so they're skipped here rather than occupying state.
         // Order is the layout order; the evaluator prunes state for anything not passed this pass.
@@ -283,7 +315,7 @@ final class WidgetDataStore {
             AppLog.debug(.refresh, "cache hit \(providerID)")
             if localSnapshots[providerID] != cached {
                 localSnapshots[providerID] = cached
-                rebuildRenderedSnapshots()
+                requestSnapshotRebuild()
             }
             return .cacheHit
         }
@@ -358,8 +390,12 @@ final class WidgetDataStore {
         localSnapshots[providerID] = snapshot
         // Stamp the write with the card's launch-resolved account identity; nil (no stamp) for
         // non-account providers and for cards whose identity didn't resolve this launch.
-        cache.store(snapshot, producedByIdentityKey: providerIdentityKeys[providerID])
-        rebuildRenderedSnapshots()
+        cache.store(
+            snapshot,
+            producedByIdentityKey: providerIdentityKeys[providerID],
+            persist: snapshotRebuildDeferrals == 0
+        )
+        requestSnapshotRebuild()
         if notifyStateChange { onLocalStateChanged?() }
         AppLog.info(.refresh, "\(providerID) ok (\(durationMs)ms)")
         return .refreshed
@@ -456,6 +492,36 @@ final class WidgetDataStore {
             providerErrors: errors,
             providerNames: names.isEmpty ? nil : names
         )
+    }
+
+    /// Rebuild now, unless a batch pass is in flight — then via a short debounce so a burst of
+    /// provider completions costs one rebuild while a fast provider still publishes promptly
+    /// instead of waiting out the batch's slowest card. Only the refresh paths route through this;
+    /// user-driven changes (enablement, peer documents) rebuild immediately.
+    private func requestSnapshotRebuild() {
+        guard snapshotRebuildDeferrals > 0 else {
+            rebuildRenderedSnapshots()
+            return
+        }
+        pendingSnapshotRebuild = true
+        guard coalescedRebuildTask == nil else { return }
+        coalescedRebuildTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, !Task.isCancelled else { return }
+            self.coalescedRebuildTask = nil
+            self.flushPendingSnapshotWork()
+        }
+    }
+
+    /// Publish pending refresh results now: one rendered rebuild plus one cache persist. Runs from
+    /// the mid-batch debounce, the batch end, and app termination — a quit mid-batch must not drop
+    /// completed providers' snapshots on the floor.
+    func flushPendingSnapshotWork() {
+        if pendingSnapshotRebuild {
+            pendingSnapshotRebuild = false
+            rebuildRenderedSnapshots()
+        }
+        cache.persistPending()
     }
 
     private func rebuildRenderedSnapshots() {

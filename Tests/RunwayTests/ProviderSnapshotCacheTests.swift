@@ -35,6 +35,25 @@ final class ProviderSnapshotCacheTests: XCTestCase {
                        .progress(label: "Session", used: 20, limit: 100, format: .percent))
     }
 
+    func testDeferredStorePersistsOnlyOnPersistPending() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date()
+        let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "k", ttl: 9_999, now: { now })
+
+        cache.store(snapshot("alpha", used: 10, now: now), persist: false)
+        cache.store(snapshot("beta", used: 20, now: now), persist: false)
+
+        // The mirror reflects both writes immediately; disk gets nothing until the batch-end flush.
+        XCTAssertEqual(cache.loadSnapshots(providerIDs: ["alpha", "beta"]).count, 2)
+        let beforeFlush = ProviderSnapshotCache(userDefaults: defaults, storageKey: "k", ttl: 9_999, now: { now })
+        XCTAssertTrue(beforeFlush.loadSnapshots(providerIDs: ["alpha", "beta"]).isEmpty)
+
+        cache.persistPending()
+        let afterFlush = ProviderSnapshotCache(userDefaults: defaults, storageKey: "k", ttl: 9_999, now: { now })
+        XCTAssertEqual(afterFlush.loadSnapshots(providerIDs: ["alpha", "beta"]).count, 2)
+    }
+
     func testWritesPersistForAFreshInstance() {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

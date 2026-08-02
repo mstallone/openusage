@@ -19,6 +19,12 @@ struct WidgetRegistry: Sendable {
     /// (a stable `filter` walk), so `descriptors(for:)` returns the exact sequence the UI metric order
     /// depends on.
     private let descriptorsByProvider: [String: [WidgetDescriptor]]
+    /// Limit-carrying descriptors per provider, precomputed like the other lookup maps — this is
+    /// read per provider refresh and on every local HTTP API request.
+    let limitDescriptorsByProvider: [String: [WidgetDescriptor]]
+    /// Each provider's usage-history descriptor, precomputed for the same reason — the snapshot
+    /// rebuild path reads it once per merged provider per pass.
+    let historyDescriptorsByProvider: [String: UsageHistoryDescriptor]
 
     init(providers: [Provider], descriptors: [WidgetDescriptor]) {
         self.providers = providers
@@ -36,6 +42,12 @@ struct WidgetRegistry: Sendable {
             byProvider[descriptor.providerID, default: []].append(descriptor)
         }
         self.descriptorsByProvider = byProvider
+        self.limitDescriptorsByProvider = byProvider.mapValues { list in
+            list.filter { !$0.limitResources.isEmpty }
+        }
+        self.historyDescriptorsByProvider = byProvider.compactMapValues { list in
+            list.compactMap(\.historyResource).first
+        }
     }
 
     func descriptor(id: String) -> WidgetDescriptor? { descriptorsByID[id] }
@@ -85,16 +97,6 @@ struct WidgetRegistry: Sendable {
             }
         }
         return result
-    }
-
-    var limitDescriptorsByProvider: [String: [WidgetDescriptor]] {
-        descriptorsByProvider.mapValues { $0.filter { !$0.limitResources.isEmpty } }
-    }
-
-    var historyDescriptorsByProvider: [String: UsageHistoryDescriptor] {
-        descriptorsByProvider.compactMapValues { descriptors in
-            descriptors.compactMap(\.historyResource).first
-        }
     }
 
     @MainActor
