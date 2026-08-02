@@ -1,6 +1,6 @@
 # Settings
 
-Settings opens in its own window — separate from the popover, so the dashboard stays a quick glance and Settings gets room to breathe. Open it from the popover footer's **gear** menu, with ⌘, while the popover is showing, or by right-clicking the menu bar icon and choosing Settings. Opening Settings closes the popover; close the window with the red close button, Esc, or ⌘W.
+Settings opens in its own window — separate from the popover, so the dashboard stays a quick glance and Settings gets room to breathe. Open it from the popover footer's **gear** menu, with ⌘, while the popover is showing, or by right-clicking the menu bar icon and choosing Settings. Opening Settings closes the popover; close the window with the red close button, Esc, ⌘W, or ⌘Q. ⌘Q closes only the Settings window — Runway keeps running in the menu bar (quit it from the popover's power button or the menu bar icon's right-click menu).
 
 The window is organized into four tabs — **General**, **Appearance**, **Notifications**, and **Advanced** — using the classic macOS preferences toolbar. It remembers the tab you were on, its size, and its position, and it only exists while it's open: a closed Settings window uses no memory or CPU at all, and reopening it is instant.
 

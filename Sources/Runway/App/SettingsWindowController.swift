@@ -15,10 +15,24 @@ public enum SettingsWindowLink {
     }
 }
 
-/// The Settings window: a plain titled window that also closes on Esc and ⌘W. As a menu-bar
+/// The Settings window: a plain titled window that also closes on Esc, ⌘W, and ⌘Q. As a menu-bar
 /// accessory app Runway has no visible main menu to route ⌘W through, so the window handles the
 /// keystroke itself when it bubbles up the responder chain unclaimed.
 final class SettingsWindow: NSWindow {
+    /// While this window is up the app is promoted to `.regular`, so the app menu's Quit item
+    /// (⌘Q) is live and would take down the whole menu-bar app. Key equivalents are offered to
+    /// the key window before the main menu, so claim ⌘Q here and close just this window — quitting
+    /// Runway stays on the popover's power button (⌘Q there) and the status item's context menu.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers == "q",
+           !ShortcutRecorderField.isRecordingActive {
+            close()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         // Esc belongs to the shortcut recorder while it's capturing a combo (cancel), and to a live
         // text field (end editing) — same carve-outs as the popover's key monitor.
