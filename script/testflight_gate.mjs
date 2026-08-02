@@ -5,10 +5,11 @@
 // Mac-only releases therefore skip the upload. Ships when ANY of:
 //   - FORCE_IOS=1 (the workflow_dispatch override),
 //   - there is no previous stable release tag (first release),
-//   - iOS-relevant paths changed since the last build TestFlight actually received — the newest
-//     VALID build's version names its tag; a failed upload never moves that baseline, so its
-//     changes cannot be stranded by a later Mac-only tag,
-//   - the newest valid TestFlight upload is older than TESTFLIGHT_MAX_BUILD_AGE_DAYS (default
+//   - iOS-relevant paths changed since the newest valid build distributed to every external
+//     TestFlight group — that build's version names its tag; a failed upload or failed external
+//     distribution never moves the baseline, so changes cannot be stranded by a later Mac-only
+//     tag,
+//   - that externally distributed build is older than TESTFLIGHT_MAX_BUILD_AGE_DAYS (default
 //     60). TestFlight builds expire 90 days after upload, so an unchanged app must still re-ship
 //     periodically or testers' installs go dark; 60 leaves a 30-day margin.
 // Writes `ship=true|false` to $GITHUB_OUTPUT and always logs the reason. Any git or App Store
@@ -17,11 +18,13 @@
 // Required env:
 //   RELEASE_TAG          the tag being released, e.g. v0.8.6
 //   APPLE_NOTARY_KEY_PATH / APPLE_NOTARY_KEY_ID / APPLE_NOTARY_ISSUER_ID
-//                        App Store Connect API key, used only to read the newest upload's date
-//                        (and only when the change check alone would skip)
+//                        App Store Connect API key, used only to read what the external groups
+//                        last received (and only when the change check alone would skip)
 // Optional env:
 //   FORCE_IOS=1                     ship regardless of the delta
 //   RUNWAY_IOS_BUNDLE_ID            defaults to com.mattstallone.runway.mobile
+//   TESTFLIGHT_EXTERNAL_GROUPS      comma-separated external group names (default "External";
+//                                   the workflow passes the same value the distribute job uses)
 //   TESTFLIGHT_MAX_BUILD_AGE_DAYS   staleness backstop threshold (default 60)
 
 import { appendFileSync } from "node:fs";
@@ -101,9 +104,13 @@ if (sincePrevious.length) {
 }
 
 // No changes since the previous tag — but that only proves freshness if the previous tag's iOS
-// build actually reached TestFlight. Ask App Store Connect what testers really have. Only VALID
-// builds count: an upload that failed processing (or is still processing) never reached anyone,
-// so it must neither serve as the diff baseline nor vouch for the expiry backstop.
+// build actually reached testers. Ask App Store Connect what EXTERNAL testers really have.
+// Processing VALID alone is not enough: the external-group attach happens later, in the
+// distribute job, and can fail independently — a build only counts once it is in every
+// configured external group. (Beta App Review APPROVAL is deliberately not required: it is
+// asynchronous and pending for up to a day after every ship, and requiring it would re-ship
+// byte-identical builds — the exact overhead this gate removes. A review rejection is
+// owner-visible in App Store Connect.)
 const api = createClient({
   keyPath: env("APPLE_NOTARY_KEY_PATH"),
   keyId: env("APPLE_NOTARY_KEY_ID"),
@@ -117,38 +124,62 @@ if (!app) {
   fail(`No App Store Connect app record for ${BUNDLE_ID} — create it first (docs/releasing.md "Release setup").`);
 }
 
-const builds = await api(
-  "GET",
-  `/v1/builds?filter[app]=${app.id}&filter[processingState]=VALID` +
-    `&sort=-uploadedDate&limit=1&include=preReleaseVersion`,
-);
-if (builds.status !== 200) fail("Could not query builds.", builds);
-const newest = builds.json.data?.[0];
-if (!newest) decide(true, "no processed TestFlight build has ever been uploaded.");
+const groupNames = (process.env.TESTFLIGHT_EXTERNAL_GROUPS || "External")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Newest valid build per external group; a partially distributed release leaves one group
+// behind, so the OLDEST of those per-group newest builds is what every external tester is
+// guaranteed to have — the baseline for both the diff and the expiry backstop.
+let baseline;
+for (const name of groupNames) {
+  const res = await api(
+    "GET",
+    `/v1/betaGroups?filter[app]=${app.id}&filter[name]=${encodeURIComponent(name)}`,
+  );
+  if (res.status !== 200) fail("Could not query TestFlight groups.", res);
+  const group = res.json.data?.find((g) => g.attributes.name === name);
+  if (!group) decide(true, `external TestFlight group "${name}" does not exist yet.`);
+  const builds = await api(
+    "GET",
+    `/v1/builds?filter[app]=${app.id}&filter[betaGroups]=${group.id}` +
+      `&filter[processingState]=VALID&sort=-uploadedDate&limit=1&include=preReleaseVersion`,
+  );
+  if (builds.status !== 200) fail("Could not query builds.", builds);
+  const newest = builds.json.data?.[0];
+  if (!newest) decide(true, `no processed build has ever been distributed to external group "${name}".`);
+  const preId = newest.relationships?.preReleaseVersion?.data?.id;
+  const version = builds.json.included?.find(
+    (i) => i.type === "preReleaseVersions" && i.id === preId,
+  )?.attributes?.version;
+  if (!version) fail(`Could not read the marketing version of group "${name}"'s newest build.`, builds);
+  const uploadedAt = Date.parse(newest.attributes.uploadedDate);
+  if (!Number.isFinite(uploadedAt)) {
+    fail(`Could not read the uploadedDate of group "${name}"'s newest build.`, builds);
+  }
+  if (!baseline || uploadedAt < baseline.uploadedAt) {
+    baseline = { version, uploadedAt, buildNumber: newest.attributes.version };
+  }
+}
 
 // The build's marketing version names the tag it was built from (the version IS the tag). When
-// that is not the previous tag, an earlier release's iOS job failed or was skipped after a
-// failure — diff against what testers actually have so those changes cannot be stranded.
-const preId = newest.relationships?.preReleaseVersion?.data?.id;
-const shippedVersion = builds.json.included?.find(
-  (i) => i.type === "preReleaseVersions" && i.id === preId,
-)?.attributes?.version;
-if (!shippedVersion) fail("Could not read the newest valid build's marketing version.", builds);
-const shippedTag = `v${shippedVersion}`;
+// that is not the previous tag, an earlier release's iOS upload or distribution failed — diff
+// against what testers actually have so those changes cannot be stranded.
+const shippedTag = `v${baseline.version}`;
 if (shippedTag !== previous) {
   if (!STABLE_TAG.test(shippedTag) || !git("tag", "--list", shippedTag)) {
-    decide(true, `newest valid TestFlight build is ${shippedVersion}, which matches no local release tag — shipping to be safe.`);
+    decide(true, `newest externally distributed build is ${baseline.version}, which matches no local release tag — shipping to be safe.`);
   }
   const sinceShipped = diffAgainst(shippedTag);
   if (sinceShipped.length) {
-    decide(true, `iOS-relevant changes since the last shipped build (${shippedTag}):\n  ${sinceShipped.join("\n  ")}`);
+    decide(true, `iOS-relevant changes since the last externally shipped build (${shippedTag}):\n  ${sinceShipped.join("\n  ")}`);
   }
 }
 
-const ageDays = (Date.now() - Date.parse(newest.attributes.uploadedDate)) / 86_400_000;
-if (!Number.isFinite(ageDays)) fail("Could not read the newest valid build's uploadedDate.", builds);
-const age = `build ${newest.attributes.version} of ${shippedVersion} uploaded ${Math.floor(ageDays)} days ago`;
+const ageDays = (Date.now() - baseline.uploadedAt) / 86_400_000;
+const age = `build ${baseline.buildNumber} of ${baseline.version} uploaded ${Math.floor(ageDays)} days ago`;
 if (ageDays > MAX_AGE_DAYS) {
-  decide(true, `newest valid TestFlight upload is stale (${age}; limit ${MAX_AGE_DAYS}, expiry 90).`);
+  decide(true, `newest externally distributed build is stale (${age}; limit ${MAX_AGE_DAYS}, expiry 90).`);
 }
-decide(false, `no iOS-relevant changes since the last shipped build (${shippedTag}) and it is fresh (${age}).`);
+decide(false, `no iOS-relevant changes since the last externally shipped build (${shippedTag}) and it is fresh (${age}).`);

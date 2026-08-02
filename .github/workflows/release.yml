@@ -24,6 +24,13 @@ on:
 permissions:
   contents: read
 
+# Comma-separated external TestFlight group names every release ships to. The groups must
+# already exist under TestFlight → External Testing (one-time setup in the README). Defined once
+# here because two jobs must agree on it: distribute adds each build to these groups, and the
+# iOS gate treats membership in them as "shipped" when deciding whether a tag needs iOS at all.
+env:
+  TESTFLIGHT_EXTERNAL_GROUPS: External
+
 jobs:
   release:
     runs-on: macos-26
@@ -486,10 +493,6 @@ jobs:
     environment:
       name: iOS TestFlight
       url: https://testflight.apple.com/join/uA4aHUEx
-    env:
-      # Comma-separated external TestFlight group names every release ships to. The groups must
-      # already exist under TestFlight → External Testing (one-time setup in the README).
-      TESTFLIGHT_EXTERNAL_GROUPS: External
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
