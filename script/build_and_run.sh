@@ -16,6 +16,9 @@ set -euo pipefail
 #        CONFIG             "release" (default) or "debug"
 #        ICLOUD_PROVISIONING_PROFILE  optional override for the development provisioning profile;
 #                         otherwise the newest matching installed profile is selected automatically
+#        KEEP_PROVIDER_HOMES  set to 1 to launch with the shell's CLAUDE_CONFIG_DIR / CODEX_HOME
+#                         overrides intact (they are stripped by default so an agent session's
+#                         sandboxed homes don't leak into the dev app)
 
 MODE="${1:-run}"
 CONFIG="${CONFIG:-release}"
@@ -242,7 +245,25 @@ else
 fi
 
 launch_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  # open(1) forwards this shell's environment to the launched app. Drop the per-session agent
+  # overrides (Claude Code exports CLAUDE_CONFIG_DIR, Codex exports CODEX_HOME) so the dev app
+  # scans the user's real ~/.claude and ~/.codex homes instead of the agent's sandboxed ones.
+  # KEEP_PROVIDER_HOMES=1 keeps them, for deliberate custom-home / multi-account testing.
+  if [ "${KEEP_PROVIDER_HOMES:-0}" = "1" ]; then
+    /usr/bin/open -n "$APP_BUNDLE"
+    return
+  fi
+  # The app pins these identity keys to a persisted login-shell snapshot (runway.shellEnvSnapshot.v1)
+  # whenever the process environment lacks them, and the snapshot's capture subprocess inherits the
+  # app's environment — so a past launch from an agent shell left the agent homes pinned there, and
+  # unsetting the variables alone would still scan them for one more full session. Drop the snapshot
+  # so this launch re-captures fresh facts from the login shell. A missing key is fine (first run /
+  # already clean); a failed delete of an existing key aborts via set -e rather than launching with
+  # the stale snapshot still pinned.
+  if /usr/bin/defaults read "$BUNDLE_ID" runway.shellEnvSnapshot.v1 >/dev/null 2>&1; then
+    /usr/bin/defaults delete "$BUNDLE_ID" runway.shellEnvSnapshot.v1
+  fi
+  env -u CLAUDE_CONFIG_DIR -u CODEX_HOME /usr/bin/open -n "$APP_BUNDLE"
 }
 
 case "$MODE" in
