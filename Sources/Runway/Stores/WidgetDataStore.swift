@@ -93,6 +93,10 @@ final class WidgetDataStore {
     /// produces one write.
     @ObservationIgnored var onLocalStateChanged: (@MainActor () -> Void)?
     @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
+    /// Non-zero while `refreshAll` is coalescing per-provider completion work into one batch-end
+    /// rebuild + cache persist. Plain counters — everything here is MainActor-serialized.
+    @ObservationIgnored private var snapshotRebuildDeferrals = 0
+    @ObservationIgnored private var pendingSnapshotRebuild = false
     /// Accounts synced from other Macs that have NO card here: surfaced in Total Spend only (their
     /// synthesized snapshots carry the usual Today/Yesterday/Last 30 Days lines), never as cards.
     private(set) var remoteOnlySpend: [(provider: Provider, snapshot: ProviderSnapshot)] = []
@@ -190,6 +194,10 @@ final class WidgetDataStore {
         let providerIDs = registry.providers.map(\.id).filter { isProviderEnabled($0) }
         let start = monotonicNow()
         AppLog.info(.refresh, "batch start (\(providerIDs.count) providers, force=\(force))")
+        // Coalesce per-provider completion work: with N providers finishing in one pass, rebuilding
+        // the rendered union and re-encoding the snapshot blob once per provider is O(N²) — defer
+        // both to a single batch-end rebuild + persist.
+        snapshotRebuildDeferrals += 1
         let tasks = providerIDs.map { providerID in
             Task { await self.refresh(providerID: providerID, force: force, notifyStateChange: false) }
         }
@@ -198,6 +206,12 @@ final class WidgetDataStore {
         for task in tasks {
             outcomes.append(await task.value)
         }
+        snapshotRebuildDeferrals -= 1
+        if pendingSnapshotRebuild, snapshotRebuildDeferrals == 0 {
+            pendingSnapshotRebuild = false
+            rebuildRenderedSnapshots()
+        }
+        cache.persistPending()
         // Stamp the end of the pass so the footer countdown targets the next scheduled refresh
         // (this time + one refresh interval), mirroring the periodic loop that sleeps one interval
         // after each pass.
@@ -228,13 +242,18 @@ final class WidgetDataStore {
     func evaluateNotifications(now: Date = Date()) async {
         guard let settingsProvider = notificationSettings else { return }
         let toggles = settingsProvider().toggles
+        // All triggers off (the default): nothing can fire, so skip resolving and formatting every
+        // visible metric. The evaluator still runs with an empty list so its per-metric state is
+        // pruned — re-enabling a trigger then starts fresh instead of trusting stale windows.
+        let allTriggersOff = !toggles.underTenPercent && !toggles.healthyToClose
+            && !toggles.closeToRunningOut
         // Gather this pass's enabled, bounded, visible metrics — unbounded rows and charts have no pace
         // story (their meterState never fires), so they're skipped here rather than occupying state.
         // Order is the layout order; the evaluator prunes state for anything not passed this pass.
         // Deliberate delta from the pre-extraction loop: the pass decides from this snapshot, taken
         // before the first delivery `await`, where the old inline loop re-read `data(for:)` between
         // deliveries — a mid-pass refresh no longer changes later metrics' inputs within one pass.
-        let metrics = orderedDescriptors()
+        let metrics: [QuotaNotificationEvaluator.Metric] = allTriggersOff ? [] : orderedDescriptors()
             .filter { isProviderEnabled($0.providerID) }
             .compactMap { descriptor -> QuotaNotificationEvaluator.Metric? in
                 let data = data(for: descriptor)
@@ -283,7 +302,7 @@ final class WidgetDataStore {
             AppLog.debug(.refresh, "cache hit \(providerID)")
             if localSnapshots[providerID] != cached {
                 localSnapshots[providerID] = cached
-                rebuildRenderedSnapshots()
+                requestSnapshotRebuild()
             }
             return .cacheHit
         }
@@ -358,8 +377,12 @@ final class WidgetDataStore {
         localSnapshots[providerID] = snapshot
         // Stamp the write with the card's launch-resolved account identity; nil (no stamp) for
         // non-account providers and for cards whose identity didn't resolve this launch.
-        cache.store(snapshot, producedByIdentityKey: providerIdentityKeys[providerID])
-        rebuildRenderedSnapshots()
+        cache.store(
+            snapshot,
+            producedByIdentityKey: providerIdentityKeys[providerID],
+            persist: snapshotRebuildDeferrals == 0
+        )
+        requestSnapshotRebuild()
         if notifyStateChange { onLocalStateChanged?() }
         AppLog.info(.refresh, "\(providerID) ok (\(durationMs)ms)")
         return .refreshed
@@ -456,6 +479,16 @@ final class WidgetDataStore {
             providerErrors: errors,
             providerNames: names.isEmpty ? nil : names
         )
+    }
+
+    /// Rebuild now, unless a batch pass is in flight — then once at its end. Only the refresh paths
+    /// route through this; user-driven changes (enablement, peer documents) rebuild immediately.
+    private func requestSnapshotRebuild() {
+        if snapshotRebuildDeferrals > 0 {
+            pendingSnapshotRebuild = true
+        } else {
+            rebuildRenderedSnapshots()
+        }
     }
 
     private func rebuildRenderedSnapshots() {
