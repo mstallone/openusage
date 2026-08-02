@@ -12,8 +12,8 @@ import SwiftUI
 /// content underlaps the footer with the native soft scroll-edge fade (`softBottomScrollEdge` →
 /// `.scrollEdgeEffectStyle(.soft)`, macOS 26+) — Apple's blurred boundary, not a custom gradient or a
 /// material bar. On macOS 15 the footer/top bar still pin via `safeAreaInset`, just without the blur
-/// (content scrolls flush). The panel **auto-fits its content**: each screen publishes its intrinsic
-/// height (`ScrollContentHeightKey` + the fixed chrome heights), and the visual panel — a height-framed,
+/// (content scrolls flush). The panel **auto-fits its content**: each screen reports its intrinsic
+/// height (`PopoverScrollView` → `PanelHeightCoordinator`, plus the fixed chrome heights), and the visual panel — a height-framed,
 /// corner-clipped card pinned to the top of a fixed-size transparent window (see
 /// `PanelHeightController`) — animates to that on SwiftUI's clock, with the AppKit backdrop following
 /// via `drivesPanelHeight` / `PanelHeightModifier`. The destination is the only live screen tree
@@ -60,8 +60,11 @@ struct DashboardView: View {
     /// behind the caret misses the cache and re-learns instead of retargeting by a stale height.
     @State private var expansionDeltas: [String: CGFloat] = [:]
     /// The composition key whose caret toggle is awaiting its measurement, with the pre-toggle target
-    /// the actual delta is derived from. Cleared when the next dashboard measurement lands.
+    /// the actual delta is derived from. Cleared when the dashboard measurement settles.
     @State private var pendingExpansion: (cacheKey: String, fromTarget: CGFloat)?
+    /// Debounce for measurement-driven re-targets: armed on every `measuredIdeal` change while the
+    /// popover is shown, fired ~2 quiet frames after the last one (see the `onChange` below).
+    @State private var measurementSettleTask: Task<Void, Never>?
     /// Drives the macOS-native confirmation sheet for the Customize "reset all" button. The alert
     /// attaches to this panel as a sheet (see `StatusItemController`'s attached-sheet guard), so a
     /// click on its buttons can't be misread as an outside click that dismisses the popover.
@@ -237,18 +240,15 @@ struct DashboardView: View {
                 }
             }
             // In-screen growth/shrink (a provider card expands, the footer notice appears, a refresh
-            // loads rows): re-target the height on the same spring. Establishment is allowed even mid-
-            // slide (a measurement that lands during a switch must seed the height — there's nothing to
-            // fight yet); the animated *re-target* defers to the switch path while a slide is in flight.
+            // loads rows): re-target the height on the same spring — but only once the measurement
+            // SETTLES. Content re-measures on every frame of an unfold morph (the rows' interpolated
+            // heights land here one by one), and re-targeting per measurement thrashed the spring —
+            // dozens of overlapping retargets per caret toggle, measured as the popover's worst
+            // stall source — and made the delta learning below record partial mid-animation heights.
+            // Establishment and the hidden-close walk stay immediate; only the animated re-target
+            // (and the learning) waits for ~2 quiet frames.
             .onChange(of: heightCoordinator.measuredIdeal[layout.screen]) { _, _ in
                 guard let target = heightCoordinator.target(for: layout.screen) else { return }
-                // A caret toggle's measurement just landed: learn the provider's exact expanded-section
-                // height so the NEXT toggle co-animates with zero correction.
-                if let pending = pendingExpansion, layout.screen == .dashboard,
-                   let ideal = heightCoordinator.measuredIdeal[.dashboard] {
-                    expansionDeltas[pending.cacheKey] = abs(ideal - pending.fromTarget)
-                    pendingExpansion = nil
-                }
                 if !didEstablishHeight {
                     didEstablishHeight = true
                     animatedHeight = target
@@ -256,9 +256,15 @@ struct DashboardView: View {
                     // Hidden — this is the close-time settle's collapsed re-measure landing. Walk
                     // the retained height directly: springing a hidden panel just burns frames
                     // off-screen, and the next open expects the value to already be at rest.
+                    measurementSettleTask?.cancel()
                     if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
-                } else if !isSliding, abs(target - animatedHeight) > 1 {
-                    withAnimation(Motion.spring) { animatedHeight = target }
+                } else {
+                    measurementSettleTask?.cancel()
+                    measurementSettleTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(120))
+                        guard !Task.isCancelled else { return }
+                        applySettledMeasurement()
+                    }
                 }
             }
             // Watches for the secret transparency code while the panel is key and toggles the egg. A
@@ -317,6 +323,24 @@ struct DashboardView: View {
         let rows = CGFloat(group.expandedWidgets.count) * DensitySetting.compact.estimatedMetricRowHeight
         let links: CGFloat = group.provider.visibleLinks.isEmpty ? 0 : 40
         return rows + links
+    }
+
+    /// The debounced tail of the measurement `onChange`: runs once the screen's content measurement
+    /// has gone quiet, learns a pending caret toggle's exact expanded-section height from the settled
+    /// value, and issues at most ONE spring re-target for the whole morph.
+    private func applySettledMeasurement() {
+        guard let target = heightCoordinator.target(for: layout.screen) else { return }
+        // A caret toggle's measurement just settled: learn the provider's exact expanded-section
+        // height so the NEXT toggle co-animates with zero correction.
+        if let pending = pendingExpansion, layout.screen == .dashboard,
+           let ideal = heightCoordinator.measuredIdeal[.dashboard] {
+            expansionDeltas[pending.cacheKey] = abs(ideal - pending.fromTarget)
+            pendingExpansion = nil
+        }
+        // Mid-slide the switch path's completion owns the target; deferring here matches the old
+        // per-measurement guard.
+        guard !isSliding, abs(target - animatedHeight) > 1 else { return }
+        withAnimation(Motion.spring) { animatedHeight = target }
     }
 
     private func resetTransientState() {
@@ -389,11 +413,9 @@ struct DashboardView: View {
     private func screenView(_ screen: PopoverScreen) -> some View {
         scrollBody(for: screen)
             .offset(x: screenEntranceOffset)
-            // Auto-fit: the scroll content publishes its intrinsic height (invariant to the viewport),
-            // which we sum with the chrome into this screen's ideal window height.
-            .onPreferenceChange(ScrollContentHeightKey.self) { height in
-                heightCoordinator.setScrollContent(height, for: screen)
-            }
+            // Auto-fit: the scroll content reports its intrinsic height (invariant to the viewport)
+            // straight into `heightCoordinator`, which sums it with the chrome into this screen's
+            // ideal window height — see `PopoverScrollView` for why it's not a preference.
             .softTopScrollEdge()
             .softBottomScrollEdge()
             .pinnedTopBar(spacing: 0) {
@@ -436,6 +458,7 @@ struct DashboardView: View {
                 container: container,
                 layout: layout,
                 updater: updater,
+                heightCoordinator: heightCoordinator,
                 reorderSpaceName: Self.reorderSpace,
                 horizontalPadding: Self.outerPadding,
                 bottomGap: Self.contentBottomGap,
@@ -444,6 +467,7 @@ struct DashboardView: View {
             )
         case .customize:
             CustomizeView(
+                heightCoordinator: heightCoordinator,
                 reorderSpaceName: Self.reorderSpace,
                 reorderLift: $reorderLift
             )

@@ -35,7 +35,6 @@ struct WidgetGroupedListView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onPreferenceChange(ReorderFramePreferenceKey.self) { [rowFrames] in rowFrames.frames = $0 }
         .animation(Motion.spring, value: groups.map(\.provider.id))
         .alert("Rename Card", isPresented: isRenamePresented) {
             TextField("Name", text: $renameDraft)
@@ -64,7 +63,7 @@ struct WidgetGroupedListView: View {
             container(group)
         }
         .opacity(activeProviderID == group.provider.id ? 0 : 1)
-        .reorderFrame(id: group.provider.id, in: .named(reorderSpaceName))
+        .reorderFrame(id: group.provider.id, in: .named(reorderSpaceName), store: rowFrames)
     }
 
     private func header(_ group: ProviderGroup) -> some View {
@@ -311,7 +310,7 @@ struct WidgetGroupedListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .reorderFrame(id: expandedDividerID(for: providerID), in: .named(reorderSpaceName))
+        .reorderFrame(id: expandedDividerID(for: providerID), in: .named(reorderSpaceName), store: rowFrames)
         .accessibilityLabel(isExpanded ? "Show less" : "Show more")
     }
 
@@ -352,7 +351,7 @@ struct WidgetGroupedListView: View {
             .opacity(isActive ? 0 : 1)
             .highPriorityGesture(metricDragGesture(for: descriptor, providerID: providerID))
             .contextMenu { rowMenu(descriptor, providerID: providerID) }
-            .reorderFrame(id: descriptor.id, in: .named(reorderSpaceName))
+            .reorderFrame(id: descriptor.id, in: .named(reorderSpaceName), store: rowFrames)
     }
 
     /// Desktop-native management for a single metric: hide it, pin/unpin it, refresh its provider, or jump

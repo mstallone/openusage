@@ -6,6 +6,8 @@ struct DashboardContentView: View {
     let container: AppContainer
     let layout: LayoutStore
     let updater: UpdaterController
+    /// The auto-fit height sink this screen's scroll content reports into (owned by `DashboardView`).
+    let heightCoordinator: PanelHeightCoordinator
     let reorderSpaceName: String
     let horizontalPadding: CGFloat
     let bottomGap: CGFloat
@@ -18,7 +20,7 @@ struct DashboardContentView: View {
 
     var body: some View {
         let displayGroups = layout.displayGroups(matching: container.dataStore.isMetricApplicable)
-        PopoverScrollView {
+        PopoverScrollView(heightCoordinator: heightCoordinator, screen: .dashboard) {
             VStack(alignment: .leading, spacing: 0) {
                 // A pending update found by a scheduled Sparkle check tops everything — it's the
                 // reminder the buried Sparkle window can't deliver for a dockless app.
