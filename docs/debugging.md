@@ -95,6 +95,10 @@ The `RUNWAY_UI_PROFILE` gate is inert in normal use — no timing code runs with
 watchdog measures how long async main-actor work waits (main-queue latency), which is a proxy for
 responsiveness, not a literal dropped-frame count.
 
+The script's "cold open" measures the shipped first-click experience, which includes the launch
+pre-warm (it runs at +2s, before the driver's first open at +6s). To measure the true cold path —
+no pre-warm at all — launch with `RUNWAY_UI_PROFILE_COLD=1` as well.
+
 ## Tips
 
 - **A provider shows an error.** Reproduce with `logs` running, then check that provider's page in
