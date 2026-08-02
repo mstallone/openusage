@@ -51,6 +51,13 @@ enum JSONLParseOutcome<Item: Codable & Sendable>: Sendable {
 enum JSONLTailIO {
     /// How many trailing parsed bytes the resume fingerprint covers. Appends leave this window
     /// intact; an in-place rewrite almost always disturbs it and falls back to a full parse.
+    ///
+    /// Deliberately a bounded trailing window, not a whole-prefix checksum: verifying the full
+    /// prefix would require re-reading it, which is the exact cost tail resumes exist to avoid.
+    /// The threat model is append-only session logs — a tool that rewrites one wholesale changes
+    /// the size, mtime, or trailing bytes and is caught; a targeted in-place edit that preserves
+    /// the file's length, its final 4 KB, and grows it in the same pass is outside that model and
+    /// would go unnoticed until the next full parse.
     static let fingerprintWindow = 4096
 
     /// FNV-1a as a stable across-launch fingerprint (same construction as
