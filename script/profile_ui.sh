@@ -26,9 +26,11 @@ sleep 1
 
 # Start the run on a fresh log file: a Runway.log near its 10 MB rotation cap could rotate the
 # marker (or the run itself) into Runway.1.log mid-run, and the polls below only read the active
-# file. The app is down at this point, so the move is safe; the prior log stays inspectable.
+# file. The app is down at this point, so the move is safe; every prior log stays inspectable
+# under its own timestamped name (a fixed name would erase the previous run's diagnostics in the
+# very before/after workflow this script exists for).
 mkdir -p "$(dirname "$LOG")"
-[ -f "$LOG" ] && mv -f "$LOG" "$LOG.pre-profile"
+[ -f "$LOG" ] && mv "$LOG" "$LOG.pre-profile.$(date +%Y%m%d-%H%M%S)"
 
 # Marker so the stats only cover this run.
 START_MARKER="profile_ui.sh run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -38,6 +40,9 @@ echo "$(date -u +%Y-%m-%dT%H:%M:%S.000Z) [INFO] [uiprofile] $START_MARKER" >> "$
 # resolution); `open` can't pass env vars, so exec the binary directly.
 env -u CLAUDE_CONFIG_DIR RUNWAY_UI_PROFILE=1 "$APP_BINARY" >/dev/null 2>&1 &
 APP_PID=$!
+# The profiled app must not outlive the script (it runs with the log-floor override and the stall
+# watchdog): kill it on ANY exit — poll timeout, a failed command under `set -e`, or Ctrl-C.
+trap 'kill "$APP_PID" 2>/dev/null || true' EXIT INT TERM
 echo "==> Runway (pid $APP_PID) profiling; the script takes ~2 minutes"
 
 for _ in $(seq 1 240); do
@@ -52,11 +57,21 @@ RUN_LOG="$(mktemp -t runway_ui_profile)"
 grep -a -A100000 "$START_MARKER" "$LOG" | grep -a uiprofile > "$RUN_LOG"
 
 echo
-echo "== Open path (ms) =="
-grep -a -E "open\.(layoutSubtree|orderFront|syncTotal|toFirstFrame)" "$RUN_LOG" \
-    | sed -E 's/.*uiprofile\] //; s/ms$//' \
-    | awk -F': ' '{sum[$1]+=$2; n[$1]++; if($2+0>max[$1])max[$1]=$2}
-        END {for(k in sum) printf "%-24s avg %6.1f  max %6.1f  n=%d\n", k, sum[k]/n[k], max[k], n[k]}' \
+echo "== Open path (ms), by phase =="
+# Segmented by the driver's phase markers so the cold open, the warm cycles, and the extra open at
+# the start of the screen-switch phase never mix into one misleading average: the documented
+# warm-open number is the warm-cycles aggregate alone.
+sed -E 's/.*uiprofile\] //; s/ms$//' "$RUN_LOG" \
+    | awk -F': ' '
+        /^PHASE cold-open/      { phase = "cold" }
+        /^PHASE warm-cycles/    { phase = "warm" }
+        /^PHASE screen-switch/  { phase = "other" }
+        $1 ~ /^open\.(layoutSubtree|orderFront|syncTotal|toFirstFrame)$/ && phase != "" && phase != "other" {
+            key = phase "." $1
+            sum[key] += $2; n[key]++
+            if ($2 + 0 > max[key]) max[key] = $2
+        }
+        END { for (k in sum) printf "%-30s avg %6.1f  max %6.1f  n=%d\n", k, sum[k]/n[k], max[k], n[k] }' \
     | sort
 echo
 echo "== Close path (ms) =="

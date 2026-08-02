@@ -135,7 +135,24 @@ struct ReorderLiftPreview: View {
 /// layout rather than a render-time snapshot.
 @MainActor
 final class ReorderFrameStore {
-    var frames: [String: CGRect] = [:]
+    private(set) var frames: [String: CGRect] = [:]
+    /// Which modifier instance last wrote each id. A drag between Customize sections remounts the
+    /// row under the same id, and the replacement can record its geometry BEFORE the outgoing
+    /// instance's delayed `onDisappear` runs — an unconditional removal there would delete the live
+    /// entry and leave the row untargetable until its next geometry change.
+    private var owners: [String: UUID] = [:]
+
+    func record(id: String, frame: CGRect, owner: UUID) {
+        frames[id] = frame
+        owners[id] = owner
+    }
+
+    /// Removes the entry only if `owner` is still the latest writer (see `owners`).
+    func removeIfOwned(id: String, owner: UUID) {
+        guard owners[id] == owner else { return }
+        frames[id] = nil
+        owners[id] = nil
+    }
 }
 
 extension View {
@@ -156,15 +173,30 @@ extension View {
         store: ReorderFrameStore,
         yOutset: CGFloat = 0
     ) -> some View {
-        onGeometryChange(for: CGRect.self) { proxy in
-            proxy.frame(in: coordinateSpace).insetBy(dx: 0, dy: -yOutset)
-        } action: { frame in
-            store.frames[id] = frame
-        }
-        // The preference dictionary used to drop a row's entry when it unmounted; direct writes
-        // need the same hygiene or a stale frame could satisfy a later hit-test (e.g. the L2 grip
-        // scan iterates every recorded frame, not just current-row ids).
-        .onDisappear { store.frames[id] = nil }
+        modifier(ReorderFrameModifier(id: id, coordinateSpace: coordinateSpace, store: store, yOutset: yOutset))
+    }
+}
+
+private struct ReorderFrameModifier: ViewModifier {
+    let id: String
+    let coordinateSpace: CoordinateSpace
+    let store: ReorderFrameStore
+    let yOutset: CGFloat
+    /// This instance's identity for the store's ownership check — see `ReorderFrameStore.owners`.
+    @State private var token = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: coordinateSpace).insetBy(dx: 0, dy: -yOutset)
+            } action: { frame in
+                store.record(id: id, frame: frame, owner: token)
+            }
+            // The preference dictionary used to drop a row's entry when it unmounted; direct writes
+            // need the same hygiene or a stale frame could satisfy a later hit-test (e.g. the L2
+            // grip scan iterates every recorded frame, not just current-row ids). Ownership-checked
+            // so a remounted replacement's fresh entry survives this instance's late teardown.
+            .onDisappear { store.removeIfOwned(id: id, owner: token) }
     }
 }
 
