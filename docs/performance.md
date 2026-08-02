@@ -33,9 +33,10 @@ First launch on this machine's corpus (caches cold — what a new install pays o
 Both apps ran the same scripted workload on the same machine (Apple Silicon MacBook Pro,
 macOS 26.5), against the same local data, minutes apart:
 
-- **Same code lineage, fixed points.** Runway at `main` (post-#54–#59) vs OpenUsage at its `main`
-  tip (`9d2bf09`, 2026-07-19 — also the fork point), built with the same Swift toolchain in release
-  configuration, with the same measurement harness compiled into both.
+- **Same code lineage, fixed points.** Runway at `f752361` (the `main` tip after PRs #54–#59,
+  2026-08-02) vs OpenUsage at its `main` tip (`9d2bf09`, 2026-07-19 — also the fork point), built
+  with the same Swift toolchain in release configuration, with the same measurement harness
+  compiled into both.
 - **Matched content.** Both apps were configured with the identical provider set (claude, codex,
   copilot, grok, sakana plus the same two account cards), reading the same credentials and the same
   local session-log corpus (~27 GB of Codex JSONL, ~400 MB of Claude logs).
@@ -59,6 +60,8 @@ Caveats, so the numbers stay honest:
 
 ## Reproducing
 
+The UI rows (popup opens, stall totals) come straight from the built-in harness:
+
 ```
 script/profile_ui.sh
 ```
@@ -66,3 +69,17 @@ script/profile_ui.sh
 builds, drives the scripted phases, and prints the per-phase stats. See the "Profile the UI"
 section of [docs/debugging.md](debugging.md) for what each number means and for the
 `RUNWAY_UI_PROFILE_COLD=1` true-cold variant.
+
+The cross-app rows need the two-build procedure the tables came from — the harness alone measures
+only the current Runway tree:
+
+1. Check out OpenUsage at `9d2bf09` in a separate worktree, compile the same `UIProfiler` +
+   `StatusItemController` instrumentation into it, and stage both dev bundles.
+2. Match both apps' enabled-provider defaults (`runway.enabledProviders.v1` /
+   `openusage.enabledProviders.v1`) to the identical list.
+3. Launch each with `RUNWAY_UI_PROFILE=1` and sample around the run: launch latency is the delta
+   from exec to the "Status item ready" log line, CPU/RSS via `ps` at +30 s / end of run / after a
+   60 s idle window (with a poller recording peak RSS), and refresh wall time from each app's own
+   "batch end" log lines.
+4. Run each app twice: the first run measures the cold caches ("first launch" table), the second
+   the steady state.
