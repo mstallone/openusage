@@ -63,6 +63,20 @@ final class MemorySystemClientsTests: XCTestCase {
                        "the link now resolves")
     }
 
+    func testExclusiveCreateThrowsOnASymlinkCycle() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let a = directory.appendingPathComponent("a.md").path
+        let b = directory.appendingPathComponent("b.md").path
+        try FileManager.default.createSymbolicLink(atPath: a, withDestinationPath: b)
+        try FileManager.default.createSymbolicLink(atPath: b, withDestinationPath: a)
+
+        XCTAssertThrowsError(try LocalTextFileAccessor().createTextFileExclusively(a, "x")) { error in
+            XCTAssertEqual((error as? POSIXError)?.code, .ELOOP,
+                           "a cycle must fail loudly, never read as another writer winning")
+        }
+    }
+
     func testModificationDateFollowsSymlinksToTheTarget() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

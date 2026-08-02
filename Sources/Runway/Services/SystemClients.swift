@@ -215,13 +215,19 @@ struct LocalTextFileAccessor: TextFileAccessing {
         // Create. Follow the link text manually so creation lands where the link points, exactly
         // like a write-through of an intact link.
         var hops = 0
-        while hops < 4,
+        while hops < 8,
               let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: expanded) {
             expanded = destination.hasPrefix("/")
                 ? destination
                 : URL(fileURLWithPath: expanded).deletingLastPathComponent()
                     .appendingPathComponent(destination).standardized.path
             hops += 1
+        }
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: expanded)) != nil {
+            // A cycle (or an absurd chain): the exclusive rename would EEXIST against the link
+            // entry and read as "another writer won" — Create silently doing nothing forever.
+            // Fail loudly instead; the editor surfaces the error.
+            throw POSIXError(.ELOOP)
         }
         try ensureParentDirectory(for: expanded)
         let destination = URL(fileURLWithPath: expanded)
