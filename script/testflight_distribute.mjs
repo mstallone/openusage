@@ -5,8 +5,8 @@
 // every build automatically). Talks to the App Store Connect API directly.
 //
 // Node, not Swift or bash: GitHub's Linux runners (where this runs — no Xcode needed) preinstall
-// Node but no Swift toolchain, and Node's crypto mints the ES256 JWT the API requires without any
-// third-party dependency.
+// Node but no Swift toolchain, and the shared client in lib/appstore_connect.mjs mints the ES256
+// JWT the API requires without any third-party dependency.
 //
 // Required env:
 //   RUNWAY_VERSION       marketing version of the uploaded build, e.g. 0.7.1
@@ -18,8 +18,7 @@
 //   RUNWAY_IOS_BUNDLE_ID        defaults to com.mattstallone.runway.mobile
 //   PROCESSING_TIMEOUT_MINUTES  how long to wait for Apple's build processing (default 60)
 
-import { readFileSync } from "node:fs";
-import { createPrivateKey, sign } from "node:crypto";
+import { createClient } from "./lib/appstore_connect.mjs";
 
 const env = (name) => {
   const v = process.env[name];
@@ -32,36 +31,15 @@ const env = (name) => {
 
 const VERSION = env("RUNWAY_VERSION");
 const BUILD = env("RUNWAY_BUILD");
-const KEY_ID = env("APPLE_NOTARY_KEY_ID");
-const ISSUER_ID = env("APPLE_NOTARY_ISSUER_ID");
 const GROUPS = env("TESTFLIGHT_EXTERNAL_GROUPS").split(",").map((s) => s.trim()).filter(Boolean);
 const BUNDLE_ID = process.env.RUNWAY_IOS_BUNDLE_ID || "com.mattstallone.runway.mobile";
 const TIMEOUT_MINUTES = Number(process.env.PROCESSING_TIMEOUT_MINUTES || 60);
 
-const privateKey = createPrivateKey(readFileSync(env("APPLE_NOTARY_KEY_PATH"), "utf8"));
-const b64url = (data) => Buffer.from(data).toString("base64url");
-
-// The processing wait can outlast a token's 10-minute lifetime, so mint one per request.
-const token = () => {
-  const now = Math.floor(Date.now() / 1000);
-  const header = b64url(JSON.stringify({ alg: "ES256", kid: KEY_ID, typ: "JWT" }));
-  const payload = b64url(JSON.stringify({ iss: ISSUER_ID, iat: now, exp: now + 600, aud: "appstoreconnect-v1" }));
-  const signature = sign("sha256", Buffer.from(`${header}.${payload}`), {
-    key: privateKey,
-    dsaEncoding: "ieee-p1363", // JOSE wants the raw r||s signature, not DER
-  });
-  return `${header}.${payload}.${b64url(signature)}`;
-};
-
-const api = async (method, path, body) => {
-  const res = await fetch(`https://api.appstoreconnect.apple.com${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${token()}`, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  return { status: res.status, json: text ? JSON.parse(text) : null };
-};
+const api = createClient({
+  keyPath: env("APPLE_NOTARY_KEY_PATH"),
+  keyId: env("APPLE_NOTARY_KEY_ID"),
+  issuerId: env("APPLE_NOTARY_ISSUER_ID"),
+});
 
 const fail = (message, response) => {
   console.error(message);

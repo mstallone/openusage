@@ -12,6 +12,11 @@ on:
         description: "Tag to build (e.g. v0.7.0)"
         required: true
         type: string
+      force_ios:
+        description: "Ship the iOS TestFlight build even when the gate would skip it"
+        required: false
+        type: boolean
+        default: false
 
 # Least privilege by default: only the `release` job writes to GitHub (Release assets, update-feed
 # branch, workflow dispatch), and it grants itself what it needs below. The iOS jobs only talk to
@@ -293,15 +298,73 @@ jobs:
             rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
           fi
 
-  # Ships the iOS companion app to TestFlight from the same tag. Independent of the macOS job on
-  # purpose: a TestFlight hiccup must not block the DMG/appcast, and vice versa. iOS has no
-  # notarization — the App Store Connect upload is the platform's equivalent. Signing is manual
-  # with the Apple Distribution cert + App Store profile secrets (an App Manager API key cannot
-  # use Xcode cloud signing); the API key only authenticates the upload. The one-time App Store
-  # Connect setup is documented in the release-swift skill under .agents/skills/release-swift/.
+  # Decides whether this tag needs the iOS TestFlight jobs at all. Every tag is a new marketing
+  # version, so every upload triggers a fresh Beta App Review and a no-op update for testers —
+  # Mac-only releases skip that. script/testflight_gate.mjs ships when iOS-relevant paths changed
+  # since the previous stable tag, when the newest TestFlight upload nears the 90-day expiry, on
+  # a first release, or when the force_ios dispatch input is set. Skipping this gate's `ship`
+  # output cascades: testflight is conditioned on it, and distribute needs testflight.
+  ios-gate:
+    name: iOS Gate
+    runs-on: ubuntu-latest
+    outputs:
+      ship: ${{ steps.gate.outputs.ship }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0          # full history + tags so the gate can diff against the previous stable tag
+          persist-credentials: false
+
+      - name: Resolve tag
+        id: meta
+        run: |
+          TAG="${{ inputs.tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF#refs/tags/}"
+          "$GITHUB_WORKSPACE/script/validate_release_tag.sh" "$TAG" >/dev/null
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_NOTARY_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Decide whether to ship iOS
+        id: gate
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          FORCE_IOS: ${{ inputs.force_ios && '1' || '' }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: node script/testflight_gate.mjs
+
+      - name: Remove release credentials
+        if: always()
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+        run: |
+          if [[ -n "$APPLE_NOTARY_KEY_ID" ]]; then
+            rm -f "$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          fi
+
+  # Ships the iOS companion app to TestFlight from the same tag, when the gate above says the
+  # release needs it. Independent of the macOS job on purpose: a TestFlight hiccup must not block
+  # the DMG/appcast, and vice versa. iOS has no notarization — the App Store Connect upload is the
+  # platform's equivalent. Signing is manual with the Apple Distribution cert + App Store profile
+  # secrets (an App Manager API key cannot use Xcode cloud signing); the API key only
+  # authenticates the upload. The one-time App Store Connect setup is documented in the
+  # release-swift skill under .agents/skills/release-swift/.
   testflight:
     name: iOS TestFlight
     runs-on: macos-26
+    needs: ios-gate
+    if: needs.ios-gate.outputs.ship == 'true'
     env:
       APPLE_TEAM_ID: 8KZBNZJBAX
     outputs:
