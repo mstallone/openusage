@@ -25,6 +25,9 @@ struct DashboardView: View {
     @Environment(WidgetDataStore.self) private var dataStore
     @Environment(PopoverTransparencyStore.self) private var transparency
     @Environment(UpdaterController.self) private var updater
+    /// Reduce Motion: the screen-switch entrance keeps its (shortened) animation but loses its
+    /// horizontal travel, so a mode switch reads as a quick fade-in-place instead of a slide.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var reorderLift: ReorderLift?
     /// The visual panel height SwiftUI drives — the single animation clock. The height frame below
     /// animates the panel itself, and `PanelHeightModifier` follows the same value frame-by-frame onto
@@ -493,7 +496,7 @@ struct DashboardView: View {
     /// it at zero. Until this transition's state has committed, progress remains zero so the first frame
     /// cannot flash at its final position.
     private var screenEntranceOffset: CGFloat {
-        guard isSliding else { return 0 }
+        guard isSliding, !reduceMotion else { return 0 }
         let direction: CGFloat = layout.screenSlideFrom.slideRank < layout.screen.slideRank ? 1 : -1
         let progress = animatedSlideID == layout.screenSlideID ? slideProgress : 0
         return direction * Self.screenEntranceDistance * (1 - progress)

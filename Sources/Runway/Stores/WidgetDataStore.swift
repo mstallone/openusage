@@ -28,6 +28,22 @@ final class WidgetDataStore {
     /// produce a negative or wildly inflated provider timing. Tests inject exact ticks.
     private let monotonicNow: () -> TimeInterval
     private let slowProviderRefreshThreshold: TimeInterval
+    /// Hard ceiling on one provider's `refresh()`, resolved per provider
+    /// (`ProviderRuntime.refreshTimeout` — a hung network call used to spin the footer's refresh
+    /// indicator forever, and the in-flight guard then blocked every later attempt). This stored
+    /// value is a test-only global override; `nil` in production.
+    private let providerRefreshTimeoutOverride: TimeInterval?
+    /// The protocol extension's default ceiling — see `ProviderRuntime.refreshTimeout` for the
+    /// budget rationale and when a provider should override it.
+    static let defaultProviderRefreshTimeout: TimeInterval = 150
+    /// Providers whose timed-out refresh is still running detached (the deadline race resumed
+    /// without awaiting it). Blocks new attempts for that provider so network/auth work never
+    /// overlaps on one runtime — cleared ONLY when the straggler actually exits. Deliberately no
+    /// time-based expiry: the periodic loop's cadence (5 min) would sail past any reasonable valve
+    /// and stack overlapping attempts on a permanently wedged runtime every cycle; the timeout
+    /// error card already tells the user the provider is stuck, and a straggler that never exits
+    /// means retrying couldn't succeed anyway.
+    private var hungRefreshProviderIDs: Set<String> = []
     /// Quota-notification preferences (three independent triggers). Injected; `nil` disables
     /// notifications entirely (tests and previews that don't wire it).
     private let notificationSettings: (@MainActor () -> NotificationSettingsStore)?
@@ -133,6 +149,7 @@ final class WidgetDataStore {
         now: @escaping () -> Date = Date.init,
         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         slowProviderRefreshThreshold: TimeInterval = WidgetDataStore.defaultSlowProviderRefreshThreshold,
+        providerRefreshTimeout: TimeInterval? = nil,
         notificationSettings: (@MainActor () -> NotificationSettingsStore)? = nil,
         postNotification: (@MainActor (String, String, String, String) async -> Bool)? = nil,
         providerIdentityKeys: [String: String] = [:],
@@ -140,6 +157,8 @@ final class WidgetDataStore {
         resolveDisplayName: (@MainActor (String) -> String?)? = nil
     ) {
         precondition(slowProviderRefreshThreshold >= 0)
+        if let providerRefreshTimeout { precondition(providerRefreshTimeout > 0) }
+        self.providerRefreshTimeoutOverride = providerRefreshTimeout
         self.registry = registry
         self.providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.provider.id, $0) })
         self.cache = cache
@@ -335,11 +354,65 @@ final class WidgetDataStore {
             AppLog.debug(.refresh, "cache skip \(providerID) (already in flight)")
             return .skipped
         }
+        // A timed-out attempt's straggler may still be running detached; don't stack a second
+        // network/auth pass on the same runtime while it lives (see `hungRefreshProviderIDs`).
+        guard !hungRefreshProviderIDs.contains(providerID) else {
+            AppLog.debug(.refresh, "hung-refresh skip \(providerID) (straggler still running)")
+            return .skipped
+        }
         refreshingProviderIDs.insert(providerID)
         defer { refreshingProviderIDs.remove(providerID) }
         let start = monotonicNow()
-        var snapshot = await ProviderRefreshContext.$isManual.withValue(force) {
-            await provider.refresh()
+        // Each provider owns its ceiling (`ProviderRuntime.refreshTimeout`); the injected override
+        // exists for tests.
+        let refreshTimeout = providerRefreshTimeoutOverride ?? provider.refreshTimeout
+        // Bound the refresh with a true deadline race. `provider` is not Sendable, so both racers
+        // are isolation-inheriting `Task`s (not a task group) and the continuation is resumed by
+        // whichever finishes first — the deadline never `await`s the provider, so even a provider
+        // suspended in a non-cancellable operation cannot hold the spinner and in-flight guard
+        // hostage (merely cancelling and then awaiting would). The loser's result is discarded via
+        // the MainActor-confined `resumed` flag; a cancelled provider (URLSession-backed work exits
+        // promptly on cancellation) finishes into the void and is never published.
+        let timedOutSnapshot: ProviderSnapshot? = await withCheckedContinuation { continuation in
+            final class RaceState { var resumed = false; var watchdog: Task<Void, Never>? }
+            let state = RaceState()
+            let refreshTask = Task { [force] in
+                let snapshot = await ProviderRefreshContext.$isManual.withValue(force) {
+                    await provider.refresh()
+                }
+                guard !state.resumed else {
+                    // Lost the race: this straggler just exited, so the runtime is idle again —
+                    // lift the overlap guard.
+                    self.hungRefreshProviderIDs.remove(providerID)
+                    return
+                }
+                state.resumed = true
+                state.watchdog?.cancel()
+                continuation.resume(returning: snapshot)
+            }
+            state.watchdog = Task { [refreshTimeout] in
+                try? await Task.sleep(for: .seconds(refreshTimeout))
+                guard !state.resumed, !Task.isCancelled else { return }
+                state.resumed = true
+                refreshTask.cancel()
+                // The provider's work may still be running detached (cancellation is cooperative,
+                // and e.g. Kimi's token refresh awaits a detached task that ignores it). The outer
+                // `defer` is about to release `refreshingProviderIDs`, so hold a separate overlap
+                // guard until the straggler exits — overlapping auth/network attempts on one
+                // runtime is worse than waiting.
+                self.hungRefreshProviderIDs.insert(providerID)
+                continuation.resume(returning: nil)
+            }
+        }
+        // Timed out: the deadline won the race. Surface it like any failed refresh — error card +
+        // backoff — and keep the last-good snapshot on screen.
+        guard var snapshot = timedOutSnapshot else {
+            let message = "Refresh timed out after \(Int(refreshTimeout))s"
+            providerErrors[providerID] = message
+            failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
+            AppLog.warn(.refresh, "\(providerID) timed out after \(Int(refreshTimeout * 1000))ms; keeping last-good snapshot")
+            if notifyStateChange { onLocalStateChanged?() }
+            return .failed
         }
         // A canceled refresh may still return if a provider's underlying work is non-throwing. Never
         // publish that potentially partial snapshot; keep the last-good state exactly as it was.

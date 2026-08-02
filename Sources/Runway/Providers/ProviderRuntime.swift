@@ -36,6 +36,19 @@ protocol ProviderRuntime: AnyObject {
     /// `FirstRunSeeder` to enable exactly the providers the user actually has. Mirror the credential
     /// sources `refresh()` reads, and run blocking loads via `loadOffMainActor`.
     func hasLocalCredentials() async -> Bool
+
+    /// Hard ceiling on one `refresh()` before `WidgetDataStore` cuts it off as hung (error card +
+    /// backoff; the last-good snapshot stays on screen). The default covers the common providers'
+    /// complete built-in request budgets with margin — override it when a provider's own sequential
+    /// budgets can legitimately exceed it (Copilot's multi-org billing probe does), so the ceiling
+    /// stays what it's for: killing genuinely dead work, not policing slow-but-valid paths.
+    var refreshTimeout: TimeInterval { get }
+}
+
+extension ProviderRuntime {
+    /// 150s default: above Kimi's full OAuth retry budget (~93s plus loading and the usage
+    /// request), Cursor's sequential probe (~70s), and Codex's claim probe (~45s).
+    var refreshTimeout: TimeInterval { WidgetDataStore.defaultProviderRefreshTimeout }
 }
 
 /// Run a blocking, `Sendable` credential load off the MainActor.

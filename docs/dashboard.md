@@ -53,6 +53,8 @@ account-wide. Quotas, plans, balances, and provider errors always describe this 
 
 Rows with a reset date tick every 30 seconds, so countdowns and pace stay live between refreshes.
 
+Runway honors the system Reduce Motion setting (System Settings → Accessibility → Display): screen switches and panel growth swap their springs and slides for quick fades.
+
 ## Right-click menus
 
 Every row: **Hide · Star for menu bar / Unstar · Refresh \<provider\> · Customize…** (Customize opens straight to that provider's metrics.)

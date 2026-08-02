@@ -12,6 +12,8 @@ import SwiftUI
 /// reset and the Esc handler drive the same state.
 struct CustomizeView: View {
     @Environment(LayoutStore.self) private var layout
+    /// Reduce Motion swaps the L1↔L2 slide for a crossfade — see `masterDetailTransition`.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The auto-fit height sink this screen's scroll content reports into (owned by `DashboardView`).
     let heightCoordinator: PanelHeightCoordinator
     let reorderSpaceName: String
@@ -59,14 +61,24 @@ struct CustomizeView: View {
                 reorderLift: $reorderLift,
                 rowFrames: rowFrames
             )
-            .transition(.move(edge: .trailing))
+            .transition(masterDetailTransition(edge: .trailing))
         } else {
             CustomizeProviderListView(
                 reorderSpaceName: reorderSpaceName,
                 reorderLift: $reorderLift,
                 rowFrames: rowFrames
             )
-            .transition(.move(edge: .leading))
+            .transition(masterDetailTransition(edge: .leading))
         }
+    }
+
+    /// The L1↔L2 push. Under Reduce Motion the full-width slide is exactly the kind of large
+    /// travel the setting asks to avoid — shortening the curve alone (see `Motion`) wouldn't
+    /// change the distance — so it becomes an instant swap. Deliberately `.identity`, NOT
+    /// `.opacity`: fading composites the whole card tree into a transparency layer where the
+    /// translucent `cardSurface()` materials lose their vibrant backdrop and flash near-white —
+    /// the same regression `DashboardView.modeBody` documents for its screen switch.
+    private func masterDetailTransition(edge: Edge) -> AnyTransition {
+        reduceMotion ? .identity : .move(edge: edge)
     }
 }

@@ -6,6 +6,12 @@ final class CopilotProvider: ProviderRuntime {
     /// steady-state refreshes make one billing call instead of re-probing every org.
     static let billingOrgDefaultsKey = "copilot.billingOrg"
 
+    /// Above the store default: an org-managed account's billing fallback sequentially probes every
+    /// seat org (up to 15s each), may repeat the list for a second local credential, and can finish
+    /// with paginated enterprise discovery — ~90s per credential is a legitimate worst case, and the
+    /// global default would cut off a usable second-credential result mid-probe.
+    var refreshTimeout: TimeInterval { 360 }
+
     let provider = Provider(
         id: "copilot",
         displayName: "Copilot",
