@@ -123,7 +123,7 @@ enum JSONLTailIO {
         let windowStart = max(0, resume.offset - fingerprintWindow)
         let prefixLength = resume.offset - windowStart
         guard (try? handle.seek(toOffset: UInt64(windowStart))) != nil,
-              let buffer = try? handle.read(upToCount: file.size - windowStart),
+              let buffer = read(from: handle, upTo: file.size - windowStart),
               buffer.count >= prefixLength,
               fingerprint(of: buffer.prefix(prefixLength)) == resume.fingerprint
         else { return nil }
@@ -131,11 +131,12 @@ enum JSONLTailIO {
         let appended = buffer.dropFirst(prefixLength)
         let boundary = lineBoundary(in: appended)
         guard boundary > 0 else {
-            // No complete new line yet (a partial write is in flight): keep the cached items and
-            // resume point; the pending bytes parse once their newline lands.
-            return .appended(
-                newItems: [], offset: resume.offset, state: resume.state, fingerprint: resume.fingerprint
-            )
+            // The appended bytes contain no complete line. Fall back to a full parse — it handles
+            // an unterminated final record (parses it, disables resume), so a writer that stopped
+            // mid-line without a newline still gets its last record counted, exactly like the
+            // whole-file path. Caching a "nothing new" result here instead would mark those bytes
+            // as covered and permanently skip that record if the file never grows again.
+            return nil
         }
         // Copy so the parser sees a zero-based chunk containing only whole lines.
         guard let parsed = parser.parseChunk(Data(appended.prefix(boundary)), resume.state) else {
@@ -150,5 +151,18 @@ enum JSONLTailIO {
             state: parsed.state,
             fingerprint: fingerprint(of: Data(buffer[(parsedEnd - windowLength)..<parsedEnd]))
         )
+    }
+
+    /// Read until `count` bytes or end of file — `FileHandle.read(upToCount:)` may legally return
+    /// short of both, and treating a short read as complete would cache unread bytes as parsed.
+    /// `nil` on a read error.
+    private static func read(from handle: FileHandle, upTo count: Int) -> Data? {
+        var buffer = Data(capacity: count)
+        while buffer.count < count {
+            guard let chunk = try? handle.read(upToCount: count - buffer.count) else { return nil }
+            guard !chunk.isEmpty else { break }
+            buffer.append(chunk)
+        }
+        return buffer
     }
 }
