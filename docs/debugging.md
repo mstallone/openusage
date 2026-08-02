@@ -104,6 +104,21 @@ The script's "cold open" measures the shipped first-click experience, which incl
 pre-warm (it runs at +2s, before the driver's first open at +6s). To measure the true cold path —
 no pre-warm at all — launch with `RUNWAY_UI_PROFILE_COLD=1` as well.
 
+## Profile the Memory window
+
+`script/profile_memory_ui.sh` is the same harness for the Memory Explorer. It relaunches the dev
+app with `RUNWAY_UI_PROFILE_MEMORY=1`, and the driver walks the window through scripted phases — a
+cold open with the initial scan, six close/open cycles (each rebuilds the store, by design), twelve
+file-document selection switches, six database-row loads, three re-scans, and an idle soak. Run it
+before and after any change that touches the Memory window's render or load paths.
+
+Reference numbers from this machine class (Apple Silicon, August 2026): a warm open builds the
+window in ~20ms and the scan lands ~20ms later; a re-scan with the window open is under 20ms (an
+unchanged Codex database re-lists from cache in under 1ms); selecting a file document loads in
+under 10ms and a database row in under 20ms. The selection, database, and idle phases report zero
+main-queue stalls; each open pays one or two ~60ms stalls for the SwiftUI tree mount, which
+overlaps the window materializing.
+
 ## Tips
 
 - **A provider shows an error.** Reproduce with `logs` running, then check that provider's page in

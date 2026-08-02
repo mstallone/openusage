@@ -119,6 +119,44 @@ final class ProviderAccountsStoreTests: XCTestCase {
         XCTAssertTrue(ProviderAccountsStore(defaults: defaults).records.isEmpty)
     }
 
+    func testAnchoredLookupResolvesTheRecordAtThatHomeNotTheBadgeHolder() {
+        let store = ProviderAccountsStore(defaults: makeScratchDefaults())
+        store.reconcile(with: [
+            defaultHomeObservation(family: "claude", identityKey: "acct-a", label: "a@example.com"),
+            ProviderAccountsStore.AccountObservation(
+                family: "claude",
+                identityKey: "acct-b",
+                label: "b@example.com",
+                sources: [ProviderAccountSource(
+                    kind: .configDir,
+                    anchor: "/Users/dev/.claude-personal",
+                    holdsDefaultSource: false
+                )]
+            ),
+        ])
+        let personalID = ProviderAccountID.make(family: "claude", identityKey: "acct-b")
+        store.rename(cardID: personalID, to: "Personal")
+
+        XCTAssertEqual(
+            store.resolvedDisplayName(anchoredAt: "/Users/dev/.claude-personal", family: "claude"),
+            "Personal",
+            "the Memory sidebar resolves the rename of the account AT that home"
+        )
+        XCTAssertEqual(
+            store.resolvedDisplayName(anchoredAt: "/Users/dev/.claude", family: "claude"),
+            "Claude — a@example.com",
+            "an un-renamed home derives its account title, not the sibling's rename"
+        )
+        XCTAssertNil(
+            store.resolvedDisplayName(anchoredAt: "/Users/dev/.gemini", family: "claude"),
+            "an unclaimed home falls back to the harness's static name"
+        )
+        XCTAssertNil(
+            store.resolvedDisplayName(anchoredAt: "/Users/dev/.claude-personal", family: "codex"),
+            "the family must match — a codex source never borrows a claude rename"
+        )
+    }
+
     func testRenamePersistsAndAClearedNameFallsBackToTheDerivedOne() {
         let defaults = makeScratchDefaults()
         let store = ProviderAccountsStore(defaults: defaults)

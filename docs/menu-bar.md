@@ -4,7 +4,7 @@ Star your most important metrics straight into the menu bar strip.
 
 ## Right-clicking the icon
 
-Right-click (or control-click) the menu bar icon for a quick menu with **Settings** and **Quit**. Left-click opens the popover as usual.
+Right-click (or control-click) the menu bar icon for a quick menu with **Settings**, **Memory** (opens the [Memory Explorer](memory-explorer.md)), and **Quit**. Left-click opens the popover as usual.
 
 ## Starring
 

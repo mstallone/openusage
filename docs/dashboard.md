@@ -71,7 +71,7 @@ The image is a flexible-height PNG using the app's look — the provider's mark 
 
 ## Footer
 
-The compact bar pinned to the bottom of the popover — it stays glued to the panel's bottom edge as the popover grows and shrinks. On the left: the app version. On the right: a live countdown to the next update (like `5m`) you can click (or press **⌘R**) to refresh right away, and a **gear** menu button. The gear holds everything in one place — **Customize**, **Settings** (opens the [Settings window](settings.md)), **Share Screenshot** (submenu of providers), **Check for Updates…**, **About Runway**, and **Quit Runway**.
+The compact bar pinned to the bottom of the popover — it stays glued to the panel's bottom edge as the popover grows and shrinks. On the left: the app version. On the right: a live countdown to the next update (like `5m`) you can click (or press **⌘R**) to refresh right away, and a **gear** menu button. The gear holds everything in one place — **Customize**, **Settings** (opens the [Settings window](settings.md)), **Memory** (opens the [Memory Explorer](memory-explorer.md)), **Share Screenshot** (submenu of providers), **Check for Updates…**, **About Runway**, and **Quit Runway**.
 
 ## Customize
 

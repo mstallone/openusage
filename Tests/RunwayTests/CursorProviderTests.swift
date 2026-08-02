@@ -291,6 +291,9 @@ private final class FakeSQLite: SQLiteAccessing, @unchecked Sendable {
         return nil
     }
 
+    // JSON row queries are not exercised here.
+    func queryJSONRows(path: String, sql: String) throws -> String? { nil }
+
     func execute(path: String, sql: String) throws {
         guard let key = sqlValue(after: "(key, value) VALUES ('", in: sql),
               let value = sqlValue(after: "', '", in: sql)
