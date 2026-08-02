@@ -209,7 +209,20 @@ struct LocalTextFileAccessor: TextFileAccessing {
     }
 
     func createTextFileExclusively(_ path: String, _ text: String) throws -> Bool {
-        let expanded = URL(fileURLWithPath: expandHome(path)).resolvingSymlinksInPath().path
+        var expanded = URL(fileURLWithPath: expandHome(path)).resolvingSymlinksInPath().path
+        // A DANGLING symlink resolves to itself (there is no target inode to land on), and the
+        // exclusive rename would see the link entry and report EEXIST forever — a silent no-op
+        // Create. Follow the link text manually so creation lands where the link points, exactly
+        // like a write-through of an intact link.
+        var hops = 0
+        while hops < 4,
+              let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: expanded) {
+            expanded = destination.hasPrefix("/")
+                ? destination
+                : URL(fileURLWithPath: expanded).deletingLastPathComponent()
+                    .appendingPathComponent(destination).standardized.path
+            hops += 1
+        }
         try ensureParentDirectory(for: expanded)
         let destination = URL(fileURLWithPath: expanded)
         let parent = destination.deletingLastPathComponent()

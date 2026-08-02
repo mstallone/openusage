@@ -227,13 +227,27 @@ final class MemoryInventoryScannerTests: XCTestCase {
         let scanner = makeScanner(
             environment: ["CLAUDE_CONFIG_DIR": "/Users/dev/custom-claude/projects"],
             files: ["/Users/dev/custom-claude/CLAUDE.md": "instructions"],
-            subdirectories: ["/Users/dev/custom-claude"]
+            subdirectories: ["/Users/dev/custom-claude", "/Users/dev/custom-claude/projects"]
         )
 
         let (sources, _) = scanner.scan()
 
         XCTAssertTrue(sources.contains { $0.homePath == "/Users/dev/custom-claude" },
                       "the projects/ spelling ClaudeLogUsageScanner accepts must resolve to its home")
+    }
+
+    func testClaudeConfigDirEndingInProjectsIsNotStrippedWhenTheDirectoryIsAbsent() throws {
+        // A mistyped value ending in "projects" must not promote its (existing) parent into a
+        // Claude home with a create offer.
+        let scanner = makeScanner(
+            environment: ["CLAUDE_CONFIG_DIR": "/Users/dev/typo/projects"],
+            files: ["/Users/dev/typo/CLAUDE.md": "unrelated file"],
+            subdirectories: ["/Users/dev/typo"]
+        )
+
+        let (sources, _) = scanner.scan()
+
+        XCTAssertFalse(sources.contains { $0.homePath == "/Users/dev/typo" })
     }
 
     func testCodexHistoricalConfigHomeIsScanned() throws {

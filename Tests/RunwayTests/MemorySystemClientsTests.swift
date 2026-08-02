@@ -48,6 +48,37 @@ final class MemorySystemClientsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "the agent's content")
     }
 
+    func testExclusiveCreateFollowsADanglingSymlink() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("real-CLAUDE.md").path
+        let link = directory.appendingPathComponent("CLAUDE.md").path
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+
+        XCTAssertTrue(try LocalTextFileAccessor().createTextFileExclusively(link, "created"),
+                      "a dangling link must not read as an existing destination")
+        XCTAssertEqual(try String(contentsOfFile: target, encoding: .utf8), "created",
+                       "creation lands where the link points, like a write-through")
+        XCTAssertEqual(try String(contentsOfFile: link, encoding: .utf8), "created",
+                       "the link now resolves")
+    }
+
+    func testModificationDateFollowsSymlinksToTheTarget() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("MEMORY.md").path
+        let link = directory.appendingPathComponent("link.md").path
+        try "index".write(toFile: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+        let past = Date(timeIntervalSinceNow: -3600)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: target)
+
+        let viaLink = try XCTUnwrap(MemoryStore.filesystemModificationDate(of: link))
+
+        XCTAssertEqual(viaLink.timeIntervalSince1970, past.timeIntervalSince1970, accuracy: 1,
+                       "the contention check must watch the inode reads and writes actually touch")
+    }
+
     func testNewFileHonorsARestrictiveUmask() throws {
         // A 077 umask (a hardened multi-user Mac) must strip group/other bits from brand-new
         // memory files; only *preserving* an existing file's mode may ignore the umask.

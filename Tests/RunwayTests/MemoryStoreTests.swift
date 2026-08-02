@@ -117,6 +117,32 @@ final class MemoryStoreTests: XCTestCase {
         "/Users/dev/.claude/projects/-Users-dev-proj",
     ]
 
+    func testCreateFactFailsAndRollsBackWhenTheIndexKeepsMoving() async throws {
+        let files = claudeProjectFixture()
+        // A modification date that changes on every stat: a live agent rewriting MEMORY.md
+        // through all retries. Publishing a stale snapshot would erase its updates — fail instead.
+        let counter = DateBox(Date(timeIntervalSince1970: 0))
+        let store = makeStore(
+            files: files,
+            subdirectories: claudeSubdirectories,
+            modificationDates: { path in
+                guard path.hasSuffix("MEMORY.md") else { return nil }
+                counter.value = counter.value.addingTimeInterval(1)
+                return counter.value
+            }
+        )
+        await store.reload()
+        let project = try XCTUnwrap(store.sources.first?.projects.first)
+
+        do {
+            _ = try await store.createFact(in: project, name: "Contended", description: "hook", type: "project")
+            XCTFail("perpetual index contention must throw, not publish a stale snapshot")
+        } catch let error as MemoryStoreError {
+            XCTAssertEqual(error, .indexContention)
+        }
+        XCTAssertNil(files.files["\(claudeMemoryDir)/contended.md"], "the fact rolls back on failure")
+    }
+
     func testBudgetTruncatedScanSetsAVisibleWarning() async throws {
         let files = claudeProjectFixture()
         // A negative budget expires immediately: every home is skipped with a budget note.

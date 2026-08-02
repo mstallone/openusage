@@ -113,11 +113,19 @@ final class MemoryStore {
         if scanned.isEmpty, !notes.isEmpty {
             loadError = "The memory scan ran into problems and may have missed files. Check the log for details."
         }
-        // A truncated scan beside a non-empty inventory gets its own visible warning — the sidebar
-        // must not present partial homes as the complete picture.
-        scanWarning = notes.contains { $0.contains("hit its") && $0.contains("budget") }
-            ? "The scan ran out of time and this list may be incomplete. Refresh to rescan."
-            : nil
+        // A truncated or partially failed scan beside a non-empty inventory gets its own visible
+        // warning — the sidebar must not present a partial list as the complete picture. Listing
+        // and read failures count too: one may hit a candidate root that never became a source,
+        // so no footnote carries it.
+        let budgetHit = notes.contains { $0.contains("hit its") && $0.contains("budget") }
+        let readOrListFailed = notes.contains { $0.contains("could not list") || $0.contains("could not read") }
+        scanWarning = if budgetHit {
+            "The scan ran out of time and this list may be incomplete. Refresh to rescan."
+        } else if readOrListFailed {
+            "Some files or folders could not be read, so this list may be incomplete. Check the log for details."
+        } else {
+            nil
+        }
     }
 
     /// For each Codex source whose home has a `memories_1.sqlite`, fill `databaseDocuments` from the
@@ -368,7 +376,11 @@ final class MemoryStore {
                         attempt += 1
                         let baseline = modificationDate(indexPath)
                         let index = try files.readTextIfPresent(indexPath) ?? ""
-                        if attempt < 3, modificationDate(indexPath) != baseline {
+                        if modificationDate(indexPath) != baseline {
+                            // The index moved mid-read. Retry; after the limit, FAIL — knowingly
+                            // publishing a stale snapshot would erase the agent's latest update,
+                            // and the rollback below removes the new fact cleanly.
+                            guard attempt < 3 else { throw MemoryStoreError.indexContention }
                             continue
                         }
                         try files.writeTextPreservingMode(indexPath, ClaudeMemoryIndex.appendingEntry(entry, to: index))
@@ -468,8 +480,12 @@ final class MemoryStore {
         }
     }
 
-    private nonisolated static func filesystemModificationDate(of path: String) -> Date? {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: expandHome(path))
+    /// Stats the symlink TARGET, not the link: reads and writes follow links, so the conflict and
+    /// contention checks must watch the same inode they read — a symlinked MEMORY.md whose target
+    /// an agent rewrites would otherwise never register as moved.
+    nonisolated static func filesystemModificationDate(of path: String) -> Date? {
+        let resolved = URL(fileURLWithPath: expandHome(path)).resolvingSymlinksInPath().path
+        let attributes = try? FileManager.default.attributesOfItem(atPath: resolved)
         return attributes?[.modificationDate] as? Date
     }
 }
@@ -478,6 +494,7 @@ enum MemoryStoreError: Error, LocalizedError, Equatable {
     case documentIsReadOnly
     case notAFact
     case unknownInstructionsPath
+    case indexContention
 
     var errorDescription: String? {
         switch self {
@@ -487,6 +504,8 @@ enum MemoryStoreError: Error, LocalizedError, Equatable {
             return "Only memory fact files can be deleted."
         case .unknownInstructionsPath:
             return "Runway does not know where this harness keeps its instruction file."
+        case .indexContention:
+            return "MEMORY.md is being rewritten by a live session right now. Try again in a moment."
         }
     }
 }

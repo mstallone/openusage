@@ -163,9 +163,11 @@ struct MemoryInventoryScanner: Sendable {
     /// (extra logins like `~/.claude-personal`). Canonical dedupe keeps the first spelling.
     private func claudeHomeCandidates() -> [String] {
         // `CLAUDE_CONFIG_DIR` pointing straight at a `projects/` directory is a supported spelling
-        // (ClaudeLogUsageScanner accepts it); the home is its parent.
+        // (ClaudeLogUsageScanner accepts it); the home is its parent — but only when that
+        // `projects` directory actually exists. A stale or mistyped value must not promote an
+        // unrelated parent directory into a "Claude home" with a create offer.
         var homes = commaListEnvironmentPaths("CLAUDE_CONFIG_DIR").map { path in
-            URL(fileURLWithPath: path).lastPathComponent == "projects"
+            URL(fileURLWithPath: path).lastPathComponent == "projects" && directoryPresent(path)
                 ? URL(fileURLWithPath: path).deletingLastPathComponent().path
                 : path
         }
@@ -416,7 +418,11 @@ struct MemoryInventoryScanner: Sendable {
         )
         let memoryDir = home + "/memory"
         guard directoryPresent(memoryDir) else {
-            notes.append("grok home \(logPath(home)): no memory directory → \(memoryConfigured ? "no files yet" : "memory disabled")")
+            // The log must not claim "disabled" when the config was unreadable — the state is
+            // unknown, and a false cause misleads support.
+            let cause = configUnreadable ? "config unreadable, memory state unknown"
+                : memoryConfigured ? "no files yet" : "memory disabled"
+            notes.append("grok home \(logPath(home)): no memory directory → \(cause)")
             return MemorySource(
                 id: sourceID(.grok, home: home),
                 harness: Harness.grok.displayName,
@@ -451,7 +457,7 @@ struct MemoryInventoryScanner: Sendable {
                 facts: []
             ))
         }
-        if !memoryConfigured {
+        if !memoryConfigured, !configUnreadable {
             notes.append("grok home \(logPath(home)): memory files present but no [memory] section → memory disabled")
         }
         return MemorySource(
