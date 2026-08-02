@@ -44,6 +44,12 @@ struct MemoryRootView: View {
                 Task {
                     do {
                         try await MemoryEditorState.shared.saveDirtyDocument?()
+                        // Typed-during-save keystrokes stay dirty; a reload could unmount the
+                        // editor and drop them, so ask again instead.
+                        guard !MemoryEditorState.shared.isDirty else {
+                            isPromptingDirtyRefresh = true
+                            return
+                        }
                         await store.reload()
                     } catch MemoryEditorError.conflictDetected {
                         // The editor's Reload / Overwrite banner is up; refresh once it's answered.

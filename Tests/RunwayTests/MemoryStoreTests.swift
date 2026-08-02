@@ -63,6 +63,7 @@ final class MemoryStoreTests: XCTestCase {
         files: RecordingFiles,
         sqlite: ScriptedSQLite = ScriptedSQLite(),
         subdirectories: [String],
+        timeBudget: TimeInterval = 1.0,
         modificationDates: @escaping @Sendable (String) -> Date? = { _ in nil }
     ) -> MemoryStore {
         let homeURL = URL(fileURLWithPath: home)
@@ -81,7 +82,8 @@ final class MemoryStoreTests: XCTestCase {
                     .sorted()
                     .map { URL(fileURLWithPath: $0) }
             },
-            slugDecoder: ProjectSlugDecoder(directoryExists: { _ in false })
+            slugDecoder: ProjectSlugDecoder(directoryExists: { _ in false }),
+            timeBudget: timeBudget
         )
         return MemoryStore(
             files: files,
@@ -114,6 +116,42 @@ final class MemoryStoreTests: XCTestCase {
         "/Users/dev/.claude",
         "/Users/dev/.claude/projects/-Users-dev-proj",
     ]
+
+    func testCreateFactFailsAndRollsBackWhenTheIndexKeepsMoving() async throws {
+        let files = claudeProjectFixture()
+        // A modification date that changes on every stat: a live agent rewriting MEMORY.md
+        // through all retries. Publishing a stale snapshot would erase its updates — fail instead.
+        let counter = DateBox(Date(timeIntervalSince1970: 0))
+        let store = makeStore(
+            files: files,
+            subdirectories: claudeSubdirectories,
+            modificationDates: { path in
+                guard path.hasSuffix("MEMORY.md") else { return nil }
+                counter.value = counter.value.addingTimeInterval(1)
+                return counter.value
+            }
+        )
+        await store.reload()
+        let project = try XCTUnwrap(store.sources.first?.projects.first)
+
+        do {
+            _ = try await store.createFact(in: project, name: "Contended", description: "hook", type: "project")
+            XCTFail("perpetual index contention must throw, not publish a stale snapshot")
+        } catch let error as MemoryStoreError {
+            XCTAssertEqual(error, .indexContention)
+        }
+        XCTAssertNil(files.files["\(claudeMemoryDir)/contended.md"], "the fact rolls back on failure")
+    }
+
+    func testBudgetTruncatedScanSetsAVisibleWarning() async throws {
+        let files = claudeProjectFixture()
+        // A negative budget expires immediately: every home is skipped with a budget note.
+        let store = makeStore(files: files, subdirectories: claudeSubdirectories, timeBudget: -1)
+
+        await store.reload()
+
+        XCTAssertNotNil(store.scanWarning, "a truncated scan must not present itself as complete")
+    }
 
     func testCreateInstructionFileDoesNotClobberAFileThatAppearedSinceTheScan() async throws {
         let files = RecordingFiles([:])
