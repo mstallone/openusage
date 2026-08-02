@@ -21,13 +21,34 @@ struct MemoryInventoryScanner: Sendable {
     /// Wall-clock budget; on overrun the scan returns what it has, with a note saying so.
     var timeBudget: TimeInterval
     var now: @Sendable () -> Date
+    /// Failures from the default filesystem listings, drained into notes and source footnotes at
+    /// the end of `scan()` — an EACCES on `~/.claude/projects` must not silently read as "no
+    /// projects". Injected fake listings in tests simply never record here.
+    private let listingDiagnostics: ListingDiagnostics
+
+    final class ListingDiagnostics: @unchecked Sendable {
+        private let lock = NSLock()
+        private var failures: [(path: String, message: String)] = []
+
+        func record(path: String, message: String) {
+            lock.withLock { failures.append((path, message)) }
+        }
+
+        func drain() -> [(path: String, message: String)] {
+            lock.withLock {
+                let drained = failures
+                failures = []
+                return drained
+            }
+        }
+    }
 
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         files: TextFileAccessing = LocalTextFileAccessor(),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
-        listSubdirectories: @escaping @Sendable (URL) -> [URL] = Self.filesystemSubdirectories,
-        listFiles: @escaping @Sendable (URL) -> [URL] = Self.filesystemFiles,
+        listSubdirectories: (@Sendable (URL) -> [URL])? = nil,
+        listFiles: (@Sendable (URL) -> [URL])? = nil,
         slugDecoder: ProjectSlugDecoder = ProjectSlugDecoder(),
         timeBudget: TimeInterval = 1.0,
         now: @escaping @Sendable () -> Date = Date.init
@@ -35,8 +56,12 @@ struct MemoryInventoryScanner: Sendable {
         self.environment = environment
         self.files = files
         self.homeDirectory = homeDirectory
+        let diagnostics = ListingDiagnostics()
+        self.listingDiagnostics = diagnostics
         self.listSubdirectories = listSubdirectories
+            ?? { Self.filesystemSubdirectories(of: $0, diagnostics: diagnostics) }
         self.listFiles = listFiles
+            ?? { Self.filesystemFiles(of: $0, diagnostics: diagnostics) }
         self.slugDecoder = slugDecoder
         self.timeBudget = timeBudget
         self.now = now
@@ -72,6 +97,15 @@ struct MemoryInventoryScanner: Sendable {
                 sources.append(source(for: harness, home: home, notes: &notes, expired: expired))
             }
             if budgetExhausted { break }
+        }
+        // Listing failures become user-visible: a note for the log, and a footnote on the source
+        // whose home the unlistable folder lives under — an EACCES must not read as "no projects".
+        for failure in listingDiagnostics.drain() {
+            notes.append("memory scan could not list \(logPath(failure.path)): \(failure.message)")
+            if let index = sources.firstIndex(where: { failure.path.hasPrefix($0.homePath) }) {
+                sources[index].footnote = sources[index].footnote
+                    ?? "Some folders under this home could not be listed. Check the log for details."
+            }
         }
         // Status ranks the sections: sources with something to read now, then homes with nothing
         // in them yet (one click from useful via Create Instruction File), then harnesses whose
@@ -176,7 +210,7 @@ struct MemoryInventoryScanner: Sendable {
                 notes.append("memory scan hit its budget inside \(logPath(home)); the project list is partial")
                 break
             }
-            if let group = claudeProjectGroup(projectDir: projectDir, notes: &notes) {
+            if let group = claudeProjectGroup(projectDir: projectDir, notes: &notes, expired: expired) {
                 projects.append(group)
             }
         }
@@ -198,7 +232,11 @@ struct MemoryInventoryScanner: Sendable {
     /// except MEMORY.md) so a fact whose index line was lost still shows; titles and hooks are
     /// decorated from the MEMORY.md index (matched by filename) first, frontmatter second,
     /// filename last.
-    private func claudeProjectGroup(projectDir: URL, notes: inout [String]) -> MemoryProjectGroup? {
+    private func claudeProjectGroup(
+        projectDir: URL,
+        notes: inout [String],
+        expired: () -> Bool
+    ) -> MemoryProjectGroup? {
         let memoryDir = projectDir.appendingPathComponent("memory")
         let indexPath = memoryDir.path + "/MEMORY.md"
         let indexText = readIfPresent(indexPath, notes: &notes)
@@ -209,6 +247,12 @@ struct MemoryInventoryScanner: Sendable {
             .filter { $0.pathExtension == "md" && $0.lastPathComponent != "MEMORY.md" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         for url in factURLs {
+            // Every fact costs a full read (frontmatter decoration); one project with hundreds of
+            // large facts must not blow through the whole scan's budget.
+            if expired() {
+                notes.append("memory scan hit its budget inside \(logPath(memoryDir.path)); the fact list is partial")
+                break
+            }
             let frontmatter = readIfPresent(url.path, notes: &notes)
                 .flatMap { MemoryFrontmatter.parse($0).frontmatter }
             let entry = indexEntries.first { $0.fileName == url.lastPathComponent }
@@ -468,22 +512,26 @@ struct MemoryInventoryScanner: Sendable {
 
     // MARK: - Filesystem defaults
 
-    private static func filesystemSubdirectories(of url: URL) -> [URL] {
-        directoryContents(of: url, keys: [.isDirectoryKey]).filter {
+    private static func filesystemSubdirectories(of url: URL, diagnostics: ListingDiagnostics) -> [URL] {
+        directoryContents(of: url, keys: [.isDirectoryKey], diagnostics: diagnostics).filter {
             (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         }
     }
 
-    private static func filesystemFiles(of url: URL) -> [URL] {
-        directoryContents(of: url, keys: [.isRegularFileKey]).filter {
+    private static func filesystemFiles(of url: URL, diagnostics: ListingDiagnostics) -> [URL] {
+        directoryContents(of: url, keys: [.isRegularFileKey], diagnostics: diagnostics).filter {
             (try? $0.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
         }
     }
 
     /// Absence is the common benign case and stays silent, but any other listing failure (EACCES on
     /// a restricted `~/.claude/projects`, an I/O error) would silently erase whole project trees
-    /// from the sidebar — log it loudly so the disappearance stays diagnosable.
-    private static func directoryContents(of url: URL, keys: [URLResourceKey]) -> [URL] {
+    /// from the sidebar — record it so `scan()` surfaces a note and a source footnote.
+    private static func directoryContents(
+        of url: URL,
+        keys: [URLResourceKey],
+        diagnostics: ListingDiagnostics
+    ) -> [URL] {
         do {
             return try FileManager.default.contentsOfDirectory(
                 at: url,
@@ -493,10 +541,7 @@ struct MemoryInventoryScanner: Sendable {
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return []
         } catch {
-            AppLog.warn(
-                .memory,
-                "memory scan could not list \((url.path as NSString).abbreviatingWithTildeInPath): \(error.localizedDescription)"
-            )
+            diagnostics.record(path: url.path, message: error.localizedDescription)
             return []
         }
     }

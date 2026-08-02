@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import Runway
 
@@ -24,10 +25,26 @@ final class MemorySystemClientsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("new-fact.md").path
 
+        let previousUmask = umask(0o022)
+        defer { umask(previousUmask) }
         try LocalTextFileAccessor().writeTextPreservingMode(path, "fact body")
 
         XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "fact body")
         XCTAssertEqual(try posixMode(of: path), 0o644)
+    }
+
+    func testNewFileHonorsARestrictiveUmask() throws {
+        // A 077 umask (a hardened multi-user Mac) must strip group/other bits from brand-new
+        // memory files; only *preserving* an existing file's mode may ignore the umask.
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("new-fact.md").path
+
+        let previousUmask = umask(0o077)
+        defer { umask(previousUmask) }
+        try LocalTextFileAccessor().writeTextPreservingMode(path, "fact body")
+
+        XCTAssertEqual(try posixMode(of: path), 0o600)
     }
 
     func testPreservingWriteLeavesNoTemporaryFiles() throws {

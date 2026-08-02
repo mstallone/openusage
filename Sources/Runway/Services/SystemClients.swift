@@ -122,11 +122,24 @@ struct LocalTextFileAccessor: TextFileAccessing {
         if statResult == 0 {
             mode = status.st_mode & 0o7777
         } else if errno == ENOENT {
-            mode = Self.sharedFileMode
+            // A brand-new file honors the process umask: `write` reasserts the exact mode on the
+            // inode (the umask cannot be allowed to *tighten a preserved mode*), so a restrictive
+            // umask (077 on a shared Mac) must be applied here or new memory files would leak
+            // group/other read bits the user has globally opted out of.
+            mode = Self.sharedFileMode & ~Self.currentUmask()
         } else {
             throw Self.currentPOSIXError()
         }
         try write(path, text, mode: mode)
+    }
+
+    /// The process umask, which is read-modify-only (umask(2)): set zero, read the old value,
+    /// restore it. The zero window is nanoseconds and every file this process creates goes
+    /// through this accessor's explicit-mode path anyway.
+    private static func currentUmask() -> mode_t {
+        let current = umask(0)
+        umask(current)
+        return current
     }
 
     private func write(_ path: String, _ text: String, mode: mode_t) throws {
