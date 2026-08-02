@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.8.6
+
+### Bug Fixes
+- Connected push for dashboard/Customize switches; exact caret-expansion heights ([#67](https://github.com/mstallone/runway/pull/67)) by @mstallone
+- Launch the dev app without the shell's CLAUDE_CONFIG_DIR / CODEX_HOME overrides ([#66](https://github.com/mstallone/runway/pull/66)) by @mstallone
+
+### Chores
+- Rewrite docs and comments in Simplified Technical English ([#68](https://github.com/mstallone/runway/pull/68)) by @mstallone
+- Gate the iOS TestFlight jobs on actual iOS changes ([#65](https://github.com/mstallone/runway/pull/65)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.5...v0.8.6](https://github.com/mstallone/runway/compare/v0.8.5...v0.8.6)
+
+- [1551671](https://github.com/mstallone/runway/commit/15516719c4e5ea44d2839a8e036013fa2f7fcb73) Connected push for dashboard/Customize switches; exact caret-expansion heights (#67) by @mstallone
+- [918d76d](https://github.com/mstallone/runway/commit/918d76d604ff02af4bc947dbd4c2249e58ffb274) docs: rewrite docs and comments in Simplified Technical English (#68) by @mstallone
+- [0c31513](https://github.com/mstallone/runway/commit/0c3151300cbc36dcb9d2e441f77a2fb3d1d6d867) ci: gate the iOS TestFlight jobs on actual iOS changes (#65) by @mstallone
+- [29ce242](https://github.com/mstallone/runway/commit/29ce242192f958ea0369e405f88b966084e47da0) Launch the dev app without the shell's CLAUDE_CONFIG_DIR / CODEX_HOME overrides (#66) by @mstallone
+
 ## v0.8.5
 
 ### New Features
