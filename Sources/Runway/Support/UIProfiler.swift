@@ -100,8 +100,9 @@ enum UIProfiler {
                 await pause(0.5)
             }
 
-            // The setup open happens BEFORE the phase marker so a slow open's stall bills to the
-            // preceding (unlabeled) gap, not to the screen-switch numbers.
+            // The setup open gets its own phase so its timings bill to neither the warm-cycles
+            // aggregate (12 documented samples, not 13) nor the screen-switch numbers.
+            mark("PHASE setup (screen-switch prep)")
             open()
             await pause(1.5)
             mark("PHASE screen-switch (10x)")
