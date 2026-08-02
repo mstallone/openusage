@@ -257,8 +257,12 @@ launch_app() {
   # whenever the process environment lacks them, and the snapshot's capture subprocess inherits the
   # app's environment — so a past launch from an agent shell left the agent homes pinned there, and
   # unsetting the variables alone would still scan them for one more full session. Drop the snapshot
-  # so this launch re-captures fresh facts from the login shell.
-  /usr/bin/defaults delete "$BUNDLE_ID" runway.shellEnvSnapshot.v1 >/dev/null 2>&1 || true
+  # so this launch re-captures fresh facts from the login shell. A missing key is fine (first run /
+  # already clean); a failed delete of an existing key aborts via set -e rather than launching with
+  # the stale snapshot still pinned.
+  if /usr/bin/defaults read "$BUNDLE_ID" runway.shellEnvSnapshot.v1 >/dev/null 2>&1; then
+    /usr/bin/defaults delete "$BUNDLE_ID" runway.shellEnvSnapshot.v1
+  fi
   env -u CLAUDE_CONFIG_DIR -u CODEX_HOME /usr/bin/open -n "$APP_BUNDLE"
 }
 
