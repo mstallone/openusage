@@ -22,6 +22,31 @@ private final class StallingProviderRuntime: ProviderRuntime {
     }
 }
 
+/// A runtime that keeps working through cancellation for a bounded while (a provider suspended in
+/// a non-cancellable operation) — the case a cancel-then-await timeout can never unblock.
+@MainActor
+private final class CancellationIgnoringProviderRuntime: ProviderRuntime {
+    let provider: Provider
+    let widgetDescriptors: [WidgetDescriptor]
+    let snapshot: ProviderSnapshot
+
+    init(provider: Provider, descriptors: [WidgetDescriptor], snapshot: ProviderSnapshot) {
+        self.provider = provider
+        self.widgetDescriptors = descriptors
+        self.snapshot = snapshot
+    }
+
+    func refresh() async -> ProviderSnapshot {
+        // Each sleep throws immediately once cancelled, but the loop presses on regardless —
+        // bounded at ~2s so the orphaned racer exits after the test.
+        let end = Date().addingTimeInterval(2)
+        while Date() < end {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return snapshot
+    }
+}
+
 @MainActor
 final class WidgetDataStoreTimeoutTests: XCTestCase {
     func testHungProviderRefreshTimesOutIntoErrorAndBackoff() async {
@@ -89,6 +114,42 @@ final class WidgetDataStoreTimeoutTests: XCTestCase {
 
         XCTAssertEqual(outcome, .refreshed)
         XCTAssertNil(store.providerErrors[provider.id])
+    }
+
+    func testDeadlineFiresWithoutAwaitingANonCancellableProvider() async {
+        let provider = Provider(id: "stubborn", displayName: "Stubborn", icon: .providerMark("codex"))
+        let descriptor = WidgetDescriptor(
+            id: "stubborn.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let runtime = CancellationIgnoringProviderRuntime(
+            provider: provider,
+            descriptors: [descriptor],
+            snapshot: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Session", used: 1, limit: 100, format: .percent)]
+            )
+        )
+        let registry = WidgetRegistry(providers: [provider], descriptors: [descriptor])
+        let store = WidgetDataStore(
+            registry: registry,
+            providers: [runtime],
+            defaults: makeUserDefaults("refresh-timeout-stubborn"),
+            providerRefreshTimeout: 0.05
+        )
+
+        let start = Date()
+        let outcome = await store.refresh(providerID: provider.id, force: true)
+
+        // The whole point of the deadline race: the provider ignores cancellation for ~2s, but the
+        // store must report the timeout as soon as the deadline fires, not when the provider deigns
+        // to return.
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
+        XCTAssertEqual(store.providerErrors[provider.id], "Refresh timed out after 0s")
     }
 
     private func makeUserDefaults(_ name: String) -> UserDefaults {
