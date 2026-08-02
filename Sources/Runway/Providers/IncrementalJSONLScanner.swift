@@ -235,8 +235,13 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
                 )
                 parsedPaths.insert(file.path)
             case .appended(let newItems, let offset, let state, let fingerprint):
+                // Cache the PARSED size (`offset`), not the discovered stat size: a tail can end in
+                // an unterminated fragment past the last newline, and caching the stat size would
+                // mark those bytes as covered — if the writer stopped there, the fragment's record
+                // would never be counted. With the parsed size, the next scan sees a size mismatch
+                // and re-attempts the tail (or falls back to a full parse), so the record lands.
                 nextCache[file.path] = CachedFile(
-                    size: file.size, mtime: file.mtime,
+                    size: offset, mtime: file.mtime,
                     items: (resumeItems[file.path] ?? []) + newItems,
                     parsedOffset: offset, resumeState: state, tailFingerprint: fingerprint
                 )
