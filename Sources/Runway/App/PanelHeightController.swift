@@ -95,6 +95,15 @@ final class PanelHeightController {
         saveHeight(visualHeight, for: currentScreen())
     }
 
+    /// Saves after the close-time hidden settle, when the collapse re-measure has walked the visual
+    /// height down from the value `saveBeforeClosing` recorded. Deliberately not visibility-guarded:
+    /// the panel is already ordered out, and this settled value — not the expanded one — is what the
+    /// next open's remembered guess should be. Call before `finishClosing()`, while the closing
+    /// screen's clamp anchor is still recorded.
+    func saveAfterHiddenSettle() {
+        saveHeight(visualHeight, for: currentScreen())
+    }
+
     /// Clears all opening-session state after the panel is ordered out.
     func finishClosing() {
         anchorTopLeft = nil
