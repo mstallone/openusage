@@ -78,24 +78,59 @@ final class AntigravityProvider: ProviderRuntime {
         var lines: [MetricLine]
     }
 
+    /// When the last pass found no language-server process, skip the process-table scans for this
+    /// long. Each scan is two `/bin/ps -ax` dumps (~240 KB of output each) plus `lsof` probes, and
+    /// on a machine without Antigravity running that cost repeated every 5 minutes forever. The
+    /// cloud fallback still runs every pass; a user who starts Antigravity mid-session gets
+    /// language-server data again within this window.
+    private static let noProcessProbeCooldown: TimeInterval = 15 * 60
+    private var lastNoProcessProbe: Date?
+
+    /// What a language-server probe learned, so `probe()` can negative-cache only the safe case:
+    /// `noProcess` (nothing to talk to) is cacheable; `unreachable` (a process exists but no
+    /// endpoint answered) must retry next pass — the server may just be starting up.
+    private enum ProbeLSOutcome {
+        case found(StrategyResult)
+        case noProcess
+        case unreachable
+    }
+
     private func probe() async throws -> StrategyResult {
-        if let result = await probeLS(
-            processName: "language_server",
-            markers: ["antigravity", "antigravity-ide"],
-            csrfFlag: "--csrf_token",
-            portFlag: "--extension_server_port"
-        ) {
-            return result
-        }
-        if let result = await probeLS(processName: "agy", markers: [], csrfFlag: "", portFlag: nil) {
-            return result
+        let skipProcessScan = lastNoProcessProbe.map {
+            now().timeIntervalSince($0) < Self.noProcessProbeCooldown
+        } ?? false
+        if !skipProcessScan {
+            var sawProcess = false
+            probes: for attempt in 0..<2 {
+                let outcome = attempt == 0
+                    ? await probeLS(
+                        processName: "language_server",
+                        markers: ["antigravity", "antigravity-ide"],
+                        csrfFlag: "--csrf_token",
+                        portFlag: "--extension_server_port"
+                    )
+                    : await probeLS(processName: "agy", markers: [], csrfFlag: "", portFlag: nil)
+                switch outcome {
+                case .found(let result):
+                    lastNoProcessProbe = nil
+                    return result
+                case .unreachable:
+                    sawProcess = true
+                    break probes
+                case .noProcess:
+                    continue
+                }
+            }
+            if !sawProcess {
+                lastNoProcessProbe = now()
+            }
         }
         return try await probeCloudCode()
     }
 
     // MARK: - Language server
 
-    private func probeLS(processName: String, markers: [String], csrfFlag: String, portFlag: String?) async -> StrategyResult? {
+    private func probeLS(processName: String, markers: [String], csrfFlag: String, portFlag: String?) async -> ProbeLSOutcome {
         let discovery = self.discovery
         let options = LanguageServerDiscovery.Options(
             processName: processName,
@@ -103,7 +138,9 @@ final class AntigravityProvider: ProviderRuntime {
             csrfFlag: csrfFlag,
             portFlag: portFlag
         )
-        guard let discovered = await loadOffMainActor({ discovery.discover(options) }) else { return nil }
+        guard let discovered = await loadOffMainActor({ discovery.discover(options) }) else {
+            return .noProcess
+        }
 
         // HTTPS first (the LS serves a self-signed cert), then HTTP, then the HTTP-only extension port.
         var endpoints: [(scheme: String, port: Int)] = []
@@ -130,7 +167,7 @@ final class AntigravityProvider: ProviderRuntime {
                            (200..<300).contains(status.statusCode) {
                             plan = AntigravityUsageMapper.parseUserStatus(status.body)?.plan
                         }
-                        return StrategyResult(plan: plan, lines: lines)
+                        return .found(StrategyResult(plan: plan, lines: lines))
                     }
                     // 2xx but not a summary payload — the parser warned; fall to the legacy flow.
                 } else if summary.statusCode != 404 {
@@ -148,7 +185,7 @@ final class AntigravityProvider: ProviderRuntime {
 
             if let parsed = AntigravityUsageMapper.parseUserStatus(response.body) {
                 let lines = AntigravityUsageMapper.buildLines(parsed.configs)
-                if !lines.isEmpty { return StrategyResult(plan: parsed.plan, lines: lines) }
+                if !lines.isEmpty { return .found(StrategyResult(plan: parsed.plan, lines: lines)) }
             }
 
             // The endpoint answered but GetUserStatus had nothing usable — try the documented fallback.
@@ -156,10 +193,10 @@ final class AntigravityProvider: ProviderRuntime {
                (200..<300).contains(fallback.statusCode),
                let configs = AntigravityUsageMapper.parseCommandModelConfigs(fallback.body) {
                 let lines = AntigravityUsageMapper.buildLines(configs)
-                if !lines.isEmpty { return StrategyResult(plan: nil, lines: lines) }
+                if !lines.isEmpty { return .found(StrategyResult(plan: nil, lines: lines)) }
             }
         }
-        return nil
+        return .unreachable
     }
 
     // MARK: - Cloud Code

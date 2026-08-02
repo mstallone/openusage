@@ -78,5 +78,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // A quit mid-refresh must not drop completed providers' snapshot-cache writes: batch passes
         // coalesce persistence, so flush whatever is pending before the process goes away.
         container?.dataStore.flushPendingSnapshotWork()
+        // File-log appends run on a background queue; drain them so the log's tail survives a quit.
+        AppLog.flushFileSink()
     }
 }

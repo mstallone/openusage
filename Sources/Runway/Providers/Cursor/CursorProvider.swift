@@ -179,7 +179,9 @@ final class CursorProvider: ProviderRuntime {
         }
         let pricing = await pricing()
         do {
-            let parsed = try CursorUsageCSV.parse(csv: csv, pricing: pricing)
+            // Off the main actor: a heavy user's 30-day export is thousands of rows of date
+            // parsing and pricing lookups, and this refresh path is MainActor-isolated.
+            let parsed = try await loadOffMainActor { try CursorUsageCSV.parse(csv: csv, pricing: pricing) }
             if parsed.rejectedRowCount > 0 {
                 AppLog.warn(
                     LogTag.plugin("cursor"),

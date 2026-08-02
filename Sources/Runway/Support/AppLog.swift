@@ -81,6 +81,12 @@ enum AppLog {
     /// gate actually writes; production uses the shared `~/Library/Logs/Runway/Runway.log` appender.
     nonisolated(unsafe) static var sink: LogFile = .shared
 
+    /// File appends run here, off the caller's thread: a refresh pass emits dozens of lines, and
+    /// each append is a blocking syscall that used to land on whatever thread logged — including
+    /// the main actor. os_log stays synchronous, so a crash still captures the final lines in the
+    /// system log; only the file copy trails by the queue depth. `flushFileSink()` drains it.
+    private static let sinkQueue = DispatchQueue(label: "runway.logfile", qos: .utility)
+
     // MARK: - Lifecycle
 
     /// Open/trim the file, seed the cached level, and emit one startup line. Call FIRST at launch,
@@ -145,7 +151,18 @@ enum AppLog {
         logger(for: tag).log(level: level.osType, "[\(tag, privacy: .public)] \(redacted, privacy: .public)")
 
         let timestamp = RunwayISO8601.string(from: Date())
-        sink.append("\(timestamp) [\(level.label)] [\(tag)] \(redacted)")
+        // Capture the sink instance now: tests swap `sink`, and their lines must not land in a
+        // sink installed later.
+        let sink = self.sink
+        sinkQueue.async {
+            sink.append("\(timestamp) [\(level.label)] [\(tag)] \(redacted)")
+        }
+    }
+
+    /// Drain pending file appends. App termination calls this so the log's tail survives a quit;
+    /// tests call it before asserting on sink contents.
+    static func flushFileSink() {
+        sinkQueue.sync {}
     }
 
     private static func logger(for tag: String) -> Logger {

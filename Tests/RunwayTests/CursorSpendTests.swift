@@ -469,7 +469,18 @@ private final class FakeSQLite: SQLiteAccessing, @unchecked Sendable {
     var values: [String: String]
     init(values: [String: String] = [:]) { self.values = values }
     func queryValue(path: String, sql: String) throws -> String? {
-        for (key, value) in values where sql.contains(key) { return value }
+        // The batched read folds matching keys into one JSON object, like sqlite's
+        // `json_group_object` does.
+        if sql.contains("json_group_object") {
+            var object: [String: String] = [:]
+            for (key, value) in values where sql.contains("'\(key)'") { object[key] = value }
+            guard !object.isEmpty else { return nil }
+            let data = try JSONSerialization.data(withJSONObject: object)
+            return String(decoding: data, as: UTF8.self)
+        }
+        for (key, value) in values where sql.contains(key) {
+            return value
+        }
         return nil
     }
     func execute(path: String, sql: String) throws {}

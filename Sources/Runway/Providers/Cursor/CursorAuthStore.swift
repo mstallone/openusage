@@ -52,11 +52,14 @@ struct CursorAuthStore: Sendable {
     }
 
     func loadAuthState() -> CursorAuthState? {
-        let sqliteAccessToken = readStateValue(Self.accessTokenKey)
-        let sqliteRefreshToken = readStateValue(Self.refreshTokenKey)
-        let sqliteMembershipType = readStateValue(Self.membershipTypeKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        // One `sqlite3` subprocess for all three keys instead of one per key — this runs on every
+        // Cursor refresh, and each spawn costs a process launch plus pipe drains.
+        let stateValues = readStateValues([
+            Self.accessTokenKey, Self.refreshTokenKey, Self.membershipTypeKey,
+        ])
+        let sqliteAccessToken = stateValues[Self.accessTokenKey]
+        let sqliteRefreshToken = stateValues[Self.refreshTokenKey]
+        let sqliteMembershipType = stateValues[Self.membershipTypeKey]?.lowercased()
 
         let keychainAccessToken = readKeychainValue(Self.keychainAccessTokenService)
         let keychainRefreshToken = readKeychainValue(Self.keychainRefreshTokenService)
@@ -112,11 +115,22 @@ struct CursorAuthStore: Sendable {
         }
     }
 
-    private func readStateValue(_ key: String) -> String? {
-        let sql = "SELECT value FROM ItemTable WHERE key = '\(Self.sqlEscaped(key))' LIMIT 1;"
-        guard let value = try? sqlite.queryValue(path: Self.stateDBPath, sql: sql) else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    /// All requested keys in one query. `json_group_object` folds the matching rows into a single
+    /// JSON object value, so the one-value `queryValue` contract still fits; a missing key is
+    /// simply absent from the object, and no rows at all yields NULL (→ empty dictionary), the
+    /// same nil-per-key result the per-key reads produced. Values come back trimmed.
+    private func readStateValues(_ keys: [String]) -> [String: String] {
+        let list = keys.map { "'\(Self.sqlEscaped($0))'" }.joined(separator: ", ")
+        let sql = "SELECT json_group_object(key, value) FROM ItemTable WHERE key IN (\(list));"
+        guard let raw = try? sqlite.queryValue(path: Self.stateDBPath, sql: sql),
+              let object = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: String]
+        else { return [:] }
+        var values: [String: String] = [:]
+        for (key, value) in object {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { values[key] = trimmed }
+        }
+        return values
     }
 
     private func writeStateValue(_ key: String, _ value: String) throws {
