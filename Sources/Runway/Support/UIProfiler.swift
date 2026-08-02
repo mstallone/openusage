@@ -127,10 +127,22 @@ enum UIProfiler {
                     await pause(1.2)
                 }
             } else {
-                mark("no expandable provider found")
+                // Loud, greppable failure: a run whose expand phase toggled nothing must not read
+                // as a clean no-stall result. profile_ui.sh exits non-zero on this marker.
+                mark("ERROR expand phase skipped: no rendered provider has a caret")
             }
 
             mark("PHASE refresh-while-open")
+            // A launch-time refresh still fetching a slow provider would make the forced pass skip
+            // it (the per-provider in-flight guard), silently excluding the slowest work from this
+            // phase. Drain in-flight refreshes first, bounded so a wedged provider can't hang the
+            // whole script.
+            for _ in 0..<120 where !dataStore.refreshingProviderIDs.isEmpty {
+                await pause(0.5)
+            }
+            if !dataStore.refreshingProviderIDs.isEmpty {
+                mark("WARNING refresh phase started with providers still in flight: \(dataStore.refreshingProviderIDs.sorted().joined(separator: ","))")
+            }
             await dataStore.refreshAll(force: true)
             mark("refresh returned")
             await pause(3)
