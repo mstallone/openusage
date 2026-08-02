@@ -28,14 +28,17 @@ final class DashboardClock {
         perSecond = now
         halfMinute = now
         ticker = Task { @MainActor [weak self] in
-            var beat = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled else { return }
-                self.perSecond = Date()
-                beat += 1
-                if beat.isMultiple(of: 30) {
-                    self.halfMinute = self.perSecond
+                let now = Date()
+                self.perSecond = now
+                // Elapsed wall time, not loop iterations: counting beats under-reports across a
+                // system sleep or a blocked main actor (one resumed sleep ≠ one second), which
+                // left reset countdowns up to 29 ticks stale after wake. Comparing dates makes the
+                // first tick after any gap ≥30s refresh the dated rows immediately.
+                if now.timeIntervalSince(self.halfMinute) >= 30 {
+                    self.halfMinute = now
                 }
             }
         }
