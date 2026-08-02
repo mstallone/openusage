@@ -70,14 +70,30 @@ iCloud account as the Macs.
 
 ## Releasing (TestFlight)
 
-The iOS app ships from the same `v*` tag as the Mac app: the release workflow's "iOS TestFlight"
-job archives the app, signs it, and uploads it to App Store Connect, which serves it to internal
-TestFlight testers once Apple finishes processing. A follow-up "TestFlight External" job then
-waits for that processing, adds the build to the external tester group(s), and submits it for
-Beta App Review — external testers receive it when Apple approves (`script/testflight_distribute.mjs`
-does that through the App Store Connect API). Testers install and update through the TestFlight
-app — there is no Sparkle feed on iOS, and no notarization either (the App Store Connect upload
-plays that role).
+The iOS app ships from the same `v*` tag as the Mac app — when the release actually touches it.
+An "iOS Gate" job (`script/testflight_gate.mjs`) checks what changed since the last build the
+external TestFlight testers actually received: a Mac-only release skips the iOS jobs entirely, because every
+upload is a new version that goes through a fresh Beta App Review and pushes a pointless update
+at testers. When the gate says
+ship, the "iOS TestFlight" job archives the app, signs it, and uploads it to App Store Connect,
+which serves it to internal TestFlight testers once Apple finishes processing. A follow-up
+"TestFlight External" job then waits for that processing, adds the build to the external tester
+group(s), and submits it for Beta App Review — external testers receive it when Apple approves
+(`script/testflight_distribute.mjs` does that through the App Store Connect API). Testers install
+and update through the TestFlight app — there is no Sparkle feed on iOS, and no notarization
+either (the App Store Connect upload plays that role).
+
+The gate ships when anything under `ios/` or the TestFlight pipeline scripts changed since the
+newest processed build present in every external TestFlight group (its version names the tag it
+was built from, so a failed upload or a failed external distribution never advances the baseline
+and its changes cannot be stranded by a later Mac-only tag), and also when that build is older
+than 60 days — TestFlight builds expire 90 days after upload, so an unchanged app still re-ships
+before testers' installs go dark. Beta App Review approval is deliberately not part of the
+baseline: it stays pending for up to a day after every ship, and waiting on it would re-submit
+identical builds. This means TestFlight can lag the Mac version (say, 0.8.9 on the Mac while TestFlight
+shows 0.8.5); that is expected and harmless — a Mac-side change that matters to the phone must
+update the wire decoders in `ios/`, which trips the gate. To ship iOS regardless, run the Release
+workflow manually with the `force_ios` input checked.
 
 - The version is the tag (`v0.7.1` → `0.7.1`) and the build number is the git commit count, both
   injected at build time — the `MARKETING_VERSION` in the Xcode project is never bumped by hand.
