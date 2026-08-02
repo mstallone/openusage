@@ -26,7 +26,7 @@ protocol HTTPClient: Sendable {
 // headers and token-bearing bodies would leak. The Debug line carries the method, the redacted URL, and
 // the status code. On an HTTP error (>= 400) a redacted, truncated (<= 500 byte) preview of the body is
 // added at Debug to aid diagnosis — never the full body, and always run through `LogRedaction.bodyPreview`
-// first (which strips JWTs, api keys, and sensitive JSON values exactly like the Tauri host API did).
+// first (which strips JWTs, api keys, and sensitive JSON values).
 
 struct URLSessionHTTPClient: HTTPClient {
     /// When true, requests use a loopback session that accepts a self-signed TLS cert for `127.0.0.1`

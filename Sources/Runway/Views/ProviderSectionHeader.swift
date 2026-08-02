@@ -98,7 +98,7 @@ struct ProviderSectionHeader: View {
                     // squeeze from a long account name and render as a clipped glyph fragment (half an "O"
                     // reading as a stray "(" after the plan). It must stay legible rather than sliver or
                     // vanish — staleness can occur with no warning triangle (wake-from-sleep aging), making
-                    // this the only signal that the values are fossilized (#582) — so the name yields
+                    // this the only signal that the values are fossilized (upstream #582) — so the name yields
                     // instead; its tail stays recoverable through the hover marquee.
                     if let staleness, !refreshing {
                         Text(staleness.label)

@@ -1,8 +1,8 @@
 import Foundation
 import Network
 
-/// Optional proxy routing for provider HTTP requests — the same contract as the original app
-/// (docs/proxy.md): `~/.runway/config.json` containing
+/// Optional proxy routing for provider HTTP requests, as documented in docs/proxy.md:
+/// `~/.runway/config.json` containing
 /// `{"proxy": {"enabled": true, "url": "socks5://127.0.0.1:10808"}}`.
 ///
 /// Loaded once at startup; restart the app after editing the file. Missing, disabled, invalid, or
@@ -40,7 +40,7 @@ struct ProxyConfig: Equatable, Sendable {
     )
 
     /// Parses config-file text. `nil` unless `proxy.enabled == true` with a valid socks5/http/https
-    /// URL — the silent-disable behavior the original documents.
+    /// URL — the silent-disable behavior docs/proxy.md documents.
     static func load(text: String?) -> ProxyConfig? {
         guard let text,
               let data = text.data(using: .utf8),

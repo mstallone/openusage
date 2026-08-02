@@ -1,10 +1,10 @@
 # iCloud Sync
 
-**Sync Across Macs** is on by default and can be turned off in Settings. While it is on, each
+**Sync Across Macs** is on by default; you can turn it off in Settings. While it is on, each
 device keeps one versioned record in
 Runway's private CloudKit database — part of your own iCloud account — and reads the records written
-by your other devices. A random device ID is kept in the login Keychain so the same Mac continues
-updating its existing record after app preferences are reset or the app is reinstalled. There is no
+by your other devices. Runway keeps a random device ID in the login Keychain, so the same Mac
+continues to update its existing record after you reset app preferences or reinstall the app. There is no
 folder picker, pairing code, or separate account.
 
 Each device's record has two parts:
@@ -18,9 +18,9 @@ Each device's record has two parts:
   part exists for companion apps (such as the iOS app) that show live usage without holding any
   provider credentials.
 
-Records never contain credentials, raw logs, or raw provider responses. Disabling a provider
-immediately removes its peer contributions from the combined view and omits it from this device's
-next record, while its local cached snapshot remains.
+Records never contain credentials, raw logs, or raw provider responses. When you disable a
+provider, Runway immediately removes its peer contributions from the combined view and omits it
+from this device's next record; its local cached snapshot remains.
 
 Runway combines the valid history payloads in memory and rebuilds Today, Yesterday, Last 30 Days,
 Usage Trend, unknown-model warnings, and model breakdowns. The same combined spend rows feed the
@@ -46,9 +46,9 @@ card belongs to (an opaque account/organization identifier — never an email), 
 merges into the same card everywhere, even when one Mac shows it as the main card and another as an
 extra account card.
 
-An account you use on another Mac but have no login for here doesn't become a card: it appears as
-its own slice in **Total Spend**, named by its account code ("claude@ab12cd34") — so the number at
-the top is the whole truth across your Macs, and several such accounts stay tellable apart. That
+An account you use on another Mac but have no login for here doesn't become a card. It appears as
+its own slice in **Total Spend**, named by its account code ("claude@ab12cd34"). So the number at
+the top is the whole truth across your Macs, and you can tell several such accounts apart. That
 code is the same id the account's card carries on any Mac it's signed in on (the synced record holds
 no emails or names to label it with). The moment you log that account in locally, its card appears —
 under that same id — with the full cross-machine history already attached.

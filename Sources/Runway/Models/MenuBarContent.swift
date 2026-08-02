@@ -77,7 +77,8 @@ struct MenuBarContent: Equatable {
 
 @MainActor
 enum MenuBarContentBuilder {
-    /// Max bars the compact style renders (matches the original OpenUsage tray).
+    /// Max bars the compact style renders — the Tauri edition's tray cap, kept so the glyph stays
+    /// legible at menu-bar size.
     static let maxBars = 4
     /// The Text strip has room for two stacked values per provider.
     static let maxMetricsPerGroup = 2

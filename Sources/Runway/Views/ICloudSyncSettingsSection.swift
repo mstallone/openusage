@@ -15,8 +15,8 @@ struct ICloudSyncSettingsSection: View {
                     .foregroundStyle(.secondary)
                     .hoverTooltip(
                         "Runway syncs each Mac's calculated usage history and latest usage snapshot "
-                            + "through your private iCloud database. Credentials and logs are never "
-                            + "shared."
+                            + "through your private iCloud database. Runway never shares your "
+                            + "credentials or logs."
                     )
             }
             .padding(.horizontal, 8)

@@ -2,9 +2,10 @@ import Foundation
 import Network
 
 /// Loopback-only HTTP/1.1 listener for the read-only usage API on `127.0.0.1:6736`. Starts with
-/// the app; when the port is already taken the feature is silently disabled for the session
-/// (matching the original app). At most 16 requests are served concurrently — beyond that a
-/// connection gets `503 {"error":"server_busy"}` immediately.
+/// the app; when the port is already taken the feature is silently disabled for the session — a
+/// deliberate carry-over of the original app's behavior, so a second running copy doesn't spam
+/// errors. At most 16 requests are served concurrently — beyond that a connection gets
+/// `503 {"error":"server_busy"}` immediately.
 @MainActor
 final class LocalUsageServer {
     static let port: UInt16 = 6736

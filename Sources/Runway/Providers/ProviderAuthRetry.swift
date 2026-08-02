@@ -1,6 +1,6 @@
 import Foundation
 
-/// The authenticated-fetch sequence every OAuth-style provider ports from its JS plugin, written
+/// The authenticated-fetch sequence shared by every OAuth-style provider, written
 /// once: attempt → on 401/403 refresh the token → retry once → a second 401/403 is a hard auth
 /// failure. Anything that isn't an auth failure (success, 429, 5xx) returns untouched for the
 /// provider's mapper to interpret, so rate-limit and server-error handling stay per-provider.

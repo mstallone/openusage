@@ -1202,7 +1202,7 @@ final class ClaudeProviderTests: XCTestCase {
     func testRateLimitServesLastGoodUsageThenBacksOff() async {
         // Tier 2: once a live fetch succeeds, a subsequent 429 keeps showing the cached bars (with a
         // staleness note) instead of a bare badge, and the cooldown then skips the live call entirely so
-        // a constantly-limited endpoint isn't hammered. Mirrors the legacy plugin's cache + 429 backoff.
+        // a constantly-limited endpoint isn't hammered.
         let t0 = RunwayISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let clock = TestClock(t0)
         let usageCalls = CallCounter()

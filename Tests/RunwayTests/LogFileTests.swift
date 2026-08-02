@@ -1,9 +1,8 @@
 import XCTest
 @testable import Runway
 
-/// Covers the resolved path suffix (mirrors the Tauri `builds_log_file_path_from_log_dir` test) and
-/// the 10 MB single-archive rotation / launch-time trim. All file I/O is confined to a per-test temp
-/// directory — never touches `~/Library/Logs`.
+/// Covers the resolved path suffix and the 10 MB single-archive rotation / launch-time trim. All
+/// file I/O is confined to a per-test temp directory — never touches `~/Library/Logs`.
 final class LogFileTests: XCTestCase {
     private var tempDir: URL!
 

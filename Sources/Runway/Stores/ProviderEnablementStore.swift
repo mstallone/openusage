@@ -96,10 +96,6 @@ final class ProviderEnablementStore {
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
-    /// Switches the store into enabled-list mode with exactly `ids` on. Used by `FirstRunSeeder` on
-    /// fresh installs only — first synchronously with the fallback set, then again with the detected
-    /// set. Fires `onProviderEnabled` for each newly-on provider and posts the change notification, so
-    /// the refresh loop fetches them promptly.
     /// Records `ids` as seen and returns the ones that were new. Pure bookkeeping: no enablement
     /// change, no notification — `NewProviderSeeder` decides separately what to do with the new ones.
     @discardableResult
@@ -111,6 +107,10 @@ final class ProviderEnablementStore {
         return new
     }
 
+    /// Switches the store into enabled-list mode with exactly `ids` on. Used by `FirstRunSeeder` on
+    /// fresh installs only — first synchronously with the fallback set, then again with the detected
+    /// set. Fires `onProviderEnabled` for each newly-on provider and posts the change notification, so
+    /// the refresh loop fetches them promptly.
     func seedEnabledProviders(_ ids: Set<String>) {
         let newlyEnabled = ids.filter { !isEnabled($0) }
         let changed = enabledIDs != ids

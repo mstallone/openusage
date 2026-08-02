@@ -30,7 +30,7 @@ final class ClaudeProvider: ProviderRuntime {
     /// is a long-lived singleton). `/api/oauth/usage` rate-limits aggressively, so on a 429 we serve the
     /// last-good bars with a staleness note instead of blanking the dashboard, and skip the live call
     /// entirely until the cooldown expires so we don't keep hammering an endpoint that's already limiting
-    /// us. Mirrors the legacy plugin's `cachedUsageData` + `rateLimitedUntilMs`.
+    /// us.
     private var cachedCredentialFingerprint: Data?
     private var lastGoodUsage: ClaudeMappedUsage?
     private var rateLimitedUntil: Date?

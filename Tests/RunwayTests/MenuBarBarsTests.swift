@@ -1,7 +1,7 @@
 import XCTest
 @testable import Runway
 
-/// Covers `MenuBarBarGeometry` — the 1:1 port of the original tray bars' fill math: near-full
+/// Covers `MenuBarBarGeometry` — the menu-bar bars' fill math: near-full
 /// quantization and the minimum-visible remainder, so a nearly-full bar never reads as 100%.
 final class MenuBarBarsTests: XCTestCase {
     func testZeroOrNegativeFractionDrawsNothing() {

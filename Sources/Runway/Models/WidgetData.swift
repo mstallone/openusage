@@ -282,8 +282,8 @@ struct WidgetData: Hashable {
         case .percent:
             return nil
         case .dollars:
-            // Mirror the original OpenUsage panel: a bounded dollar metric's secondary line reads
-            // "$<limit> limit" — no "of" prefix, and cents only when the limit isn't a whole dollar.
+            // A bounded dollar metric's secondary line reads "$<limit> limit" — no "of" prefix, and
+            // cents only when the limit isn't a whole dollar.
             guard let limit else { return nil }
             let digits = limit.rounded() == limit ? 0 : 2
             let amount = Formatters.currency(limit, fractionDigits: digits)
@@ -597,9 +597,9 @@ extension WidgetData {
     /// once you send your first message, so there's no live countdown to show yet.
     static let freshSessionTooltip = "Sessions start after you send your first message."
 
-    /// Hover tooltip for the reset label: the *opposite* format from what's shown, mirroring the
-    /// original's `formatResetTooltipText`. A fresh ("Not started") session explains itself instead of
-    /// showing a reset time, since the window hasn't begun counting down.
+    /// Hover tooltip for the reset label: the *opposite* format from what's shown. A fresh
+    /// ("Not started") session explains itself instead of showing a reset time, since the window
+    /// hasn't begun counting down.
     func resetTooltip(now: Date = Date()) -> String? {
         if isFreshSessionWindow(now: now) { return Self.freshSessionTooltip }
         guard hasResetLabel(now: now), let resetsAt else { return nil }

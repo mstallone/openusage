@@ -40,7 +40,7 @@ enum ZAIAuthError: Error, LocalizedError, Equatable {
 /// in a shell profile is honored even in a packaged build; the config file remains the explicit path.
 ///
 /// `ZAI_API_KEY` is the primary name; `GLM_API_KEY` is accepted as a fallback (the older Zhipu name
-/// some users still export), mirroring the legacy plugin's lookup order.
+/// some users still export).
 struct ZAIAuthStore: Sendable {
     /// Config files checked in order; first readable key wins. JSON (`apiKey` / `api_key` / `key`) or a
     /// plain-text file containing only the key.

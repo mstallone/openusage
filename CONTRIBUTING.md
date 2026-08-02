@@ -1,6 +1,6 @@
 # Contributing to Runway
 
-Runway accepts contributions through a strict, issue-first workflow, and the quality bar is deliberately high. **By design, most external pull requests are closed** — any that don't follow the rules below are closed without review. Read this entire document before opening a PR.
+Runway accepts contributions through a strict, issue-first workflow, and the quality bar is deliberately high. **By design, most external pull requests are closed** — any that don't follow the rules below are closed without review. Read this entire document before you open a PR.
 
 ## Philosophy
 
@@ -26,7 +26,7 @@ External pull requests are **closed without review** if they:
 - **Have no approved issue** — they don't link an open issue labeled `approved`.
 - **Are too large** — they change more than 1,000 lines. Split the work into smaller PRs.
 
-Closures aren't personal and are reversible: get the issue approved (or fix the problem), then reopen or open a focused replacement. Maintainers and collaborators may open PRs directly.
+Closures aren't personal and are reversible: get the issue approved (or fix the problem), then reopen or open a focused replacement. Maintainers and collaborators can open PRs directly.
 
 ## License Agreement
 
@@ -36,7 +36,7 @@ By submitting a pull request, you agree that your contribution is licensed under
 
 ### Fork and PR workflow
 
-1. Open an issue describing the change, and wait for a maintainer to approve it with the `approved` label
+1. Open an issue that describes the change, and wait for a maintainer to approve it with the `approved` label
 2. Fork the repo
 3. Create a branch (`feat/my-change`, `fix/some-bug`, etc.)
 4. Make only the approved change
@@ -53,7 +53,7 @@ Each provider is a small Swift module under `Sources/Runway/Providers/<Name>/` t
 4. Add focused tests under `Tests/RunwayTests/`
 5. Add a provider page in `docs/providers/` (metrics, credential sources, endpoints, troubleshooting)
 6. Test it locally with `./script/build_and_run.sh`
-7. Open a PR describing how you verified it working
+7. Open a PR that describes how you verified the provider works
 
 You can also [open an issue](https://github.com/mstallone/runway/issues/new?template=new_provider.yml) to request a provider without building it yourself.
 
@@ -97,8 +97,8 @@ Don't open a PR for a feature without an approved issue first. [Open an issue](h
 
 - [@mstallone](https://github.com/mstallone) (owner)
 
-All PRs require maintainer approval before merging.
-Release tags (`v*`) are owner-managed and can only be created by [@mstallone](https://github.com/mstallone).
+All PRs require maintainer approval before they merge.
+Only the owner, [@mstallone](https://github.com/mstallone), can create release tags (`v*`).
 
 ## Questions?
 

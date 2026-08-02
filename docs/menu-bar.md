@@ -10,7 +10,7 @@ Right-click (or control-click) the menu bar icon for a quick menu with **Setting
 
 Star a metric from any row's right-click menu, or from the always-visible star beside a metric in Customize.
 
-- On first launch the app ships with a default set of stars (Antigravity Session/Weekly, Claude Session/Weekly, Codex Weekly, Cursor Auto Usage/API Usage, Copilot Credits, OpenRouter Credits, Z.ai Session/Weekly) so the strip shows numbers right away. Each discovered Claude or Codex account card gets its family's same default stars, with values from that account; a secondary card discovered later receives them once and then keeps your changes. Change them anytime; a provider's Reset restores its defaults, and Reset All restores the full set. Only providers that are turned on render in the strip — and a fresh install starts with just the providers detected on your Mac (see [Dashboard § First launch](dashboard.md#first-launch)) — so the default stars don't crowd the menu bar with tools you don't use.
+- On first launch the app ships with a default set of stars (Antigravity Session/Weekly, Claude Session/Weekly, Codex Weekly, Cursor Auto Usage/API Usage, Copilot Credits, OpenRouter Credits, Z.ai Session/Weekly) so the strip shows numbers right away. Each discovered Claude or Codex account card gets its family's same default stars, with values from that account; a secondary card discovered later receives them once and then keeps your changes. Change them anytime; a provider's Reset restores its defaults, and Reset All restores the full set. Only providers that are turned on render in the strip. A fresh install starts with just the providers detected on your Mac (see [Dashboard § First launch](dashboard.md#first-launch)). So the default stars don't crowd the menu bar with tools you don't use.
 - At most **2 applicable stars per provider**. If an account or plan change makes a starred metric
   unavailable, Runway keeps that preference for a future switch back, but the dormant star does not
   consume one of the current account's two slots. If a later switch makes more than two saved stars
@@ -26,9 +26,9 @@ Settings → Appearance → Icon Style:
 
 ## Hiding usage while screen sharing
 
-Settings → General → Privacy → **Hide From Screen Share** (off by default). While your screen is being shared or recorded — a Zoom/Meet/Teams share, a screen recording, macOS Screen Sharing — the strip is replaced with the Runway icon and wordmark, so token counts and spend never show up in front of an audience. The moment the capture ends, your starred metrics come right back. Captures you start yourself (a screen recording, for example) count too, so those get the wordmark as well.
+Settings → General → Privacy → **Hide From Screen Share** (off by default). While your screen is shared or recorded — a Zoom/Meet/Teams share, a screen recording, macOS Screen Sharing — the strip shows the Runway icon and wordmark instead. Token counts and spend never show up in front of an audience. The moment the capture ends, your starred metrics come right back. Captures you start yourself (a screen recording, for example) count too, so those get the wordmark as well.
 
-Detection rides the system's own "an app is capturing the screen" signal — the same one that lights the capture indicator in the menu bar — checked the instant it changes and re-checked every few seconds while the setting is on.
+Detection uses the system's own "an app is capturing the screen" signal — the same one that lights the capture indicator in the menu bar. Runway checks it the instant it changes, and again every few seconds while the setting is on.
 
 Normally:
 
@@ -42,11 +42,11 @@ While the screen is shared or recorded:
 
 On MacBooks with a notch, a crowded menu bar can push the Runway item underneath it — the item still exists, but you can't see or click it. Runway watches for this and recovers on its own:
 
-1. **Move back into view** — the item's remembered menu-bar position is rewritten so it re-lands just right of the notch. This is the normal outcome; you may notice the strip hop.
+1. **Move back into view** — the item's remembered menu-bar position is rewritten so it re-lands just right of the notch. This is the normal outcome; the strip can hop visibly.
 2. **Surrogate button** — if the move doesn't stick, a small round Runway button appears just below the menu bar next to the notch. Click it to open the dashboard, drag it anywhere, or right-click → Hide Until Relaunch.
 3. Either way, the dashboard always opens beside the notch where you can see it, never centered under it.
 
-Freeing up menu bar space (quitting other menu bar apps, or using a menu bar manager) returns everything to normal automatically.
+Free up menu bar space (quit other menu bar apps, or use a menu bar manager) and everything returns to normal automatically.
 
 On macOS 27 and later this recovery is disabled: the system manages menu-bar overflow natively, folding items that don't fit behind a chevron next to the notch instead of hiding them.
 

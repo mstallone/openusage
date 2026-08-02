@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The row of per-provider quick-link buttons (e.g. "Status", "Console") shown in a provider card's
 /// expanded area. Lays out up to three across; extra links wrap to the next row. Each button opens its
-/// URL in the default browser. Mirrors the legacy Tauri `provider-card` quick-links row, adapted to the
-/// native card's expanded area (issue #596 — "bring back provider buttons").
+/// URL in the default browser. Restores the quick-links row from the frozen Tauri edition, adapted to
+/// the native card's expanded area (upstream issue #596 — "bring back provider buttons").
 struct ProviderLinksView: View {
     let links: [ProviderLink]
     /// Matches the metric-row inset so the button row lines up with the rows above/below it.
@@ -12,8 +12,9 @@ struct ProviderLinksView: View {
 
     private let density = DensitySetting.compact
 
-    /// Hard ceiling from #596: never more than three buttons across, regardless of how many links a
-    /// provider ships. Fewer links use fewer columns so a lone button isn't boxed into a third of the row.
+    /// Hard ceiling from upstream #596: never more than three buttons across, regardless of how many
+    /// links a provider ships. Fewer links use fewer columns so a lone button isn't boxed into a third
+    /// of the row.
     private static let maxColumns = 3
 
     /// Eager stacks, deliberately NOT a `LazyVGrid`: this row lives inside the popover's animated

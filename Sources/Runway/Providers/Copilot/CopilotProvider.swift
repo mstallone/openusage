@@ -137,7 +137,7 @@ final class CopilotProvider: ProviderRuntime {
                         .badge(
                             label: "Organization Usage",
                             text: "Managed by Your Organization",
-                            subtitle: "Organization billing access is required to view totals."
+                            subtitle: "You need organization billing access to view totals."
                         )
                     ]
                 case .temporarilyUnavailable:

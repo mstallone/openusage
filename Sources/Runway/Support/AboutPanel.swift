@@ -14,8 +14,8 @@ enum AboutPanel {
         NSApplication.shared.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
-    /// Centered, secondary-styled credits with the same two links as the rest of the app: the author's
-    /// page and the GitHub repo. The standard panel renders `.link`-attributed runs as clickable.
+    /// Centered, secondary-styled credits: the original author, the upstream maintainers, and this
+    /// fork's GitHub repo. The standard panel renders `.link`-attributed runs as clickable.
     private static var credits: NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center

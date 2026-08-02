@@ -54,19 +54,19 @@ grep '\[refresh\]' ~/Library/Logs/Runway/Runway.log
 
 ## What is never logged
 
-Secrets never reach the log. Access/refresh tokens, cookies, session tokens, and API keys are redacted
-before any line is written (a sensitive value becomes `first4...last4`, or `[REDACTED]` when too short
-to mask safely), and filesystem paths under your home directory are replaced with `[PATH]`. Response
-bodies are never logged in full; on an HTTP error the app may record a redacted, truncated (≤500 byte)
-preview at Debug to aid diagnosis — run through the same redaction first. The redaction rules match the
-original app's, and a test suite guards them.
+Secrets never reach the log. The app redacts access/refresh tokens, cookies, session tokens, and API
+keys before it writes any line. A sensitive value becomes `first4...last4`, or `[REDACTED]` when it is
+too short to mask safely. Filesystem paths under your home directory become `[PATH]`. The app never
+logs a response body in full. On an HTTP error, it can record a redacted, truncated (≤500 byte)
+preview at Debug to aid diagnosis. The preview goes through the same redaction first. A test suite
+guards the redaction rules.
 
 ## File size cap
 
-The log is capped at ~10 MB. When it fills up, the current file is rotated to `Runway.1.log` and a
-fresh `Runway.log` starts, so a long-running session can never fill your disk (at most ~20 MB across
-the live file and one archive). An oversize file left over from a previous session is rotated once at
-launch.
+The log is capped at ~10 MB. When it fills up, the app rotates the current file to `Runway.1.log` and
+starts a fresh `Runway.log`. A long-running session uses at most ~20 MB across the live file and one
+archive, so it can never fill your disk. If a previous session left an oversize file, the app rotates
+it once at launch.
 
 > Note: the dev build and a released build both write to the same `Runway.log`. Running them at the
 > same time interleaves their lines — fine for normal use, worth knowing if you debug both at once.

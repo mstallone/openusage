@@ -18,6 +18,11 @@ The script builds a signed app bundle under `dist/` and launches it in place —
 own settings and keychain and never disturbs a released Runway. It ships no update feed, so it never
 checks for updates — test updates with a real signed, notarized release build.
 
+The script launches the app without any `CLAUDE_CONFIG_DIR` / `CODEX_HOME` values inherited from the
+shell, and clears the dev app's persisted shell-environment snapshot first. This keeps an agent
+session's sandboxed homes (Claude Code and Codex export those variables) from leaking into the dev
+app's Claude and Codex data. To test a custom home on purpose, launch with `KEEP_PROVIDER_HOMES=1`.
+
 ## Stream logs
 
 To watch the app's logs live while you reproduce an issue:
@@ -88,8 +93,8 @@ forced refresh with the panel open, and an idle soak. The script then prints per
 the log: open latency broken into layout and order-front, close cost, and main-queue stalls.
 
 Run it before and after any change that touches the popover render path, and compare. Reference
-numbers from this machine class (Apple Silicon, August 2026): warm open should stay in the low tens
-of milliseconds to first frame, and the warm-cycles phase should report few or no stalls.
+numbers from this machine class (Apple Silicon, August 2026): warm open stays in the low tens of
+milliseconds to first frame, and the warm-cycles phase reports few or no stalls.
 
 The `RUNWAY_UI_PROFILE` gate is inert in normal use — no timing code runs without it. The stall
 watchdog measures how long async main-actor work waits (main-queue latency), which is a proxy for

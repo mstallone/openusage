@@ -8,8 +8,7 @@ struct CodexMappedUsage: Equatable, Sendable {
 enum CodexUsageMapper {
     static let sessionPeriodMs = MetricPeriod.sessionMs
     static let weeklyPeriodMs = MetricPeriod.weekMs
-    /// Codex flex credits are worth 4¢ each; the credits line leads with the dollar value
-    /// (mirrors the JS plugin's `CREDIT_USD_RATE`).
+    /// Codex flex credits are worth 4¢ each; the credits line leads with the dollar value.
     static let creditUSDRate = 0.04
 
     static func mapUsageResponse(
@@ -41,10 +40,10 @@ enum CodexUsageMapper {
 
         // Model-specific limits (e.g. GPT-5.3-Codex-Spark) ride in a separate `additional_rate_limits`
         // array, each entry reusing the primary/secondary window shape. Surfaced as their own Spark /
-        // Spark Weekly meters (issue #796) — the JS edition had these; the Swift rewrite dropped them.
+        // Spark Weekly meters (issue #796).
         lines.append(contentsOf: sparkLines(body: body, now: now))
 
-        // On-demand rate-limit reset credits, shown before Credits — mirrors the JS plugin (PR #577).
+        // On-demand rate-limit reset credits, shown before Credits.
         // The row reads "2 available" (the count is carried raw, so the menu-bar tile reads the same
         // number); each still-available credit's expiry rides along in `expiriesAt` and surfaces in the
         // row's hover tooltip ("Resets expire in: …").
@@ -244,7 +243,7 @@ enum CodexUsageMapper {
     ///
     /// Prefers the dedicated `/rate-limit-reset-credits` payload (the only source that carries the
     /// per-credit expiry list); falls back to the usage body's embedded `rate_limit_reset_credits`
-    /// object (count only) when that fetch was unavailable — mirroring the JS plugin. `ProviderParse.number`
+    /// object (count only) when that fetch was unavailable. `ProviderParse.number`
     /// returns nil for missing/null/non-numeric counts, so a malformed count skips the row entirely.
     static func readResetCredits(
         body: [String: Any],

@@ -1,14 +1,14 @@
 import Foundation
 
 /// Builds metric lines from the Z.ai `/api/monitor/usage/quota/limit` payload and the plan name from
-/// `/api/biz/subscription/list`. Ports and extends the legacy Tauri plugin's mapping:
+/// `/api/biz/subscription/list`. The quota mapping:
 /// - a `TOKENS_LIMIT` entry whose window is sub-daily (`unit: 3`, hours) is the 5-hour session meter,
 /// - a `TOKENS_LIMIT` entry whose window is multi-day (`unit: 6`, weeks) is the weekly meter,
 /// - a `TIME_LIMIT` entry (`unit: 5`, monthly) is the web-search/reader count meter (used / limit).
 ///
 /// Both endpoints are undocumented internal APIs used by Z.ai's own subscription UI; the response
 /// shapes are stable in practice. The mapper is pure (no I/O) so it tests cleanly against sample
-/// payloads, exactly like the legacy plugin's fixture-based tests.
+/// payloads.
 enum ZAIUsageMapper {
     /// One monthly web-search cycle, in milliseconds (Z.ai reports `unit: 5, number: 1`). The session
     /// and weekly meters instead carry the *payload's* actual window (see `classifyTokenWindow`), so
@@ -27,7 +27,7 @@ enum ZAIUsageMapper {
 
     /// True when a 2xx quota body is the "valid key, but no GLM Coding Plan" signal: Z.ai answers
     /// `{"success":false,"code":500,"msg":"…coding plan"}` with no `data`. The provider turns this into a
-    /// clear `.notAvailable` error (a header warning) instead of three blank "No data" meters that don't
+    /// clear `.noCodingPlan` error (a header warning) instead of three blank "No data" meters that don't
     /// say why. Matched on the structured `success:false` plus the "coding plan" phrase the message
     /// carries (ASCII even in the localized string), so an unrelated business failure doesn't trip it.
     static func isNoCodingPlan(_ body: Data) -> Bool {
@@ -42,8 +42,8 @@ enum ZAIUsageMapper {
         guard let root = ProviderParse.jsonObject(body) else {
             throw ZAIUsageError.invalidResponse
         }
-        // The limits array lives under `data.limits`; the legacy plugin also tolerated the root object
-        // being the container directly (no `data` wrapper), so honor both.
+        // The limits array lives under `data.limits`, but Z.ai has also served the container at the
+        // root (no `data` wrapper), so honor both.
         let container: [String: Any]
         if let data = root["data"] {
             guard let data = data as? [String: Any] else { throw ZAIUsageError.invalidResponse }
@@ -174,8 +174,7 @@ enum ZAIUsageMapper {
         )
     }
 
-    /// A limit entry matches by `type` or `name`; the legacy plugin checked both because Z.ai's
-    /// payload has used either field across revisions.
+    /// A limit entry matches by `type` or `name`: Z.ai's payload has used either field across revisions.
     private static func findLimit(_ limits: [[String: Any]], type: String) -> [String: Any]? {
         for entry in limits {
             if (entry["type"] as? String) == type || (entry["name"] as? String) == type {

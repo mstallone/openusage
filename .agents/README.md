@@ -22,6 +22,10 @@ AppKit, signing, telemetry) as agent skills.
     ├── test-triage/SKILL.md
     ├── view-refactor/SKILL.md
     ├── window-management/SKILL.md
+    ├── macos-*/SKILL.md                   # macos-prefixed variants of the skills above
+    │
+    ├── pricing-update/SKILL.md            # Runway project skill, not from the plugin
+    ├── release-swift/SKILL.md             # Runway project skill, not from the plugin
     │
     ├── build-and-run-macos-app/SKILL.md   # ex-slash-command
     ├── fix-codesign-error/SKILL.md        # ex-slash-command
@@ -46,9 +50,9 @@ AppKit, signing, telemetry) as agent skills.
 
 The `build-run-debug` and `build-and-run-macos-app` skills create a project-local
 `script/build_and_run.sh` as the single kill + build + run entrypoint. Invoke
-it directly from a terminal, or wrap it in your editor's task system
-(`.vscode/tasks.json`, an Xcode scheme run action, a `Makefile` target, etc.)
-if you want a one-click Run.
+it directly from a terminal. If you want a one-click Run, wrap it in your
+editor's task system (`.vscode/tasks.json`, an Xcode scheme run action, a
+`Makefile` target, etc.).
 
 ## Scope
 

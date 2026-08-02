@@ -248,7 +248,7 @@ struct KimiAuthStore: Sendable {
         return String(array.dropFirst().dropLast())
     }
 
-    /// OAuth credentials may only travel over HTTPS. Loopback HTTP remains available for the
+    /// OAuth credentials must only travel over HTTPS. Loopback HTTP remains available for the
     /// self-hosted/test setup Kimi documents, without allowing a typo to expose a bearer token to an
     /// arbitrary clear-text host.
     private func endpoint(base: String, appending path: String, variable: String) throws -> URL {

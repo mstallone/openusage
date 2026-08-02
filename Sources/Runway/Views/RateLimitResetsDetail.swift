@@ -4,10 +4,10 @@ import SwiftUI
 /// credit, one node per credit, ordered soonest-expiry first. Each node is a single line — a numbered,
 /// severity-colored dot (the number IS the reset number; blue > 7 days, yellow within a week, red
 /// within 48 hours — the same `expirySeverity` bands as the row's status dot), the exact expiry time,
-/// and the countdown to it on the trailing edge. Replaces the old `HoverTooltip` list. When no credits
-/// are available it shows a centered empty state. Mirrors `ModelUsageDetail` / `UsageTrendDetail`'s
-/// calm, presented via `.popover` — but deliberately without their title header (an owner call: the
-/// timeline is self-explanatory and the header cost a full row of the small popover).
+/// and the countdown to it on the trailing edge. When no credits are available it shows a centered
+/// empty state. Mirrors `ModelUsageDetail` / `UsageTrendDetail`'s calm, presented via `.popover` —
+/// but deliberately without their title header (an owner call: the timeline is self-explanatory and
+/// the header cost a full row of the small popover).
 ///
 /// When a `claim` closure is supplied (the Codex resets row), each node also becomes claimable: hovering
 /// a node reveals a "Use" affordance, clicking it expands that node in place into an inline confirm, and

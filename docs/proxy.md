@@ -33,10 +33,10 @@ When the URL has no port, the scheme's default applies (socks5 → 1080, http �
 
 ## Behavior
 
-- The config is read once at launch — **restart Runway after changing the file**.
+- Runway reads the config once at launch — **after you change the file, restart Runway**.
 - `localhost`, `127.0.0.1`, and `::1` always bypass the proxy (the [local HTTP API](local-http-api.md) is unaffected).
 - A missing, disabled, invalid, or unreadable config simply leaves proxying off.
 
 ## Scope
 
-Applies to provider HTTP requests made by the app, including the daily [model pricing](pricing.md) refresh. It is not a system-wide proxy.
+Applies to provider HTTP requests made by the app, including the hourly [model pricing](pricing.md) refresh. It is not a system-wide proxy.

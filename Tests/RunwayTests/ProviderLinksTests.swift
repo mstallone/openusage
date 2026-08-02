@@ -2,8 +2,8 @@ import XCTest
 @testable import Runway
 
 /// `Provider.visibleLinks` is the boundary that keeps a malformed link entry from shipping a dead or
-/// no-op button on the card. It mirrors the legacy Tauri `visibleLinks` filter: trim, require a
-/// non-empty label and URL, and accept `http(s)` schemes only.
+/// no-op button on the card. The filter: trim, require a non-empty label and URL, and accept
+/// `http(s)` schemes only.
 final class ProviderLinksTests: XCTestCase {
     private func provider(_ links: [ProviderLink]) -> Provider {
         Provider(id: "test", displayName: "Test", icon: .providerMark("test"), links: links)

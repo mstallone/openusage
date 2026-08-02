@@ -3,10 +3,9 @@ import Foundation
 /// Finds a running Codeium-derived language server (Antigravity's bundled `language_server`, or the
 /// `agy` CLI) and returns the CSRF token + listening ports needed to call its local Connect-RPC service.
 ///
-/// This is a native Swift port of the Tauri host's `ls.discover`: scan `ps` for the process, match it by
-/// name + marker flags, pull `--csrf_token` / `--extension_server_port` from its argv, and read its
-/// listening TCP ports via `lsof`. All work is blocking subprocess I/O, so call `discover` off the main
-/// actor (e.g. via `loadOffMainActor`).
+/// The approach: scan `ps` for the process, match it by name + marker flags, pull `--csrf_token` /
+/// `--extension_server_port` from its argv, and read its listening TCP ports via `lsof`. All work is
+/// blocking subprocess I/O, so call `discover` off the main actor (e.g. via `loadOffMainActor`).
 struct LanguageServerDiscovery: Sendable {
     struct Options: Sendable {
         /// Executable name to match (e.g. `language_server`, `agy`).
@@ -99,7 +98,7 @@ struct LanguageServerDiscovery: Sendable {
         return .indeterminate
     }
 
-    // MARK: - Pure helpers (port of the Rust host logic; unit-tested directly)
+    // MARK: - Pure helpers (unit-tested directly)
 
     /// Parse `ps -ax -o pid=,command=` output into the candidates that match the process + markers,
     /// sorted by marker rank (exact flag match before path-substring match).

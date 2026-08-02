@@ -7,13 +7,13 @@ local logs, so nothing here applies to them.
 
 ## Where prices come from
 
-Prices are layered from three sources; when the same model appears in more than one, the higher layer wins:
+Runway layers prices from three sources. When the same model appears in more than one, the higher layer wins:
 
 1. **Runway pricing supplement** — a small JSON file maintained in this repo and published to GitHub Pages. It covers models no public catalog carries (Cursor-native models like `auto` and `composer-*`), fast-variant multipliers, and alias rules that map provider log/CSV slugs to catalog keys.
 2. **LiteLLM** — the community-maintained `model_prices_and_context_window.json`, covering the vast majority of API-priced models.
 3. **models.dev** — a gap-filler for models LiteLLM misses (e.g. some brand-new or niche models).
 
-The app ships with bundled snapshots of all three, so pricing works offline and on first launch. At runtime each source is refetched about once an hour (with ETag revalidation) and cached in `~/Library/Application Support/Runway/pricing/`. A refresh never blocks a usage scan — scans always price against the freshest data already on hand.
+The app ships with bundled snapshots of all three, so pricing works offline and on first launch. At runtime the app refetches each source about once an hour (with ETag revalidation) and caches it in `~/Library/Application Support/Runway/pricing/`. A refresh never blocks a usage scan — scans always price against the freshest data already on hand.
 
 Because the supplement is published to GitHub Pages on merge, a pricing correction reaches installed apps within about an hour — no app update needed.
 
@@ -24,24 +24,24 @@ unpriced because its rate depends on the underlying routed model.
 
 ## How a model name resolves
 
-Log and CSV model names rarely match a catalog key exactly, so resolution tries, in order: supplement alias rules, exact key match, fast-variant handling (a `-fast` suffix resolves the base model and applies its fast multiplier), then fuzzy matching — provider prefixes (`anthropic/`, `xai/`, …), dated suffixes (`claude-sonnet-4` ↔ `claude-sonnet-4-20250514`), and separator differences (`grok-4-3` ↔ `grok-4.3`). Fast variants without an explicit price or model-specific multiplier stay unpriced instead of silently using the standard-speed rate.
+Log and CSV model names rarely match a catalog key exactly. Resolution tries these steps in order: supplement alias rules, exact key match, fast-variant handling (a `-fast` suffix resolves the base model and applies its fast multiplier), then fuzzy matching. Fuzzy matching covers provider prefixes (`anthropic/`, `xai/`, …), dated suffixes (`claude-sonnet-4` ↔ `claude-sonnet-4-20250514`), and separator differences (`grok-4-3` ↔ `grok-4.3`). Fast variants without an explicit price or model-specific multiplier stay unpriced instead of silently using the standard-speed rate.
 
-A model no source can price is left out of the spend figures entirely — its tokens don't count toward the day's tile, the Usage Trend, or the model breakdown, because a token count next to a dollar figure that ignores part of it would be misleading. Instead, a warning triangle on the affected tiles lists the unpriced models, so you know the figures are incomplete and which model is responsible. A day where *nothing* could be priced reads "No data".
+When no source can price a model, Runway leaves it out of the spend figures entirely. Its tokens do not count toward the day's tile, the Usage Trend, or the model breakdown — a token count next to a dollar figure that ignores part of it is misleading. Instead, a warning triangle on the affected tiles lists the unpriced models, so you know the figures are incomplete and which model is responsible. A day where *nothing* could be priced reads "No data".
 
 ## What the estimate includes
 
-Costs are computed per usage event from token buckets at the model's per-million-token rates,
-including cache pricing, long-context tiers, and fast-variant multipliers. Most catalog tiers start
+Runway computes costs per usage event from token buckets at the model's per-million-token rates.
+This includes cache pricing, long-context tiers, and fast-variant multipliers. Most catalog tiers start
 above 200k prompt tokens; supported GPT-5.4, GPT-5.5, and GPT-5.6 Codex models switch above 272k input
 tokens. Fugu Ultra and Cyber also switch the whole request above 272k, using Sakana's published input,
 cached-input, and output rates. Codex rollouts do not preserve Sakana's separate orchestration-detail
 fields, so Fugu estimates and graph tokens can undercount orchestration; reasoning output is already
-part of output and is not added again. A published cache discount is used when available; Codex cached
+part of output and is not added again. Runway uses a published cache discount when available; Codex cached
 input falls back to the full input rate when the source publishes no discount. Cursor's export combines
 many requests into each row, so Runway uses the normal rate there rather than guessing that one
-request crossed the limit. When a Claude log line carries an explicit `costUSD`, that value is used
-as-is. Nested Claude advisor usage has no carried cost, so it is priced separately from its tokens
-using the advisor model. The result is an estimate of API-rate value, not a bill: subscription plans
+request crossed the limit. When a Claude log line carries an explicit `costUSD`, Runway uses that value
+as-is. Nested Claude advisor usage has no carried cost, so Runway prices it separately from its
+tokens using the advisor model. The result is an estimate of API-rate value, not a bill: subscription plans
 don't charge per token.
 
 ## Privacy
