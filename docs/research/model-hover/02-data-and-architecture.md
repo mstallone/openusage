@@ -275,9 +275,9 @@ Pricing refresh cadence:
 
 Provider scanner computation:
 
-- Claude and Codex scanners are actors with per-file parse caches keyed by path, size, and mtime. Every refresh reuses unchanged parsed entries/events and reruns dedup + aggregation.
-- Cursor fetches the CSV on each provider refresh and parses rows in memory.
-- Grok reads and parses the single unified log on each refresh; there is no per-file parse cache today.
+- Claude and Codex scanners are actors with per-file parse caches keyed by path, size, and mtime; a file that only grew re-parses just its appended tail. Dedup + aggregation are memoized per scanner and rerun only when the logs, pricing snapshot, history window, or calendar configuration change.
+- Cursor fetches the CSV on each provider refresh and parses rows in memory (off the main actor).
+- Grok reads and parses the single unified log only when its stat (size/mtime), the window, or the pricing snapshot changed; an unchanged log serves the memoized scan.
 
 Would a model breakdown require extra computation?
 
@@ -385,8 +385,8 @@ Popover and hover behavior:
 Performance:
 
 - Cursor CSV parse cost already exists on every Cursor refresh. Model grouping is cheap relative to network fetch and parse.
-- Claude/Codex per-file parse caches keep repeated refreshes cheap; model grouping reruns over cached entries/events each refresh, like current day aggregation.
-- Grok scans a single append-only file without a parse cache. A model panel increases only aggregation state, not file reads, but large logs could make Grok the highest-risk provider.
+- Claude/Codex per-file parse caches (with append-only tail resumes) keep repeated refreshes cheap; model grouping would rerun over cached entries/events only when the aggregation memo misses, like current day aggregation.
+- Grok scans a single append-only file behind a stat-keyed scan memo. A model panel increases only aggregation state, not file reads.
 
 Data quality:
 
