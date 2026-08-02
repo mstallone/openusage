@@ -82,10 +82,27 @@ struct MemoryRootView: View {
 
     /// The sidebar rows painted straight onto the window backdrop, with the traffic lights floating
     /// above the first rows and the Refresh control pinned at the bottom like a status strip.
+    ///
+    /// Each edge fades scrolled rows out instead of letting them draw hard-edged behind the chrome,
+    /// via a different mechanism per edge:
+    /// - **Bottom**: the footer is a safe-area bar (`pinnedFooter`), which on macOS 26 feeds the
+    ///   native soft scroll-edge effect (`softBottomScrollEdge`).
+    /// - **Top**: there is no bar content to anchor that effect — the traffic lights are AppKit
+    ///   chrome floating above the SwiftUI tree, and the system never renders a scroll-edge effect
+    ///   for an empty/clear safe-area bar (Apple Forums thread 787796). So the clearance is plain
+    ///   safe-area padding, and `SidebarTitlebarFade` paints the fade instead.
     private var sidebar: some View {
         MemorySidebarView()
+            .softBottomScrollEdge()
             .safeAreaPadding(.top, Self.titlebarClearance)
-            .safeAreaInset(edge: .bottom, spacing: 0) { sidebarFooter }
+            // Keeps the scrollbar out of the frost: indicators already start below the safe-area
+            // clearance, so pushing them down by the fade's dissolve tail as well means the knob
+            // only ever runs through crisp rows.
+            .contentMargins(.top, SidebarTitlebarFade.dissolve, for: .scrollIndicators)
+            .pinnedFooter(spacing: 0) { sidebarFooter }
+            .overlay(alignment: .top) {
+                SidebarTitlebarFade(clearance: Self.titlebarClearance)
+            }
             .frame(width: Self.sidebarWidth)
     }
 
@@ -172,6 +189,37 @@ struct MemoryRootView: View {
             MemoryEditorView()
                 .transition(.opacity)
         }
+    }
+}
+
+/// The glassy fade under the floating window controls: a frosted material masked by a vertical
+/// gradient — fully frosted across the traffic-light clearance, dissolving to nothing over the
+/// first rows — so scrolled sidebar content blurs out under the controls instead of drawing
+/// hard-edged behind them. Hand-rolled because the native soft scroll-edge effect only renders
+/// under a safe-area bar with visible content (the footer qualifies; an empty spacer where the
+/// AppKit traffic lights float does not). Purely paint: hit-testing is off.
+private struct SidebarTitlebarFade: View {
+    let clearance: CGFloat
+    /// How far past the clearance the frost takes to dissolve. The sidebar also insets the
+    /// scroll indicators by this much so the scrollbar starts below the fade.
+    static let dissolve: CGFloat = 24
+
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: clearance / (clearance + Self.dissolve)),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .frame(height: clearance + Self.dissolve)
+            .allowsHitTesting(false)
     }
 }
 
