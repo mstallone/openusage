@@ -38,6 +38,18 @@ While the screen is shared or recorded:
 
 ![The menu bar strip concealed behind the Runway wordmark](assets/menu-bar-privacy-sharing.png)
 
+## The notch
+
+On MacBooks with a notch, a crowded menu bar can push the Runway item underneath it — the item still exists, but you can't see or click it. Runway watches for this and recovers on its own:
+
+1. **Move back into view** — the item's remembered menu-bar position is rewritten so it re-lands just right of the notch. This is the normal outcome; you may notice the strip hop.
+2. **Surrogate button** — if the move doesn't stick, a small round Runway button appears just below the menu bar next to the notch. Click it to open the dashboard, drag it anywhere, or right-click → Hide Until Relaunch.
+3. Either way, the dashboard always opens beside the notch where you can see it, never centered under it.
+
+Freeing up menu bar space (quitting other menu bar apps, or using a menu bar manager) returns everything to normal automatically.
+
+On macOS 27 and later this recovery is disabled: the system manages menu-bar overflow natively, folding items that don't fit behind a chevron next to the notch instead of hiding them.
+
 ## What the strip shows
 
 The strip only renders real data. A starred metric with nothing fetched yet is skipped; a provider whose stars all lack data disappears entirely (icon included). When nothing has data, the strip falls back to the app icon. Stars follow your Customize order — Always Visible metrics first, then On Demand ones. A metric can be starred whether it's Always Visible or On Demand.
