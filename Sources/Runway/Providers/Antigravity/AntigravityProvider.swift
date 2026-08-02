@@ -120,7 +120,10 @@ final class AntigravityProvider: ProviderRuntime {
                     lastNoProcessProbe = nil
                     return result
                 case .unreachable:
+                    // Evidence a process may now exist (or the scan itself failed): drop any
+                    // standing cooldown so the next scheduled pass probes again, not just this one.
                     confirmedNoProcess = false
+                    lastNoProcessProbe = nil
                 case .noProcess:
                     continue
                 }
