@@ -26,6 +26,10 @@ final class AppContainer {
     /// ephemeral secret-code easter-egg state, and the system accessibility flags it yields to. Read by both
     /// the SwiftUI surface and the AppKit panel (`StatusItemController`).
     let transparency: PopoverTransparencyStore
+    /// Shared wall clock for the popover's time-relative text (footer countdown, row reset dates).
+    /// Started/stopped from the panel show/hide chokepoints; see `DashboardClock` for why this
+    /// replaces per-view `TimelineView`s.
+    let clock = DashboardClock()
     /// The menu bar's screen-share privacy mode: the persisted Hide From Screen Share toggle
     /// plus the live capture signal. Read by `StatusItemImageUpdater` to swap the strip for the
     /// wordmark while the screen is shared or recorded.

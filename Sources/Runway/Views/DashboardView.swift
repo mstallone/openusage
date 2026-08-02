@@ -181,9 +181,12 @@ struct DashboardView: View {
                     // Reopen: the SwiftUI tree survives a close, so re-seed the height for whatever
                     // screen we're opening on. Un-animated, and ≈ the controller's opening guess, so
                     // there's no visible jump. If not yet measured, the measurement onChange seeds it.
+                    // Assign only on a real change: the close-time settle usually leaves the retained
+                    // height already at this exact value, and a same-value write would still dirty
+                    // the height frame and force a full re-layout inside the open's pre-show pass.
                     if let target = heightCoordinator.target(for: layout.screen) {
                         didEstablishHeight = true
-                        animatedHeight = target
+                        if abs(animatedHeight - target) > 0.5 { animatedHeight = target }
                     }
                 } else {
                     resetTransientState()
@@ -209,6 +212,21 @@ struct DashboardView: View {
             // collapses to a no-op (SwiftUI animates from the last *committed* value).
             .onChange(of: layout.screenSlideID) { _, id in
                 guard id != 0 else { return }
+                // Hidden — this is the close-time reset walking Customize back to the dashboard,
+                // not a user navigation. There is no entrance to play and nothing on screen: commit
+                // the slide state synchronously and walk the height directly, instead of spawning
+                // the animation task below, whose deferred spring would re-dirty the settled hidden
+                // tree AFTER `finishClosing()` cleared the display clamp — recreating exactly the
+                // deferred cleanup the close-time settle exists to remove.
+                guard transparency.popoverShown else {
+                    animatedSlideID = id
+                    slideProgress = 1
+                    if let target = heightCoordinator.target(for: layout.screen) {
+                        didEstablishHeight = true
+                        if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
+                    }
+                    return
+                }
                 slideProgress = 0
                 animatedSlideID = id
                 let destination = layout.screen
@@ -249,6 +267,11 @@ struct DashboardView: View {
                 if !didEstablishHeight {
                     didEstablishHeight = true
                     animatedHeight = target
+                } else if !transparency.popoverShown {
+                    // Hidden — this is the close-time settle's collapsed re-measure landing. Walk
+                    // the retained height directly: springing a hidden panel just burns frames
+                    // off-screen, and the next open expects the value to already be at rest.
+                    if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
                 } else if !isSliding, abs(target - animatedHeight) > 1 {
                     withAnimation(Motion.spring) { animatedHeight = target }
                 }
@@ -327,11 +350,13 @@ struct DashboardView: View {
         // Dismiss a pending Reset All confirmation if the popover closes mid-alert — the SwiftUI tree
         // survives `orderOut`, so without this the sheet would reappear stale on the next open.
         isPresentingResetAllConfirm = false
-        // Drop the driven height so the next open re-establishes it (un-animated) from the reopened
-        // screen's measurement instead of springing from this session's last value. Until then the
-        // 0 sentinel keeps `PanelHeightModifier` from pushing, so the controller's opening guess stands.
-        animatedHeight = 0
-        didEstablishHeight = false
+        // The driven height is deliberately KEPT across the close (it used to reset to the 0
+        // sentinel here). The close-time settle re-measures the collapsed dashboard while hidden and
+        // the `measuredIdeal` onChange walks the retained value to the collapsed target, so the next
+        // open finds the height already correct and its pre-show layout pass has nothing to do —
+        // resetting to 0 made every reopen pay a full-tree re-layout just to walk 0 → target. The
+        // reopen seed above and the measurement onChange below still correct it (un-animated) if the
+        // screen or content changed while closed.
         dashboardScrollPosition.scrollTo(edge: .top)
     }
 
