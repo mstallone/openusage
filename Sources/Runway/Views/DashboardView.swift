@@ -362,6 +362,16 @@ struct DashboardView: View {
         // Dismiss a pending Reset All confirmation if the popover closes mid-alert — the SwiftUI tree
         // survives `orderOut`, so without this the sheet would reappear stale on the next open.
         isPresentingResetAllConfirm = false
+        // A debounce armed just before the close would otherwise fire ~120ms after `orderOut` and
+        // spring a hidden panel (per-frame layout and backdrop work with nothing on screen). The
+        // close-time settle re-measures the collapsed tree anyway, and its hidden-branch walk
+        // handles the height directly.
+        measurementSettleTask?.cancel()
+        measurementSettleTask = nil
+        // A caret toggle whose measurement never settled must not learn from the close: the next
+        // (collapsed) measurement would record a wrong — even zero — expanded-section delta and the
+        // provider's next caret toggle would co-animate to a bogus height until re-learned.
+        pendingExpansion = nil
         // The driven height is deliberately KEPT across the close (it used to reset to the 0
         // sentinel here). The close-time settle re-measures the collapsed dashboard while hidden and
         // the `measuredIdeal` onChange walks the retained value to the collapsed target, so the next

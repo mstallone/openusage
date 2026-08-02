@@ -166,11 +166,18 @@ final class StatusItemController: NSObject {
         // the first refresh batch delivered in between. Each pass is invisible (offscreen raster
         // via `cacheDisplay`, window ordered front at alpha 0 and straight back out) and skipped
         // once the user has opened the panel for real.
-        Task { @MainActor [weak self] in
-            for delay in [2.0, 12.0] {
-                try? await Task.sleep(for: .seconds(delay))
-                guard let self, !self.panel.isVisible else { return }
-                self.prewarmPanel()
+        // RUNWAY_UI_PROFILE_COLD=1 disables pre-warming so the harness can measure the true cold
+        // path (with it, the scripted "cold open" measures the shipped first-click experience —
+        // see docs/debugging.md).
+        if ProcessInfo.processInfo.environment["RUNWAY_UI_PROFILE_COLD"] != "1" {
+            Task { @MainActor [weak self] in
+                for delay in [2.0, 12.0] {
+                    try? await Task.sleep(for: .seconds(delay))
+                    // A real open (even one already closed again) warmed everything a warm-up pass
+                    // would — rendering the same content again on the main actor is pure waste.
+                    guard let self, !self.hasOpenedPanel, !self.panel.isVisible else { return }
+                    self.prewarmPanel()
+                }
             }
         }
 
@@ -360,8 +367,12 @@ final class StatusItemController: NSObject {
         showPanel()
     }
 
+    /// True after the first real open; later warm-up passes are skipped (the open warmed everything).
+    private var hasOpenedPanel = false
+
     private func showPanel() {
         let openStart = CFAbsoluteTimeGetCurrent()
+        hasOpenedPanel = true
         guard let button = statusItem.button, let buttonWindow = button.window else {
             AppLog.error(.statusItem, "Cannot show panel: status item has no button")
             return
