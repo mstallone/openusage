@@ -1,5 +1,6 @@
 import AppKit
 import KeyboardShortcuts
+import QuartzCore
 import SwiftUI
 
 /// The dashboard's host window: a borderless, **non-activating** panel that can still become key.
@@ -373,10 +374,12 @@ final class StatusItemController: NSObject {
         }
         if UIProfiler.enabled {
             UIProfiler.mark("open.syncTotal: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
-            // The first display pass (CA commit) happens when this runloop turn ends; a marker queued
-            // now runs right after it, so its delta ≈ click-to-first-frame latency.
-            DispatchQueue.main.async {
-                UIProfiler.mark("open.toFirstRunloopTurn: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
+            // Completion of the transaction that carries the open's first frame: it fires after that
+            // transaction COMMITS (layer tree handed to the window server), which tracks presentation
+            // far better than a bare main-queue hop — a queued async block can run before any pixels
+            // exist when rendering is what's slow.
+            CATransaction.setCompletionBlock {
+                UIProfiler.mark("open.toFirstFrame: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
             }
         }
         // Becoming key, AppKit auto-focuses the first control in the key-view loop (the first row's

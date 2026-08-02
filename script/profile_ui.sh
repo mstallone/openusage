@@ -24,9 +24,14 @@ fi
 pkill -x Runway >/dev/null 2>&1 || true
 sleep 1
 
+# Start the run on a fresh log file: a Runway.log near its 10 MB rotation cap could rotate the
+# marker (or the run itself) into Runway.1.log mid-run, and the polls below only read the active
+# file. The app is down at this point, so the move is safe; the prior log stays inspectable.
+mkdir -p "$(dirname "$LOG")"
+[ -f "$LOG" ] && mv -f "$LOG" "$LOG.pre-profile"
+
 # Marker so the stats only cover this run.
 START_MARKER="profile_ui.sh run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-mkdir -p "$(dirname "$LOG")"
 echo "$(date -u +%Y-%m-%dT%H:%M:%S.000Z) [INFO] [uiprofile] $START_MARKER" >> "$LOG"
 
 # CLAUDE_CONFIG_DIR must not leak into the app's shell snapshot (it flips Claude account
@@ -48,7 +53,7 @@ grep -a -A100000 "$START_MARKER" "$LOG" | grep -a uiprofile > "$RUN_LOG"
 
 echo
 echo "== Open path (ms) =="
-grep -a -E "open\.(layoutSubtree|orderFront|syncTotal|toFirstRunloopTurn)" "$RUN_LOG" \
+grep -a -E "open\.(layoutSubtree|orderFront|syncTotal|toFirstFrame)" "$RUN_LOG" \
     | sed -E 's/.*uiprofile\] //' \
     | awk -F'[:m]' '{sum[$1]+=$2; n[$1]++; if($2>max[$1])max[$1]=$2}
         END {for(k in sum) printf "%-24s avg %6.1f  max %6.1f  n=%d\n", k, sum[k]/n[k], max[k], n[k]}' \

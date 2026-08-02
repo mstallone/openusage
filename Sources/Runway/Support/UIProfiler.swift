@@ -70,6 +70,12 @@ enum UIProfiler {
         dataStore: WidgetDataStore
     ) {
         guard enabled else { return }
+        // The harness speaks entirely through info-level log lines; a persisted Warning/Error log
+        // floor would silently discard every phase marker and leave profile_ui.sh waiting for a
+        // "PHASE done" that never lands. A profiling run is explicitly opted into via the env var,
+        // so overriding the floor for this process is the honest behavior (the persisted setting
+        // is untouched and applies again on a normal launch).
+        AppLog.reloadLevel(.info)
         mark("driver armed; script starts in 6s")
         startStallWatchdog()
         Task { @MainActor in
