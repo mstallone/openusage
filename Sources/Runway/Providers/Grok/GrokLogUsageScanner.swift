@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Builds daily token/cost estimates for Grok from the Grok CLI's local log.
 ///
@@ -38,6 +39,24 @@ struct GrokLogUsageScanner: Sendable {
         return homeDirectory().appendingPathComponent(".grok/logs/unified.jsonl").path
     }
 
+    /// The last parse, reused while the log's stat (path + size + mtime), history window, calendar
+    /// configuration, and pricing snapshot are unchanged. Grok has no per-file incremental cache
+    /// like the JSONL scanners — this single-entry memo removes the same steady-state cost (a full
+    /// re-read + re-parse of an ever-growing log every 5 minutes) at a fraction of the machinery,
+    /// since the whole history is one file. Static because provider refreshes build fresh scanner
+    /// values; the retained pricing object pins its instance identity.
+    private struct ScanMemo {
+        var path: String
+        var size: Int
+        var mtime: Date
+        var since: Date
+        var calendarKey: String
+        var pricing: ModelPricing
+        var scan: LogUsageScan
+    }
+
+    private static let memo = OSAllocatedUnfairLock<ScanMemo?>(initialState: nil)
+
     /// Scan the last `daysBack` days of the log. Returns `nil` when the log is missing/unreadable (the
     /// spend tiles then render "No data"); returns an empty `daily` when the log exists but has no
     /// usable token rows in the window.
@@ -50,6 +69,22 @@ struct GrokLogUsageScanner: Sendable {
             await readFailureReporter.update(checkedPaths: [path], failingPaths: [])
             return nil
         }
+        let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
+        let calendarKey = DailyUsageAccumulator.calendarMemoKey
+        // Stat through FileManager: the memo is an optimization layered over the injectable file
+        // accessor, so a test double without real files simply never hits it.
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        let size = attributes?[.size] as? Int
+        let mtime = attributes?[.modificationDate] as? Date
+        if let size, let mtime,
+           let cached = Self.memo.withLock({ $0 }),
+           cached.path == path, cached.size == size, cached.mtime == mtime,
+           cached.since == since, cached.calendarKey == calendarKey, cached.pricing === pricing
+        {
+            await readFailureReporter.update(checkedPaths: [path], failingPaths: [])
+            return cached.scan
+        }
+
         let text: String
         do {
             text = try files.readText(path)
@@ -58,7 +93,16 @@ struct GrokLogUsageScanner: Sendable {
             await readFailureReporter.update(checkedPaths: [path], failingPaths: [path])
             return nil
         }
-        return Self.parse(text, since: JSONLScanning.sinceDate(daysBack: daysBack, now: now), pricing: pricing)
+        let scan = Self.parse(text, since: since, pricing: pricing)
+        if let size, let mtime {
+            Self.memo.withLock {
+                $0 = ScanMemo(
+                    path: path, size: size, mtime: mtime, since: since,
+                    calendarKey: calendarKey, pricing: pricing, scan: scan
+                )
+            }
+        }
+        return scan
     }
 
     /// Single chronological pass over the append-only log. Model-carrying events update a per-`pid`

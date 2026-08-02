@@ -17,7 +17,23 @@ final class LogFile: @unchecked Sendable {
     /// `~/Library/Logs/Runway/Runway.log` via `FileManager`, never hardcoded from `$HOME`; the
     /// `Logs/Runway` subfolder is a literal (not bundle-id-keyed), so the dev and release builds
     /// agree on the same file — acceptable since they are separate builds.
-    static let shared = LogFile(directory: defaultDirectory(), fileName: "Runway.log")
+    ///
+    /// A test run gets a per-process temp sink instead: the test suite links this module and logs
+    /// through `AppLog`, and it was writing thousands of fixture refresh/migration lines into the
+    /// user's real log file — poisoning any debugging that reads it.
+    static let shared: LogFile = {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+        {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "RunwayTests-logs-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true
+            )
+            return LogFile(directory: directory, fileName: "Runway.log")
+        }
+        return LogFile(directory: defaultDirectory(), fileName: "Runway.log")
+    }()
 
     /// The advertised log path (logged at startup, copied/revealed from Settings). Derived from the
     /// shared sink so the path shown to the user always equals where logs are actually written.

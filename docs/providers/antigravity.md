@@ -30,7 +30,7 @@ If neither is available you'll see *Start Antigravity or run `agy` and try again
 
 ## Troubleshooting
 
-- **"Start Antigravity or run `agy`…"** — sign in to the Antigravity app (or run `agy`) so a usable token exists, then refresh.
+- **"Start Antigravity or run `agy`…"** — sign in to the Antigravity app (or run `agy`) so a usable token exists, then refresh. A manual refresh (⌘R) looks for the local server immediately; the automatic 5-minute passes check for it again within about 15 minutes of it starting.
 - **"Couldn't read Antigravity credentials…"** — unlock Keychain or sign in to Antigravity again. Runway will not use its cached access token until the current login can be verified.
 - **The weekly meters show "No data"** — your Antigravity build doesn't expose the quota-summary endpoint yet (only newer builds do). The 5-hour meters still work from the older endpoints; updating Antigravity brings the weekly meters back.
 - **A meter shows "No data"** — that pool/window wasn't in the latest response (some tiers only report certain windows). The other meters still update.

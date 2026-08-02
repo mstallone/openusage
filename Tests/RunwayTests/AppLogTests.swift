@@ -28,7 +28,9 @@ final class AppLogTests: XCTestCase {
     }
 
     private func fileContents() throws -> String {
-        try String(contentsOf: tempDir.appendingPathComponent("Runway.log"), encoding: .utf8)
+        // File appends are queued off the caller's thread; drain them before reading.
+        AppLog.flushFileSink()
+        return try String(contentsOf: tempDir.appendingPathComponent("Runway.log"), encoding: .utf8)
     }
 
     func testInfoFloorSuppressesDebugButKeepsInfoAndError() throws {

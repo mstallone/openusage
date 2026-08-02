@@ -19,9 +19,20 @@ final class LogFileTests: XCTestCase {
     }
 
     func testResolvedPathEndsWithExpectedSuffix() {
+        // Under XCTest the shared sink deliberately redirects to a per-process temp folder so test
+        // logging never pollutes the user's real file; the production default stays observable
+        // through `defaultDirectory()`.
         XCTAssertTrue(
-            LogFile.url.path.hasSuffix("Logs/Runway/Runway.log"),
+            LogFile.url.path.hasSuffix("/Runway.log"),
             "unexpected log path: \(LogFile.url.path)"
+        )
+        XCTAssertFalse(
+            LogFile.url.path.hasSuffix("Library/Logs/Runway/Runway.log"),
+            "a test run must not write into the user's real log file: \(LogFile.url.path)"
+        )
+        XCTAssertTrue(
+            LogFile.defaultDirectory().path.hasSuffix("Logs/Runway"),
+            "unexpected production log directory: \(LogFile.defaultDirectory().path)"
         )
     }
 

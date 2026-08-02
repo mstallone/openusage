@@ -29,7 +29,22 @@ struct LanguageServerDiscovery: Sendable {
 
     var processRunner: ProcessRunning = SystemProcessRunner()
 
+    /// Why a discovery pass returned no server, kept distinct so callers can negative-cache only
+    /// the safe case: `noProcess` (ps ran, nothing matched) is a stable fact worth remembering;
+    /// `indeterminate` (ps failed, or a matching process exists without extractable endpoints —
+    /// e.g. still starting up) must retry on the next pass.
+    enum Outcome: Sendable {
+        case found(Result)
+        case noProcess
+        case indeterminate
+    }
+
     func discover(_ options: Options) -> Result? {
+        if case .found(let result) = discoverOutcome(options) { return result }
+        return nil
+    }
+
+    func discoverOutcome(_ options: Options) -> Outcome {
         guard let psOutput = try? processRunner.run(
             executable: "/bin/ps",
             arguments: ["-ax", "-o", "pid=,command="],
@@ -37,13 +52,13 @@ struct LanguageServerDiscovery: Sendable {
             timeout: 5
         ), psOutput.succeeded else {
             AppLog.warn(.subprocess, "ls discover: ps failed for \(options.processName)")
-            return nil
+            return .indeterminate
         }
 
         let candidates = Self.rankedCandidates(psOutput: psOutput.stdout, options: options)
         guard !candidates.isEmpty else {
             AppLog.info(.subprocess, "ls discover: \(options.processName) process not found")
-            return nil
+            return .noProcess
         }
 
         let lsofPath = ["/usr/sbin/lsof", "/usr/bin/lsof"].first { FileManager.default.fileExists(atPath: $0) }
@@ -77,10 +92,11 @@ struct LanguageServerDiscovery: Sendable {
             }
 
             AppLog.info(.subprocess, "ls discover: found \(options.processName) pid=\(candidate.pid) ports=\(ports)")
-            return Result(pid: candidate.pid, csrf: csrf, ports: ports, extensionPort: extensionPort)
+            return .found(Result(pid: candidate.pid, csrf: csrf, ports: ports, extensionPort: extensionPort))
         }
 
-        return nil
+        // Matching processes exist but none exposed usable endpoints (yet) — not cacheable.
+        return .indeterminate
     }
 
     // MARK: - Pure helpers (port of the Rust host logic; unit-tested directly)
