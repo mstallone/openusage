@@ -112,7 +112,7 @@ actor CodexLogUsageScanner {
         let files = Self.sessionFiles(homes: homes)
         guard !files.isEmpty else {
             _ = await scanner.items(
-                from: [], since: since, cacheIdentity: identity, parse: Self.parseFile
+                from: [], since: since, cacheIdentity: identity, tailParser: Self.tailParser
             )
             return nil
         }
@@ -121,7 +121,7 @@ actor CodexLogUsageScanner {
             from: files,
             since: since,
             cacheIdentity: identity,
-            parse: Self.parseFile
+            tailParser: Self.tailParser
         ), !Task.isCancelled else { return nil }
         return events
     }
@@ -175,32 +175,78 @@ actor CodexLogUsageScanner {
 
     // MARK: - File parsing
 
-    /// Parse one rollout file: track the current model from `turn_context` and the current service
-    /// tier from `thread_settings_applied`, normalize each `token_count` into a delta event, and
-    /// skip a child session's replayed parent history (everything before the first live
-    /// `task_started` — see the type doc). A session that never records a tier is standard.
-    static func parseFile(_ data: Data) -> [Event] {
-        let turnContextMarker = Data(#""type":"turn_context""#.utf8)
-        let tokenCountMarker = Data(#""type":"token_count""#.utf8)
-        let sessionMetaMarker = Data(#""type":"session_meta""#.utf8)
-        let taskStartedMarker = Data(#""type":"task_started""#.utf8)
-        let threadSettingsMarker = Data(#""type":"thread_settings_applied""#.utf8)
-
-        var events: [Event] = []
+    /// The session-scoped facts a rollout parse carries from line to line. Persisted (as an opaque
+    /// blob) alongside the parse cache's byte offset so an appended tail resumes with the same
+    /// model context, delta baseline, tier, and replay gate a whole-file parse would have reached.
+    struct ParseState: Codable, Sendable, Equatable {
         var previousTotals: RawUsage?
         var currentModel: String?
         var currentTierIsFast = false
         var sawSessionMeta = false
-        // Non-nil while inside a child session's replayed parent history.
+        /// Non-nil while inside a child session's replayed parent history.
         var replayGate: ChildReplayGate?
+    }
+
+    /// Chunk-resumable parse for the incremental scanner: a rollout that only grew re-reads just
+    /// the appended lines instead of the whole multi-hundred-MB file.
+    static let tailParser = JSONLTailParser<Event>(parseChunk: { chunk, stateData in
+        var state = ParseState()
+        if let stateData {
+            guard let decoded = try? JSONDecoder().decode(ParseState.self, from: stateData) else {
+                return nil
+            }
+            state = decoded
+        }
+        let events = parseChunk(chunk, state: &state)
+        guard let encoded = try? JSONEncoder().encode(state) else { return nil }
+        return (events, encoded)
+    })
+
+    /// Parse one whole rollout file (tests and the whole-file path).
+    static func parseFile(_ data: Data) -> [Event] {
+        var state = ParseState()
+        return parseChunk(data, state: &state)
+    }
+
+    /// Parse rollout lines: track the current model from `turn_context` and the current service
+    /// tier from `thread_settings_applied`, normalize each `token_count` into a delta event, and
+    /// skip a child session's replayed parent history (everything before the first live
+    /// `task_started` — see the type doc). A session that never records a tier is standard.
+    static func parseChunk(_ data: Data, state: inout ParseState) -> [Event] {
+        let typeMarker = Data(#""type":""#.utf8)
+        let turnContextToken = Data(#"turn_context""#.utf8)
+        let tokenCountToken = Data(#"token_count""#.utf8)
+        let sessionMetaToken = Data(#"session_meta""#.utf8)
+        let taskStartedToken = Data(#"task_started""#.utf8)
+        let threadSettingsToken = Data(#"thread_settings_applied""#.utf8)
+
+        var events: [Event] = []
 
         for line in data.split(separator: UInt8(ascii: "\n")) {
-            let isTurnContext = line.range(of: turnContextMarker) != nil
-            let isSessionMeta = !sawSessionMeta && line.range(of: sessionMetaMarker) != nil
-            let isTaskStarted = replayGate != nil && line.range(of: taskStartedMarker) != nil
-            let isThreadSettings = line.range(of: threadSettingsMarker) != nil
+            // One pass over the line for every `"type":"<value>"` occurrence (top level and inside
+            // `payload`), instead of a separate full-line scan per marker.
+            var seesTurnContext = false
+            var seesTokenCount = false
+            var seesSessionMeta = false
+            var seesTaskStarted = false
+            var seesThreadSettings = false
+            var cursor = line.startIndex
+            while let found = line.range(of: typeMarker, in: cursor..<line.endIndex) {
+                let value = line[found.upperBound...]
+                if value.starts(with: turnContextToken) { seesTurnContext = true }
+                else if value.starts(with: tokenCountToken) { seesTokenCount = true }
+                else if value.starts(with: sessionMetaToken) { seesSessionMeta = true }
+                else if value.starts(with: taskStartedToken) { seesTaskStarted = true }
+                else if value.starts(with: threadSettingsToken) { seesThreadSettings = true }
+                cursor = found.upperBound
+            }
+
+            let isTurnContext = seesTurnContext
+            let isSessionMeta = !state.sawSessionMeta && seesSessionMeta
+            let isTaskStarted = state.replayGate != nil && seesTaskStarted
+            let isThreadSettings = seesThreadSettings
             guard isTurnContext || isSessionMeta || isTaskStarted || isThreadSettings
-                || line.range(of: tokenCountMarker) != nil
+                || seesTokenCount
             else { continue }
             guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { continue }
 
@@ -209,21 +255,21 @@ actor CodexLogUsageScanner {
 
             if type == "turn_context" {
                 if let model = payload.flatMap(modelName(in:)) {
-                    currentModel = model
+                    state.currentModel = model
                 }
                 continue
             }
             // Only the file's own (first) session_meta counts: a child file replays the parent's
             // session_meta lines right after its own.
-            if type == "session_meta", !sawSessionMeta {
-                sawSessionMeta = true
+            if type == "session_meta", !state.sawSessionMeta {
+                state.sawSessionMeta = true
                 if let payload, isChildSessionMeta(payload) {
                     if let timestampRaw = (object["timestamp"] as? String)?.trimmingCharacters(in: .whitespaces),
                        let created = RunwayISO8601.date(from: timestampRaw) {
-                        replayGate = .untilStartedAt(created.timeIntervalSince1970.rounded(.down))
+                        state.replayGate = .untilStartedAt(created.timeIntervalSince1970.rounded(.down))
                     } else {
                         // Still a child — suppress replay even without a creation timestamp.
-                        replayGate = .untilSelfTimedTaskStarted
+                        state.replayGate = .untilSelfTimedTaskStarted
                     }
                 }
                 continue
@@ -231,7 +277,7 @@ actor CodexLogUsageScanner {
             if isThreadSettings, type == "event_msg",
                payload?["type"] as? String == "thread_settings_applied" {
                 if let tier = serviceTier(in: payload) {
-                    currentTierIsFast = tier == "fast" || tier == "priority"
+                    state.currentTierIsFast = tier == "fast" || tier == "priority"
                 }
                 continue
             }
@@ -240,10 +286,10 @@ actor CodexLogUsageScanner {
             // The first live task_started opens the child's own turns; replayed task_started lines
             // carry the parent's original, older started_at.
             if payload["type"] as? String == "task_started" {
-                if let gate = replayGate,
+                if let gate = state.replayGate,
                    let startedAt = payload["started_at"] as? NSNumber,
                    gate.isCleared(byStartedAt: startedAt.doubleValue, lineTimestamp: object["timestamp"] as? String) {
-                    replayGate = nil
+                    state.replayGate = nil
                 }
                 continue
             }
@@ -256,14 +302,14 @@ actor CodexLogUsageScanner {
             let totals = (info?["total_token_usage"] as? [String: Any]).map(RawUsage.init(json:))
 
             // Replayed parent history: seed the delta baseline from it but never emit usage.
-            if replayGate != nil {
-                if let totals { previousTotals = totals }
+            if state.replayGate != nil {
+                if let totals { state.previousTotals = totals }
                 continue
             }
 
             // Unchanged cumulative totals mean a re-emitted stale snapshot (Codex does this), not
             // new usage — even when the line repeats a last_token_usage.
-            if let totals, let previous = previousTotals, totals.equalCounts(previous) {
+            if let totals, let previous = state.previousTotals, totals.equalCounts(previous) {
                 continue
             }
 
@@ -271,18 +317,18 @@ actor CodexLogUsageScanner {
             if let last = (info?["last_token_usage"] as? [String: Any]).map(RawUsage.init(json:)) {
                 usage = last
             } else if let totals {
-                usage = totals.subtracting(previousTotals)
+                usage = totals.subtracting(state.previousTotals)
             } else {
                 continue
             }
-            if let totals { previousTotals = totals }
+            if let totals { state.previousTotals = totals }
             guard usage.input > 0 || usage.cached > 0 || usage.output > 0 || usage.reasoning > 0 else { continue }
 
             let parsedModel = modelName(in: payload) ?? info.flatMap(modelName(in:))
             let model = resolveModel(
                 parsed: parsedModel,
                 timestamp: timestampRaw,
-                currentModel: &currentModel
+                currentModel: &state.currentModel
             )
 
             events.append(Event(
@@ -293,7 +339,7 @@ actor CodexLogUsageScanner {
                 output: usage.output,
                 reasoning: usage.reasoning,
                 total: usage.total,
-                isFast: currentTierIsFast
+                isFast: state.currentTierIsFast
             ))
         }
         return events
@@ -314,7 +360,8 @@ actor CodexLogUsageScanner {
 
     /// Token fields of a `token_count` usage object, tolerating the older field spellings ccusage
     /// accepts (`prompt_tokens`, `completion_tokens`, `cache_read_input_tokens`, …).
-    struct RawUsage: Sendable {
+    /// Codable so `ParseState` can carry the delta baseline across resumed chunks.
+    struct RawUsage: Codable, Sendable, Equatable {
         var input: Int
         var cached: Int
         var output: Int
@@ -373,7 +420,8 @@ actor CodexLogUsageScanner {
     }
 
     /// How a child session's replayed parent history is gated until the first live turn.
-    private enum ChildReplayGate {
+    /// Codable so `ParseState` can persist an open gate across resumed chunks.
+    enum ChildReplayGate: Codable, Sendable, Equatable {
         /// Clear when `task_started.started_at` is at/after the child's creation epoch.
         case untilStartedAt(TimeInterval)
         /// Child `session_meta` had no parseable creation timestamp: clear when `started_at` is

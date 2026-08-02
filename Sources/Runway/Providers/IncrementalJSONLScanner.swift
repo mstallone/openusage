@@ -113,6 +113,28 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
         cacheIdentity: String = "default",
         parse: @Sendable @escaping (Data) -> [Item]?
     ) async -> [Item]? {
+        await items(from: files, since: since, cacheIdentity: cacheIdentity, strategy: .wholeFile(parse))
+    }
+
+    /// Like `items(from:since:cacheIdentity:parse:)`, but a file that only grew since its cached
+    /// parse re-reads just the appended bytes and resumes from the recorded parser state — the
+    /// active session logs this app scans are multi-hundred-MB append-only rollouts, and re-reading
+    /// one in full every refresh was the app's single largest recurring CPU cost.
+    func items(
+        from files: [JSONLScanning.DiscoveredFile],
+        since: Date,
+        cacheIdentity: String = "default",
+        tailParser: JSONLTailParser<Item>
+    ) async -> [Item]? {
+        await items(from: files, since: since, cacheIdentity: cacheIdentity, strategy: .tail(tailParser))
+    }
+
+    private func items(
+        from files: [JSONLScanning.DiscoveredFile],
+        since: Date,
+        cacheIdentity: String,
+        strategy: JSONLParseStrategy<Item>
+    ) async -> [Item]? {
         precondition(!cacheIdentity.isEmpty)
         guard await acquire(cacheIdentity) else { return nil }
         defer { release(cacheIdentity) }
@@ -125,33 +147,71 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
         // This lets multi-account cards with disjoint roots share one actor safely; only the current
         // call's input paths are returned below.
         var nextCache = currentCache.filter { $0.value.mtime >= since }
-        var toParse: [JSONLScanning.DiscoveredFile] = []
+        var toParse: [JSONLParseRequest] = []
+        // Items already parsed up to each resume point, re-attached ahead of appended results.
+        var resumeItems: [String: [Item]] = [:]
         for file in files {
             guard file.mtime >= since else { continue }
             if let cached = currentCache[file.path], cached.size == file.size, cached.mtime == file.mtime {
                 nextCache[file.path] = cached
             } else {
                 nextCache[file.path] = nil
-                toParse.append(file)
+                var resume: JSONLResumeHint?
+                if case .tail = strategy,
+                   let cached = currentCache[file.path],
+                   let offset = cached.parsedOffset,
+                   let fingerprint = cached.tailFingerprint,
+                   file.size > cached.size,
+                   offset <= cached.size
+                {
+                    resume = JSONLResumeHint(
+                        offset: offset, state: cached.resumeState, fingerprint: fingerprint
+                    )
+                    resumeItems[file.path] = cached.items
+                }
+                toParse.append(JSONLParseRequest(file: file, resume: resume))
             }
         }
         let parseResults = await Self.parseFiles(
             toParse,
             maxConcurrentParses: maxConcurrentParses,
             permitPool: parsePermitPool,
-            parse: parse
+            strategy: strategy
         )
         guard !Task.isCancelled else { return nil }
         let checkedPaths = Set(parseResults.lazy.map(\.file.path))
-        let unreadablePaths = Set(parseResults.lazy.filter(\.readFailed).map(\.file.path))
+        let unreadablePaths = Set(
+            parseResults.lazy.filter {
+                if case .unreadable = $0.outcome { return true }
+                return false
+            }.map(\.file.path)
+        )
         await readFailureReporter.update(checkedPaths: checkedPaths, failingPaths: unreadablePaths)
         guard !Task.isCancelled else { return nil }
         var parsedPaths: Set<String> = []
         for result in parseResults {
-            let (file, parsed) = (result.file, result.items)
-            guard let parsed else { continue }
-            nextCache[file.path] = CachedFile(size: file.size, mtime: file.mtime, items: parsed)
-            parsedPaths.insert(file.path)
+            let file = result.file
+            switch result.outcome {
+            case .replaced(let items, let offset, let state, let fingerprint):
+                nextCache[file.path] = CachedFile(
+                    size: file.size, mtime: file.mtime, items: items,
+                    parsedOffset: offset, resumeState: state, tailFingerprint: fingerprint
+                )
+                parsedPaths.insert(file.path)
+            case .appended(let newItems, let offset, let state, let fingerprint):
+                // `offset` is the parsed coverage, which a successful tail parse extends to the end
+                // of the bytes read — the file's true size at read time. Cache that (not the
+                // discovered stat size): if the file changed between stat and read, the next scan
+                // re-detects the difference instead of treating stale bytes as covered.
+                nextCache[file.path] = CachedFile(
+                    size: offset, mtime: file.mtime,
+                    items: (resumeItems[file.path] ?? []) + newItems,
+                    parsedOffset: offset, resumeState: state, tailFingerprint: fingerprint
+                )
+                parsedPaths.insert(file.path)
+            case .skipped, .unreadable:
+                break
+            }
         }
         for (path, cached) in currentCache where nextCache[path] == nil {
             dirtyRemovals[cacheIdentity, default: [:]][path] = JSONLScanCacheFileMetadata(
@@ -341,7 +401,12 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
             return (
                 path,
                 metadata,
-                JSONLScanCacheRecord(path: path, size: cached.size, mtime: cached.mtime, items: cached.items)
+                JSONLScanCacheRecord(
+                    path: path, size: cached.size, mtime: cached.mtime, items: cached.items,
+                    parsedOffset: cached.parsedOffset,
+                    resumeState: cached.resumeState,
+                    tailFingerprint: cached.tailFingerprint
+                )
             )
         }
         let removalSnapshot = dirtyRemovals[identity, default: [:]]
@@ -404,31 +469,28 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
         return result
     }
 
-    /// Read + parse a bounded number of changed files in parallel. Results are keyed back to the input
-    /// order; a `nil` item list marks an unreadable file.
+    /// Read + parse a bounded number of changed files in parallel. Results are keyed back to the
+    /// input order; requests not reached before cancellation keep their `.skipped` placeholder.
     private static func parseFiles(
-        _ files: [JSONLScanning.DiscoveredFile],
+        _ requests: [JSONLParseRequest],
         maxConcurrentParses: Int,
         permitPool: JSONLParsePermitPool,
-        parse: @Sendable @escaping (Data) -> [Item]?
-    ) async -> [(file: JSONLScanning.DiscoveredFile, items: [Item]?, readFailed: Bool)] {
+        strategy: JSONLParseStrategy<Item>
+    ) async -> [(file: JSONLScanning.DiscoveredFile, outcome: JSONLParseOutcome<Item>)] {
         await withTaskGroup(
-            of: (Int, [Item]?, Bool).self,
-            returning: [(file: JSONLScanning.DiscoveredFile, items: [Item]?, readFailed: Bool)].self
+            of: (Int, JSONLParseOutcome<Item>).self,
+            returning: [(file: JSONLScanning.DiscoveredFile, outcome: JSONLParseOutcome<Item>)].self
         ) { group in
             func addTask(at index: Int) {
-                let file = files[index]
+                let request = requests[index]
                 group.addTask {
-                    guard await permitPool.acquire() else { return (index, nil, false) }
-                    let result: (Int, [Item]?, Bool)
-                    if Task.isCancelled || !FileManager.default.fileExists(atPath: file.path) {
-                        result = (index, nil, false)
+                    guard await permitPool.acquire() else { return (index, .skipped) }
+                    let result: (Int, JSONLParseOutcome<Item>)
+                    if Task.isCancelled || !FileManager.default.fileExists(atPath: request.file.path) {
+                        result = (index, .skipped)
                     } else {
                         result = autoreleasepool {
-                            guard let data = FileManager.default.contents(atPath: file.path) else {
-                                return (index, nil, true)
-                            }
-                            return (index, parse(data), false)
+                            (index, JSONLTailIO.parse(request: request, strategy: strategy))
                         }
                     }
                     await permitPool.release()
@@ -437,20 +499,20 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
             }
 
             var nextIndex = 0
-            let initialCount = min(maxConcurrentParses, files.count)
+            let initialCount = min(maxConcurrentParses, requests.count)
             for index in 0..<initialCount where !Task.isCancelled {
                 addTask(at: index)
                 nextIndex += 1
             }
 
-            var results = files.map { (file: $0, items: Optional<[Item]>.none, readFailed: false) }
-            for await (index, items, readFailed) in group {
+            var results = requests.map { (file: $0.file, outcome: JSONLParseOutcome<Item>.skipped) }
+            for await (index, outcome) in group {
                 if Task.isCancelled {
                     group.cancelAll()
                     break
                 }
-                results[index] = (files[index], items, readFailed)
-                if nextIndex < files.count {
+                results[index] = (requests[index].file, outcome)
+                if nextIndex < requests.count {
                     addTask(at: nextIndex)
                     nextIndex += 1
                 }

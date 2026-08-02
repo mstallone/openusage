@@ -1,4 +1,5 @@
 import Foundation
+@testable import Runway
 
 final class ConcurrencyProbe: @unchecked Sendable {
     private let lock = NSLock()
@@ -34,6 +35,26 @@ final class WarningRecorder: @unchecked Sendable {
     func record(_ count: Int) {
         lock.withLock {
             recordedCounts.append(count)
+        }
+    }
+}
+
+/// Records every chunk handed to a stateless tail parser that reads one `Int` per line.
+final class ChunkRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    var chunks: [String] {
+        lock.withLock { recorded }
+    }
+
+    var parser: JSONLTailParser<Int> {
+        JSONLTailParser { [self] chunk, _ in
+            lock.withLock { recorded.append(String(decoding: chunk, as: UTF8.self)) }
+            let items = chunk.split(separator: UInt8(ascii: "\n")).compactMap {
+                Int(String(decoding: $0, as: UTF8.self))
+            }
+            return (items, nil)
         }
     }
 }

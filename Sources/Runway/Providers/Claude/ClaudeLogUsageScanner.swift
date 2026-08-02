@@ -89,7 +89,7 @@ actor ClaudeLogUsageScanner {
         let roots = claudeRoots()
         guard !roots.isEmpty else {
             _ = await scanner.items(
-                from: [], since: since, cacheIdentity: cacheIdentity, parse: Self.parseFile
+                from: [], since: since, cacheIdentity: cacheIdentity, tailParser: Self.tailParser
             )
             return nil
         }
@@ -97,7 +97,7 @@ actor ClaudeLogUsageScanner {
         let files = Self.usageFiles(under: roots)
         guard !files.isEmpty else {
             _ = await scanner.items(
-                from: [], since: since, cacheIdentity: cacheIdentity, parse: Self.parseFile
+                from: [], since: since, cacheIdentity: cacheIdentity, tailParser: Self.tailParser
             )
             return nil
         }
@@ -107,7 +107,7 @@ actor ClaudeLogUsageScanner {
             from: files,
             since: since,
             cacheIdentity: cacheIdentity,
-            parse: Self.parseFile
+            tailParser: Self.tailParser
         ), !Task.isCancelled else { return nil }
         return Self.aggregate(entries: Self.dedup(entries), since: since, pricing: pricing)
     }
@@ -244,6 +244,12 @@ actor ClaudeLogUsageScanner {
     }
 
     // MARK: - Line parsing
+
+    /// Chunk-resumable parse for the incremental scanner. Claude usage lines are self-contained,
+    /// so the parser is stateless and an appended tail parses with no carried state.
+    static let tailParser = JSONLTailParser<Entry>(parseChunk: { chunk, _ in
+        (items: parseFile(chunk), state: nil)
+    })
 
     /// Parse every usage line of one session file. Entries keep their raw timestamps — the date
     /// window is applied at aggregation so a cached parse stays valid as the window slides.
