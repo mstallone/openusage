@@ -372,6 +372,8 @@ private final class SakanaRecordingHTTPClient: HTTPClient, @unchecked Sendable {
 private struct SakanaProviderSQLiteDouble: SQLiteAccessing {
     var row: String
     func queryValue(path: String, sql: String) throws -> String? { row }
+    // JSON row queries are not exercised here.
+    func queryJSONRows(path: String, sql: String) throws -> String? { nil }
     func execute(path: String, sql: String) throws {}
 }
 

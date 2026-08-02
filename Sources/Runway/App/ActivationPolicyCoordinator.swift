@@ -21,6 +21,7 @@ final class ActivationPolicyCoordinator {
     /// several times against a single release.
     enum Holder: String {
         case settingsWindow
+        case memoryWindow
         case updaterUI
     }
 

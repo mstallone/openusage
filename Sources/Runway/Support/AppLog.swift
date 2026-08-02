@@ -17,6 +17,7 @@ enum LogTag: String, Sendable {
     case subprocess
     case lifecycle
     case notifications
+    case memory
 
     /// Compound `[plugin:<id>]` / `[auth:<id>]` tags for per-provider lines.
     static func plugin(_ id: String) -> String { "plugin:\(id)" }

@@ -7,6 +7,7 @@ What the app does and how it behaves. These pages describe **behavior, not visua
 - [Dashboard](dashboard.md) — the popover: rows, toggles, reordering, keyboard shortcuts
 - [Menu bar](menu-bar.md) — pinning metrics into the menu bar
 - [Settings](settings.md) — every option, what it changes
+- [Memory Explorer](memory-explorer.md) — view and edit each AI harness's memory and instruction files
 - [Refreshing & caching](refreshing.md) — when data updates and what happens when a fetch fails
 - [iCloud Sync](icloud-sync.md) — how spend history is combined across Macs
 - [iOS Companion App](ios-app.md) — the iPhone/iPad viewer for synced usage

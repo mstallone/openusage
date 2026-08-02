@@ -213,6 +213,14 @@ final class ProviderAccountsStore {
     /// family was discovered this launch; two or more active siblings all include their labels.
     func derivedDisplayName(cardID: String) -> String? {
         guard let record = record(backingCardID: cardID) else { return nil }
+        return derivedDisplayName(for: record)
+    }
+
+    /// The record-based half of the derivation, for callers that already hold the exact record —
+    /// the card-id path above, and the anchored lookup, whose record must not be re-resolved
+    /// through the bare-id default-badge special case (after a login swap that lands on a
+    /// different account).
+    private func derivedDisplayName(for record: ProviderAccountRecord) -> String {
         let activeSiblingCount = records.lazy.filter {
             $0.family == record.family && self.activeRecordIDs.contains($0.id)
         }.count
@@ -240,6 +248,20 @@ final class ProviderAccountsStore {
     func resolvedDisplayName(cardID: String) -> String? {
         guard let record = record(backingCardID: cardID) else { return nil }
         return record.customLabel?.nilIfEmpty ?? derivedDisplayName(cardID: cardID)
+    }
+
+    /// The resolved title for the account whose sources include `homePath` — the Memory Explorer's
+    /// lookup: memory sources are keyed by home directory, not card id. Comparison is on expanded
+    /// absolute paths so a `~`-spelled anchor still matches. `nil` when no (living) record of the
+    /// family claims that home, so callers fall back to the harness's static name.
+    func resolvedDisplayName(anchoredAt homePath: String, family: String) -> String? {
+        let target = expandHome(homePath)
+        guard let record = records.first(where: { record in
+            record.family == family
+                && !record.removedTombstone
+                && record.sources.contains { $0.anchor.map(expandHome) == target }
+        }) else { return nil }
+        return record.customLabel?.nilIfEmpty ?? derivedDisplayName(for: record)
     }
 
     /// The account record supplying a runtime card this launch. Claude still uses one unscoped bare-id

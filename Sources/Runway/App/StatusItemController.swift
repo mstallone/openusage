@@ -74,6 +74,8 @@ final class StatusItemController: NSObject {
     private let hostingController: NSHostingController<AnyView>
     /// Owns the standalone Settings window (created lazily on first open, torn down on close).
     private let settingsWindow: SettingsWindowController
+    /// Owns the standalone Memory Explorer window (same lazy-build, teardown-on-close lifecycle).
+    private let memoryWindow: MemoryWindowController
     /// The panel's backdrop: an opaque tray by default, swapped to a behind-window vibrancy view when
     /// the transparency style is non-opaque. Built once and toggled, so it can't race the style observer.
     private let backdrop = PopoverBackdropView(cornerRadius: StatusItemController.cornerRadius)
@@ -137,6 +139,7 @@ final class StatusItemController: NSObject {
         self.panel = panel
         self.heightController = PanelHeightController(panel: panel) { container.layout.screen }
         self.settingsWindow = SettingsWindowController(container: container, updater: updater)
+        self.memoryWindow = MemoryWindowController(accounts: container.accounts)
 
         super.init()
 
@@ -173,6 +176,11 @@ final class StatusItemController: NSObject {
         SettingsWindowLink.openHandler = { [weak self] in
             self?.openSettings()
         }
+        // Memory entry points (gear menu, context menu) share the same chokepoint discipline.
+        MemoryWindowLink.openHandler = { [weak self] in
+            self?.openMemory()
+        }
+
         heightController.installBridge()
         if NotchGeometry.fallbackIsNeeded {
             occlusionMonitor.start()
@@ -201,6 +209,13 @@ final class StatusItemController: NSObject {
             close: { [weak self] in self?.hidePanel() },
             layout: container.layout,
             dataStore: container.dataStore
+        )
+        // Memory-window profiling driver — inert unless RUNWAY_UI_PROFILE_MEMORY=1
+        // (see UIProfiler / script/profile_memory_ui.sh).
+        UIProfiler.startMemoryDriverIfEnabled(
+            open: { [weak self] in self?.openMemory() },
+            close: { [weak self] in self?.memoryWindow.close() },
+            store: { [weak self] in self?.memoryWindow.currentStore }
         )
     }
 
@@ -379,8 +394,8 @@ final class StatusItemController: NSObject {
         }
     }
 
-    /// Right-click / control-click on the status item: a native menu mirroring the Settings and Quit
-    /// items in the popover footer's gear options menu (same titles, symbols, and ⌘ shortcuts). Assigning
+    /// Right-click / control-click on the status item: a native menu mirroring the Settings, Memory,
+    /// and Quit items in the popover footer's gear options menu (same titles, symbols, and ⌘ shortcuts). Assigning
     /// `statusItem.menu` for the span of one `performClick` shows the menu anchored under the item and
     /// highlights the button, then clearing it restores the left-click toggle behavior.
     private func showContextMenu() {
@@ -392,6 +407,9 @@ final class StatusItemController: NSObject {
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem(title: "Settings", systemSymbol: "gearshape", keyEquivalent: ",") { [weak self] in
             self?.openSettings()
+        })
+        menu.addItem(ClosureMenuItem(title: "Memory", systemSymbol: "brain") { [weak self] in
+            self?.openMemory()
         })
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: "Quit Runway", systemSymbol: "power", keyEquivalent: "q") {
@@ -409,6 +427,14 @@ final class StatusItemController: NSObject {
     private func openSettings() {
         if panel.isVisible { hidePanel() }
         settingsWindow.show()
+    }
+
+    /// Opens the standalone Memory window. Same hand-off as `openSettings()`: the window activates
+    /// the app and takes key, so the transient panel closes first instead of waiting for the
+    /// outside-click monitor to dismiss it a beat later.
+    private func openMemory() {
+        if panel.isVisible { hidePanel() }
+        memoryWindow.show()
     }
 
     func togglePopover() {

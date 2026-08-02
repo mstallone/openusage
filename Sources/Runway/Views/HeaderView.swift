@@ -4,7 +4,8 @@ import SwiftUI
 /// The dashboard footer's trailing control: a single **gear** menu button in Liquid Glass. An earlier
 /// split button ("Customize" + separate chevron) confused people, and the "Options ⌄" capsule that
 /// replaced it claimed more footer than one control deserved — so everything lives in one compact,
-/// obvious gear menu: Customize / Settings / Share Screenshot / Check for Updates / About / Quit.
+/// obvious gear menu: Customize / Settings / Memory / Share Screenshot / Check for Updates / About /
+/// Quit.
 /// Customize leads the menu because it's the screen users reach for most; Settings stays one click
 /// away (and always via ⌘,).
 ///
@@ -100,6 +101,10 @@ struct HeaderView: View {
             Label("Settings", systemImage: "gearshape")
         }
         .keyboardShortcut(",")
+
+        Button { MemoryWindowLink.open() } label: {
+            Label("Memory", systemImage: "brain")
+        }
 
         Divider()
 

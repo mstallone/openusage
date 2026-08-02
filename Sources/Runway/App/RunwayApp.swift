@@ -73,6 +73,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Quit bypasses every window's `windowShouldClose`, so a dirty Memory editor gets its
+    /// Save / Discard / Cancel say here before the process exits.
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MemoryWindowController.terminationReplyForDirtyEditor()
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
         launchTask?.cancel()
         // A quit mid-refresh must not drop completed providers' snapshot-cache writes: batch passes
