@@ -59,9 +59,10 @@ struct DashboardView: View {
     /// provider's expanded-section *composition* (`expansionDeltaKey`), so customizing what sits
     /// behind the caret misses the cache and re-learns instead of retargeting by a stale height.
     @State private var expansionDeltas: [String: CGFloat] = [:]
-    /// The composition key whose caret toggle is awaiting its measurement, with the pre-toggle target
-    /// the actual delta is derived from. Cleared when the dashboard measurement settles.
-    @State private var pendingExpansion: (cacheKey: String, fromTarget: CGFloat)?
+    /// The composition key whose caret toggle is awaiting its measurement, with the pre-toggle
+    /// target the actual delta is derived from and the row-count estimate the settled value is
+    /// sanity-checked against. Cleared when the dashboard measurement settles.
+    @State private var pendingExpansion: (cacheKey: String, fromTarget: CGFloat, estimate: CGFloat)?
     /// Debounce for measurement-driven re-targets: armed on every `measuredIdeal` change while the
     /// popover is shown, fired ~2 quiet frames after the last one (see the `onChange` below).
     @State private var measurementSettleTask: Task<Void, Never>?
@@ -320,9 +321,18 @@ struct DashboardView: View {
             .onAppear {
                 MenuBarPopover.coAnimateExpansion = { providerID, expanding in
                     guard didEstablishHeight, animatedHeight > 0, layout.screen == .dashboard else { return }
-                    let fromIdeal = heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight
+                    // The baseline the delta applies to. A SUPERSEDING toggle (an earlier morph is
+                    // still settling) must build on the DRIVEN model target — `animatedHeight`
+                    // already holds where the previous toggle is heading — because `measuredIdeal`
+                    // is still an interpolated mid-flight height; deriving from it could drive a
+                    // rapid expand/collapse below the collapsed height or swallow a second card's
+                    // expansion. A clean toggle uses the settled measurement as before.
+                    let fromIdeal = expansionSettling
+                        ? animatedHeight
+                        : (heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight)
                     let key = expansionDeltaKey(for: providerID)
-                    let delta = expansionDeltas[key] ?? estimatedExpansionDelta(for: providerID)
+                    let estimate = estimatedExpansionDelta(for: providerID)
+                    let delta = expansionDeltas[key] ?? estimate
                     // Learn only from a clean toggle: while an earlier caret morph is still
                     // settling (`expansionSettling` — an explicit marker cleared only when the
                     // settle actually lands, so a third rapid toggle can't sneak through the
@@ -331,7 +341,7 @@ struct DashboardView: View {
                     // delta would be cached wrong. Skipping just means the estimate covers this
                     // toggle and the next clean one re-learns exactly.
                     if !expansionSettling, measurementSettleTask == nil {
-                        pendingExpansion = (key, fromIdeal)
+                        pendingExpansion = (key, fromIdeal, estimate)
                     } else {
                         pendingExpansion = nil
                     }
@@ -397,9 +407,17 @@ struct DashboardView: View {
         guard layout.screen == .dashboard else { pendingExpansion = nil; return }
         guard let target = heightCoordinator.target(for: layout.screen) else { return }
         // A caret toggle's measurement just settled: learn the provider's exact expanded-section
-        // height so the NEXT toggle co-animates with zero correction.
+        // height so the NEXT toggle co-animates with zero correction. Sanity-checked against the
+        // row-count estimate: an unrelated height change overlapping the settle (a refresh
+        // replacing loading rows, the update banner dismissing) folds into the measured
+        // difference, and caching that would drive the next toggle to the wrong height — a delta
+        // implausibly far from the estimate is discarded, the estimate keeps covering toggles,
+        // and a clean settle later re-learns exactly.
         if let pending = pendingExpansion, let ideal = heightCoordinator.measuredIdeal[.dashboard] {
-            expansionDeltas[pending.cacheKey] = abs(ideal - pending.fromTarget)
+            let learned = abs(ideal - pending.fromTarget)
+            if abs(learned - pending.estimate) <= max(60, pending.estimate * 0.75) {
+                expansionDeltas[pending.cacheKey] = learned
+            }
             pendingExpansion = nil
         }
         // Mid-slide the switch path's completion owns the target; deferring here matches the old
