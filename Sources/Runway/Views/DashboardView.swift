@@ -259,17 +259,22 @@ struct DashboardView: View {
                     measurementSettleTask?.cancel()
                     measurementSettleTask = nil
                     if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
-                } else {
-                    // Leading edge: the FIRST change in a quiet period retargets immediately, so an
-                    // ordinary animated content change (the update banner or first-run hint
-                    // dismissing, a refresh loading rows) co-animates the panel instead of lagging
-                    // a full debounce behind and leaving a blank strip. Caret unfolds skip it —
-                    // their co-animate already set the target and their first measurement is a
-                    // partial mid-flight value (`pendingExpansion` marks that window).
-                    if measurementSettleTask == nil, pendingExpansion == nil,
-                       !isSliding, abs(target - animatedHeight) > 1 {
+                } else if pendingExpansion == nil {
+                    // Ordinary content change (the update banner or first-run hint dismissing, a
+                    // refresh loading rows): re-target throughout the change so the panel
+                    // co-animates with the content instead of trailing it by a debounce and
+                    // leaving a blank strip or clipped rows. These are one-off, short animations;
+                    // the measured per-frame-retarget stall source was the caret unfold, which
+                    // keeps its debounce below.
+                    measurementSettleTask?.cancel()
+                    measurementSettleTask = nil
+                    if !isSliding, abs(target - animatedHeight) > 1 {
                         withAnimation(Motion.spring) { animatedHeight = target }
                     }
+                } else {
+                    // Caret unfold in flight: its co-animate already set the estimated target, and
+                    // every interpolated measurement until it settles is partial — wait for ~2
+                    // quiet frames, then learn the exact delta and issue at most one correction.
                     measurementSettleTask?.cancel()
                     measurementSettleTask = Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(120))
