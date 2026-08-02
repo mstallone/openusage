@@ -124,8 +124,18 @@ final class MemoryWindowController: NSObject, NSWindowDelegate {
                 do {
                     try await save()
                     NSApplication.shared.reply(toApplicationShouldTerminate: true)
+                } catch MemoryEditorError.conflictDetected {
+                    // Quit is cancelled; the editor is showing Reload / Overwrite.
+                    AppLog.info(.memory, "quit-prompt save hit a disk conflict; quit cancelled")
+                    NSApplication.shared.reply(toApplicationShouldTerminate: false)
                 } catch {
+                    // A quit that silently does nothing reads as a broken Quit menu item.
                     AppLog.error(.memory, "saving before quit failed: \(error.localizedDescription)")
+                    let failureAlert = NSAlert()
+                    failureAlert.alertStyle = .warning
+                    failureAlert.messageText = "Could Not Save"
+                    failureAlert.informativeText = error.localizedDescription
+                    failureAlert.runModal()
                     NSApplication.shared.reply(toApplicationShouldTerminate: false)
                 }
             }

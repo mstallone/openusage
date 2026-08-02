@@ -118,31 +118,21 @@ struct LocalTextFileAccessor: TextFileAccessing {
         var status = stat()
         // Unqualified call: `Darwin.stat` names the struct, shadowing the C function.
         let statResult = expanded.withCString { stat($0, &status) }
-        let mode: mode_t
         if statResult == 0 {
-            mode = status.st_mode & 0o7777
+            try write(path, text, mode: status.st_mode & 0o7777)
         } else if errno == ENOENT {
-            // A brand-new file honors the process umask: `write` reasserts the exact mode on the
-            // inode (the umask cannot be allowed to *tighten a preserved mode*), so a restrictive
-            // umask (077 on a shared Mac) must be applied here or new memory files would leak
-            // group/other read bits the user has globally opted out of.
-            mode = Self.sharedFileMode & ~Self.currentUmask()
+            // A brand-new file honors the process umask: the kernel applies it at open(2), so
+            // skipping the exact-mode reassertion lets a restrictive umask (077 on a shared Mac)
+            // strip group/other bits naturally — with no process-wide umask fiddling that could
+            // race other threads' file creation. Preserved modes reassert exactly: the umask must
+            // never tighten what the harness already had.
+            try write(path, text, mode: Self.sharedFileMode, reassertingExactMode: false)
         } else {
             throw Self.currentPOSIXError()
         }
-        try write(path, text, mode: mode)
     }
 
-    /// The process umask, which is read-modify-only (umask(2)): set zero, read the old value,
-    /// restore it. The zero window is nanoseconds and every file this process creates goes
-    /// through this accessor's explicit-mode path anyway.
-    private static func currentUmask() -> mode_t {
-        let current = umask(0)
-        umask(current)
-        return current
-    }
-
-    private func write(_ path: String, _ text: String, mode: mode_t) throws {
+    private func write(_ path: String, _ text: String, mode: mode_t, reassertingExactMode: Bool = true) throws {
         // Resolve symlinks before publishing: `rename` replaces a destination symlink with a plain
         // file instead of following it. Memory and instruction files (CLAUDE.md, AGENTS.md, …) are
         // commonly symlinked into a dotfiles repo — the save must land in the link's target, exactly
@@ -169,10 +159,13 @@ struct LocalTextFileAccessor: TextFileAccessing {
             }
         }
 
-        // A process umask may only remove permissions at creation. Reassert the exact mode on the
-        // still-unpublished inode before writing or renaming it into place.
-        guard Darwin.fchmod(descriptor, mode) == 0 else {
-            throw Self.currentPOSIXError()
+        // A process umask may only remove permissions at creation. Callers preserving an existing
+        // file's exact mode reassert it on the still-unpublished inode; brand-new files skip this
+        // so the kernel-applied umask stands.
+        if reassertingExactMode {
+            guard Darwin.fchmod(descriptor, mode) == 0 else {
+                throw Self.currentPOSIXError()
+            }
         }
         try Self.writeAll(Data(text.utf8), to: descriptor)
         guard Darwin.fsync(descriptor) == 0 else { throw Self.currentPOSIXError() }

@@ -154,10 +154,12 @@ struct MemorySidebarView: View {
             .selectionDisabled()
     }
 
-    /// Whether the create affordance applies: the file is absent (any status but Memory Disabled —
-    /// creating a file there wouldn't turn the feature on, e.g. Grok without its memory directory).
+    /// Whether the create affordance applies when the instruction file is absent. Memory Disabled
+    /// only suppresses it for Grok, whose sole creatable file IS the memory file the disabled
+    /// feature ignores; Codex's AGENTS.md is an instruction file independent of its memories
+    /// switch, so a memories-off Codex home still gets to create one.
     private func canCreateInstructionFile(for source: MemorySource) -> Bool {
-        if case .memoryDisabled = source.status { return false }
+        if case .memoryDisabled = source.status { return !source.id.hasPrefix("grok:") }
         return true
     }
 
