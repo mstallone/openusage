@@ -78,6 +78,7 @@ sed -E 's/.*uiprofile\] //; s/ms$//' "$RUN_LOG" \
     | awk -F': ' '
         /^PHASE cold-open/      { phase = "cold" }
         /^PHASE warm-cycles/    { phase = "warm" }
+        /^PHASE setup/          { phase = "other" }
         /^PHASE screen-switch/  { phase = "other" }
         $1 ~ /^open\.(layoutSubtree|orderFront|syncTotal|toFirstFrame)$/ && phase != "" && phase != "other" {
             key = phase "." $1
