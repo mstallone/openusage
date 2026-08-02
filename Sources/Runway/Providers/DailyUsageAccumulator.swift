@@ -108,9 +108,17 @@ struct DailyUsageAccumulator {
 
         mutating func key(for date: Date) -> String {
             if date >= start, date < end { return cachedKey }
-            start = calendar.startOfDay(for: date)
-            end = calendar.date(byAdding: .day, value: 1, to: start)
-                ?? start.addingTimeInterval(86_400)
+            // The day's actual interval, not startOfDay + 24h or +1 day: a DST transition can make
+            // the day 23/25 hours long, and where DST skips midnight, adding one day to startOfDay
+            // overshoots the next day's start (e.g. Africa/Cairo) and would misattribute usage.
+            if let interval = calendar.dateInterval(of: .day, for: date) {
+                start = interval.start
+                end = interval.end
+            } else {
+                // Degenerate calendar answer: cache nothing (empty range) rather than guess.
+                start = date
+                end = date
+            }
             cachedKey = DailyUsageAccumulator.dayKey(from: date, calendar: calendar)
             return cachedKey
         }

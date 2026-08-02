@@ -55,6 +55,25 @@ final class DailyUsageAccumulatorTests: XCTestCase {
         }
     }
 
+    func testDayKeyCacheHandlesMidnightSkippingDSTTransition() {
+        // Egypt springs forward at midnight, so the DST start day begins at 01:00 — a cache that
+        // computes the day's end as startOfDay + 1 day overshoots the NEXT day's real start and
+        // would bill its first hour to the previous day.
+        var cairo = Calendar(identifier: .gregorian)
+        cairo.timeZone = TimeZone(identifier: "Africa/Cairo")!
+        var cache = DailyUsageAccumulator.DayKeyCache(calendar: cairo)
+
+        let dstDayNoon = cairo.date(from: DateComponents(year: 2026, month: 4, day: 24, hour: 12))!
+        let nextDayEarly = cairo.date(from: DateComponents(year: 2026, month: 4, day: 25, minute: 30))!
+        for date in [dstDayNoon, nextDayEarly, dstDayNoon] {
+            XCTAssertEqual(
+                cache.key(for: date),
+                DailyUsageAccumulator.dayKey(from: date, calendar: cairo),
+                "cache disagreed for \(date)"
+            )
+        }
+    }
+
     func testBuildSortsDaysNewestFirstAndSumsPerModel() {
         var accumulator = DailyUsageAccumulator()
         accumulator.add(day: "2024-06-01", tokens: 100, cost: 1.0, model: "sonnet")
