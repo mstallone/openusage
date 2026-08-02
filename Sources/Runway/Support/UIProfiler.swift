@@ -25,10 +25,12 @@ enum UIProfiler {
 
     static func measure<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
         guard enabled else { return try body() }
-        let state = signposter.beginInterval("phase", id: signposter.makeSignpostID())
+        // The label rides in the signpost message so an Instruments capture can tell
+        // `open.layoutSubtree` from `open.orderFront` without cross-referencing the file log.
+        let state = signposter.beginInterval("phase", id: signposter.makeSignpostID(), "\(name)")
         let start = CFAbsoluteTimeGetCurrent()
         defer {
-            signposter.endInterval("phase", state)
+            signposter.endInterval("phase", state, "\(name)")
             let ms = (CFAbsoluteTimeGetCurrent() - start) * 1000
             AppLog.info("uiprofile", "\(name): \(String(format: "%.2f", ms))ms")
         }
@@ -37,6 +39,8 @@ enum UIProfiler {
 
     static func mark(_ message: String) {
         guard enabled else { return }
+        // Mirrored as a signpost event so scripted phase boundaries land in Instruments too.
+        signposter.emitEvent("mark", "\(message)")
         AppLog.info("uiprofile", message)
     }
 
@@ -106,7 +110,11 @@ enum UIProfiler {
             }
 
             mark("PHASE expand (10x caret toggles)")
-            let expandable = layout.displayGroups.first {
+            // Pick from the applicability-filtered groups the dashboard actually renders: a raw
+            // `displayGroups` entry can hold only saved-but-inapplicable On Demand metrics (e.g.
+            // Copilot metrics for another plan), whose rendered card has no caret — toggling that
+            // provider would animate nothing and produce a fake expand benchmark.
+            let expandable = layout.displayGroups(matching: dataStore.isMetricApplicable).first {
                 $0.hasExpandedMetrics || !$0.provider.visibleLinks.isEmpty
             }?.provider.id
             if let expandable {
