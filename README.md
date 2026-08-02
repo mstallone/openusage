@@ -31,7 +31,7 @@ and methodology in [docs/performance.md](docs/performance.md).
 | First-launch scan | 165 s CPU, 12.9 GB peak | — | **12.7 s CPU, 1.7 GB peak** |
 
 † CodexBar 0.46.0 measured externally as shipped (no shared harness), tracking its 3 enabled
-providers vs Runway's 7 — rows its internals don't expose are marked —.
+providers vs Runway's 5 (7 provider cards, multi-account) — rows its internals don't expose are marked —.
 
 ## Supported Providers
 

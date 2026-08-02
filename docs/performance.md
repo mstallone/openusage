@@ -48,9 +48,9 @@ the OpenUsage comparison, so its column is deliberately partial:
   agent sessions were actively growing the log corpus during measurement. Neither side's number
   would be honest.
 - **Different scope.** CodexBar tracked its 3 enabled providers (Codex, Claude, Gemini) in its
-  default configuration — it does offer usage/spend views of its own; Runway tracked 7 providers
-  plus Total Spend over the same corpus. Where Runway still leads (launch, peak memory), it does
-  so while watching more providers.
+  default configuration — it does offer usage/spend views of its own; Runway tracked 5 provider
+  runtimes rendered as 7 cards (two extra multi-account cards) plus Total Spend over the same
+  corpus. Where Runway still leads (launch, peak memory), it does so while watching more.
 
 ## Methodology
 
