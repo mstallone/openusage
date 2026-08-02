@@ -413,8 +413,11 @@ struct MemoryEditorView: View {
                 throw MemoryEditorError.conflictDetected
             }
         }
-        try await store.save(document, text: text)
-        savedText = text
+        // The baseline is what actually went to disk, captured before the suspension — keystrokes
+        // typed while the write is in flight stay dirty instead of being silently marked saved.
+        let submitted = text
+        try await store.save(document, text: submitted)
+        savedText = submitted
         loadedModificationDate = await store.currentModificationDate(of: document)
         hasConflict = false
         syncDirtyFlag()

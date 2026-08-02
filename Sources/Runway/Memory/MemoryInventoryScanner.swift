@@ -174,7 +174,13 @@ struct MemoryInventoryScanner: Sendable {
 
     private func codexHomeCandidates() -> [String] {
         var homes = commaListEnvironmentPaths("CODEX_HOME")
-        homes.append(homeDirectory().appendingPathComponent(".codex").path)
+        let home = homeDirectory()
+        homes.append(home.appendingPathComponent(".codex").path)
+        // The historical default `CodexHomeDiscovery` also recognizes; canonical dedupe collapses
+        // it with `~/.codex` when they alias.
+        let xdg = environment.value(for: "XDG_CONFIG_HOME")?.nilIfEmpty.map(expandTilde)
+            ?? home.appendingPathComponent(".config").path
+        homes.append(xdg + "/codex")
         homes += dotDirectories(prefixed: ".codex")
         return homes
     }

@@ -194,6 +194,18 @@ final class MemoryInventoryScannerTests: XCTestCase {
         XCTAssertTrue(notes.contains { $0.contains("could not read") })
     }
 
+    func testCodexHistoricalConfigHomeIsScanned() throws {
+        let scanner = makeScanner(
+            files: ["/Users/dev/.config/codex/AGENTS.md": "historical-home instructions"],
+            subdirectories: ["/Users/dev/.config", "/Users/dev/.config/codex"]
+        )
+
+        let (sources, _) = scanner.scan()
+
+        XCTAssertEqual(sources.map(\.homePath), ["/Users/dev/.config/codex"],
+                       "the historical ~/.config/codex default must be visited like CodexHomeDiscovery does")
+    }
+
     func testGrokHomeHonorsGROKHOMEOverride() throws {
         let scanner = makeScanner(
             environment: ["GROK_HOME": "/Users/dev/custom-grok"],
