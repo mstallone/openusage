@@ -484,8 +484,9 @@ struct DashboardView: View {
         let labelLine: CGFloat = 15
         let supportingLine: CGFloat = 14
         if data.isChart, data.hasData {
-            return density.textRowPadding * 2 + labelLine
-                + density.rowInnerSpacing + density.trendChartHeight
+            // The sparkline lays its label BESIDE the bars (`UsageSparkline` is an HStack), so the
+            // row's content height is the taller of the two, not their sum.
+            return density.textRowPadding * 2 + max(labelLine, density.trendChartHeight)
         }
         if data.isBounded {
             return density.barRowPadding * 2 + labelLine + density.rowInnerSpacing * 2
@@ -620,6 +621,13 @@ struct DashboardView: View {
                     // click landing on a half-departed row would act on the wrong screen), and at
                     // rest it sits offscreen.
                     .allowsHitTesting(page.frozenHeight == nil)
+                    // Pointer hits are only one input path. Once the exit slide settles, the
+                    // parked page must also leave the keyboard focus loop and shortcut table —
+                    // deferred via `isSliding` so its still-visible controls don't grey out
+                    // mid-flight — and it leaves the accessibility tree immediately: even
+                    // mid-push it's decoration a VoiceOver user should never land on.
+                    .disabled(page.frozenHeight != nil && !isSliding)
+                    .accessibilityHidden(page.frozenHeight != nil)
             }
         }
         .frame(width: Self.popoverWidth)
