@@ -34,10 +34,12 @@ actor ClaudeLogUsageScanner {
     /// user's own login produced in a side home still counts on its card.
     private let additionalRoots: [URL]
     /// The last scan's dedup + aggregation, reused when nothing changed: same scan revision, same
-    /// discovered files, same window start, and the same (immutable) pricing snapshot instance.
-    /// The pricing object is retained so instance identity can't be recycled to a new snapshot.
+    /// discovered files, same window start, the same calendar configuration (day keys are
+    /// local-calendar), and the same (immutable) pricing snapshot instance. The pricing object is
+    /// retained so instance identity can't be recycled to a new snapshot.
     private var lastAggregate: (
-        revision: Int, filesDigest: Int64, since: Date, pricing: ModelPricing, scan: LogUsageScan
+        revision: Int, filesDigest: Int64, since: Date, calendarKey: String,
+        pricing: ModelPricing, scan: LogUsageScan
     )?
     private(set) var aggregateMemoHitsForTesting = 0
 
@@ -120,15 +122,16 @@ actor ClaudeLogUsageScanner {
         // Most 5-minute refreshes find nothing changed; skip re-running dedup + aggregation over
         // tens of thousands of unchanged cached entries.
         let filesDigest = JSONLScanning.digest(of: files)
+        let calendarKey = DailyUsageAccumulator.calendarMemoKey
         if let memo = lastAggregate,
            memo.revision == output.revision, memo.filesDigest == filesDigest,
-           memo.since == since, memo.pricing === pricing
+           memo.since == since, memo.calendarKey == calendarKey, memo.pricing === pricing
         {
             aggregateMemoHitsForTesting += 1
             return memo.scan
         }
         let scan = Self.aggregate(entries: Self.dedup(output.items), since: since, pricing: pricing)
-        lastAggregate = (output.revision, filesDigest, since, pricing, scan)
+        lastAggregate = (output.revision, filesDigest, since, calendarKey, pricing, scan)
         return scan
     }
 
