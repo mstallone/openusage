@@ -1,5 +1,54 @@
 # Changelog
 
+## v0.8.5
+
+### New Features
+- Add an env-gated UI performance harness ([#54](https://github.com/mstallone/runway/pull/54)) by @mstallone
+- Add the measured performance comparison against upstream OpenUsage ([#61](https://github.com/mstallone/runway/pull/61)) by @mstallone
+
+### Bug Fixes
+- Cut warm popup open from ~84ms to ~35ms to first frame ([#60](https://github.com/mstallone/runway/pull/60)) by @mstallone
+- Make morphs smooth: no per-frame focus-loop rebuilds or spring re-targets ([#56](https://github.com/mstallone/runway/pull/56)) by @mstallone
+- Pre-warm the panel: cold open 133ms → 50ms to first frame ([#57](https://github.com/mstallone/runway/pull/57)) by @mstallone
+- Robustness: 30s refresh timeout and Reduce Motion support ([#58](https://github.com/mstallone/runway/pull/58)) by @mstallone
+- Recover the status item when the menu bar parks it under the notch ([#59](https://github.com/mstallone/runway/pull/59)) by @mstallone
+- Move the performance table under Installation; add a best-effort CodexBar column ([#62](https://github.com/mstallone/runway/pull/62)) by @mstallone
+- Drop the best-effort CodexBar column; keep the OpenUsage comparison ([#63](https://github.com/mstallone/runway/pull/63)) by @mstallone
+
+### Chores
+- Parse only appended JSONL bytes on refresh ([#45](https://github.com/mstallone/runway/pull/45)) by @mstallone
+- Skip re-aggregation of unchanged logs; fast day keys ([#51](https://github.com/mstallone/runway/pull/51)) by @mstallone
+- Coalesce batch-end work to once per refresh pass ([#47](https://github.com/mstallone/runway/pull/47)) by @mstallone
+- Run launch account discovery off the main actor, in parallel ([#48](https://github.com/mstallone/runway/pull/48)) by @mstallone
+- UI render-path quick wins ([#49](https://github.com/mstallone/runway/pull/49)) by @mstallone
+- Provider and service cleanups ([#50](https://github.com/mstallone/runway/pull/50)) by @mstallone
+- Record a TestFlight deployment with the public join link on each release ([#52](https://github.com/mstallone/runway/pull/52)) by @mstallone
+- Rename the TestFlight deployment environment to iOS TestFlight ([#53](https://github.com/mstallone/runway/pull/53)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.4...v0.8.5](https://github.com/mstallone/runway/compare/v0.8.4...v0.8.5)
+
+- [c5a6c59](https://github.com/mstallone/runway/commit/c5a6c59b38c2915ae7303fd563906da2d4855c95) perf: parse only appended JSONL bytes on refresh (#45) by @mstallone
+- [e6f783f](https://github.com/mstallone/runway/commit/e6f783f247326222caefd17d3202763d9e8e8bae) perf: skip re-aggregation of unchanged logs; fast day keys (#51) by @mstallone
+- [e48afae](https://github.com/mstallone/runway/commit/e48afae81f2b5f69884016b14c23cc785fbdc99c) perf: coalesce batch-end work to once per refresh pass (#47) by @mstallone
+- [a8291ba](https://github.com/mstallone/runway/commit/a8291bacae5caa5dc0f21e57ee5d360420f03f7c) perf: run launch account discovery off the main actor, in parallel (#48) by @mstallone
+- [12619e7](https://github.com/mstallone/runway/commit/12619e724b5ca9e009b3678ba614db55cb4ae254) perf: UI render-path quick wins (#49) by @mstallone
+- [dda5ac6](https://github.com/mstallone/runway/commit/dda5ac604d4da6603e48d01e4ce5278881651916) perf: provider and service cleanups (#50) by @mstallone
+- [5a6fad2](https://github.com/mstallone/runway/commit/5a6fad208f98d23a72b20d1a5a0eea9727675c0f) ci: record a TestFlight deployment with the public join link on each release (#52) by @mstallone
+- [956ccac](https://github.com/mstallone/runway/commit/956ccacf4b2ecc0dc7c5cc793eb5254b4ec60447) ci: rename the TestFlight deployment environment to iOS TestFlight (#53) by @mstallone
+- [2892e19](https://github.com/mstallone/runway/commit/2892e19c4d3cc09b1d5bd3cc1e663a6fa8f9e60a) Add an env-gated UI performance harness (#54) by @mstallone
+- [01d279b](https://github.com/mstallone/runway/commit/01d279b574245be6d716b2bf4d31f2694d352f6f) Cut warm popup open from ~84ms to ~35ms to first frame (#60) by @mstallone
+- [500a58b](https://github.com/mstallone/runway/commit/500a58b3c1ee5871e86426b8e42502d9b90d4350) Make morphs smooth: no per-frame focus-loop rebuilds or spring re-targets (#56) by @mstallone
+- [55dd70d](https://github.com/mstallone/runway/commit/55dd70df8e667583d8143c55d8a9669ba690caf3) Pre-warm the panel: cold open 133ms → 50ms to first frame (#57) by @mstallone
+- [e1202fb](https://github.com/mstallone/runway/commit/e1202fb98ab154c85ced977b40a2774f66b88608) Robustness: 30s refresh timeout and Reduce Motion support (#58) by @mstallone
+- [f752361](https://github.com/mstallone/runway/commit/f752361ea29c5559663144875e15617dfcca6071) Recover the status item when the menu bar parks it under the notch (#59) by @mstallone
+- [aa70b4a](https://github.com/mstallone/runway/commit/aa70b4a63ac299e331c40747a628a318ba3ed239) Add the measured performance comparison against upstream OpenUsage (#61) by @mstallone
+- [29fca81](https://github.com/mstallone/runway/commit/29fca81975e8995b66eaf7b63625808906fec41d) Move the performance table under Installation; add a best-effort CodexBar column (#62) by @mstallone
+- [eb95169](https://github.com/mstallone/runway/commit/eb9516965b5e950c592d0ad49f79d482ff43dff9) Drop the best-effort CodexBar column; keep the OpenUsage comparison (#63) by @mstallone
+
+
 ## v0.8.4
 
 ### Bug Fixes
