@@ -3,6 +3,14 @@
     <channel>
         <title>Runway</title>
         <item>
+            <title>0.8.6</title>
+            <pubDate>Sun, 02 Aug 2026 20:28:19 +0000</pubDate>
+            <sparkle:version>570</sparkle:version>
+            <sparkle:shortVersionString>0.8.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/mstallone/runway/releases/download/v0.8.6/Runway-0.8.6.dmg" length="18554690" type="application/octet-stream" sparkle:edSignature="knsSC9jTeKWuItJKzAenKbO/RnU8pEE3kTSRKE2iGH2s+Z2lhFFBRRUkBxq1uUuROp0SCfvtTruCxN5vx5sFCA=="/>
+        </item>
+        <item>
             <title>0.8.5</title>
             <pubDate>Sun, 02 Aug 2026 17:30:43 +0000</pubDate>
             <sparkle:version>565</sparkle:version>
