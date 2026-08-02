@@ -4,7 +4,7 @@ AI coding agents keep persistent memory and instruction files on disk — Claude
 
 Open it from the popover footer's **gear** menu (**Memory**) or by right-clicking the menu bar icon and choosing **Memory**. It opens in its own resizable window, remembers its size and position, and closes with the red close button, Esc, or ⌘W. Like Settings, the window only exists while it's open.
 
-Discovery is not tied to which providers you have turned on in Runway — if a harness left memory files on disk, they appear, even if you're logged out of that tool. Harnesses with nothing on disk simply don't show up. The **Refresh** button re-scans at any time.
+Discovery is not tied to which providers you have turned on in Runway — if a harness left memory files on disk, they appear, even if you're logged out of that tool. Harnesses with nothing on disk simply don't show up. The **Refresh** button re-scans at any time. If a scan runs out of time or some folders can't be read, the sidebar says so instead of presenting a partial list as complete.
 
 If you renamed a Claude or Codex account card (right-click the card in the popover → **Rename…**), the sidebar shows that custom name for the matching home, and it updates live when you rename again.
 
@@ -21,7 +21,7 @@ Project folders show a decoded project path where possible (e.g. `/Users/you/Dev
 
 ## The four states
 
-Each source is in one of four states, and the sidebar ranks them: sources with content first, then homes with nothing in them yet, then harnesses whose memory feature is off. Within each group the usual provider order applies (Claude, Codex, then alphabetical). Every section collapses by clicking its header; sources with content start expanded, the rest start collapsed — their badge already says what's going on.
+Each source is in one of four states, and the sidebar ranks them: sources with content first, then homes with nothing in them yet, then harnesses whose memory feature is off. Within each group the usual provider order applies (Claude, Codex, then alphabetical). Every section collapses by clicking its header. Sources with content start expanded; so does any source with a problem to show (an unreadable file, a scan failure note), because a collapsed section would hide its explanation. The rest start collapsed — their badge already says what's going on.
 
 - **Ready** — memory files exist and have content. This is the normal state, so it shows no badge.
 - **Empty** — the file exists but is blank (common for a fresh `GEMINI.md`). You can start writing right away.

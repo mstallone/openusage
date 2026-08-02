@@ -123,6 +123,12 @@ final class MemoryWindowController: NSObject, NSWindowDelegate {
             Task { @MainActor in
                 do {
                     try await save()
+                    // Typed-during-save keystrokes stay dirty; quitting now would drop them.
+                    guard !MemoryEditorState.shared.isDirty else {
+                        AppLog.info(.memory, "buffer re-dirtied during the quit-prompt save; quit cancelled")
+                        NSApplication.shared.reply(toApplicationShouldTerminate: false)
+                        return
+                    }
                     NSApplication.shared.reply(toApplicationShouldTerminate: true)
                 } catch MemoryEditorError.conflictDetected {
                     // Quit is cancelled; the editor is showing Reload / Overwrite.
@@ -242,6 +248,13 @@ final class MemoryWindowController: NSObject, NSWindowDelegate {
                 }
                 do {
                     try await save()
+                    // Keystrokes typed while the write was in flight stay dirty (the baseline is
+                    // the submitted snapshot) — closing now would destroy them. Leave the window
+                    // open; the next close re-prompts for the newer edits.
+                    guard !MemoryEditorState.shared.isDirty else {
+                        AppLog.info(.memory, "buffer re-dirtied during the close-prompt save; keeping the window open")
+                        return
+                    }
                     self.closeIsApproved = true
                     self.window?.close()
                 } catch MemoryEditorError.conflictDetected {

@@ -162,7 +162,15 @@ struct MemoryInventoryScanner: Sendable {
     /// `CLAUDE_CONFIG_DIR` entries (comma list), the default homes, then `~/.claude*` dot-dirs
     /// (extra logins like `~/.claude-personal`). Canonical dedupe keeps the first spelling.
     private func claudeHomeCandidates() -> [String] {
-        var homes = commaListEnvironmentPaths("CLAUDE_CONFIG_DIR")
+        // `CLAUDE_CONFIG_DIR` pointing straight at a `projects/` directory is a supported spelling
+        // (ClaudeLogUsageScanner accepts it); the home is its parent — but only when that
+        // `projects` directory actually exists. A stale or mistyped value must not promote an
+        // unrelated parent directory into a "Claude home" with a create offer.
+        var homes = commaListEnvironmentPaths("CLAUDE_CONFIG_DIR").map { path in
+            URL(fileURLWithPath: path).lastPathComponent == "projects" && directoryPresent(path)
+                ? URL(fileURLWithPath: path).deletingLastPathComponent().path
+                : path
+        }
         let home = homeDirectory()
         homes.append(home.appendingPathComponent(".claude").path)
         let xdg = environment.value(for: "XDG_CONFIG_HOME")?.nilIfEmpty.map(expandTilde)
@@ -397,26 +405,34 @@ struct MemoryInventoryScanner: Sendable {
     /// `memory/` directory yet, the files just don't exist — the ordinary No File state, where
     /// creating MEMORY.md is real (Grok will read it).
     private func grokSource(home: String, notes: inout [String], expired: () -> Bool) -> MemorySource {
-        let memoryConfigured = readIfPresent(home + "/config.toml", notes: &notes)
-            .map { text in
-                text.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == "[memory]" }
-            } ?? false
+        // An unreadable config is NOT a missing [memory] section: the gate is unknown, so the
+        // source must say so instead of claiming "turned off" — memory may well be on.
+        var configUnreadable = false
+        let configText = readIfPresent(home + "/config.toml", notes: &notes, failed: &configUnreadable)
+        let memoryConfigured = configText.map(Self.grokMemoryConfigured(in:)) ?? false
+        let configFootnote = configUnreadable
+            ? "Grok's config.toml could not be read, so its memory state is unknown. Check the log for details."
+            : nil
         let disabledStatus = MemorySourceStatus.memoryDisabled(
             note: "Memory is turned off in Grok (no [memory] section in its config.toml)."
         )
         let memoryDir = home + "/memory"
         guard directoryPresent(memoryDir) else {
-            notes.append("grok home \(logPath(home)): no memory directory → \(memoryConfigured ? "no files yet" : "memory disabled")")
+            // The log must not claim "disabled" when the config was unreadable — the state is
+            // unknown, and a false cause misleads support.
+            let cause = configUnreadable ? "config unreadable, memory state unknown"
+                : memoryConfigured ? "no files yet" : "memory disabled"
+            notes.append("grok home \(logPath(home)): no memory directory → \(cause)")
             return MemorySource(
                 id: sourceID(.grok, home: home),
                 harness: Harness.grok.displayName,
                 homePath: home,
-                status: memoryConfigured ? .missingFile : disabledStatus,
+                status: memoryConfigured || configUnreadable ? .missingFile : disabledStatus,
                 instructions: nil,
                 projects: [],
                 legacyDocuments: [],
                 databaseDocuments: [],
-                footnote: nil
+                footnote: configFootnote
             )
         }
 
@@ -441,23 +457,33 @@ struct MemoryInventoryScanner: Sendable {
                 facts: []
             ))
         }
-        if !memoryConfigured {
+        if !memoryConfigured, !configUnreadable {
             notes.append("grok home \(logPath(home)): memory files present but no [memory] section → memory disabled")
         }
         return MemorySource(
             id: sourceID(.grok, home: home),
             harness: Harness.grok.displayName,
             homePath: home,
-            status: memoryConfigured
+            status: memoryConfigured || configUnreadable
                 ? fileBackedStatus(instructionsText: globalText, hasOtherArtifacts: !projects.isEmpty)
                 : disabledStatus,
             instructions: globalText.map { _ in fileDocument(path: globalPath, kind: .instructions) },
             projects: projects,
             legacyDocuments: [],
             databaseDocuments: [],
-            footnote: readFailed ? Self.readFailureFootnote : nil,
+            footnote: configFootnote ?? (readFailed ? Self.readFailureFootnote : nil),
             instructionsUnreadable: unreadable
         )
+    }
+
+    /// Whether config.toml turns Grok's memory feature on: a `[memory]` table header, tolerating
+    /// trailing whitespace and TOML comments (`[memory] # enabled`).
+    private static func grokMemoryConfigured(in configText: String) -> Bool {
+        configText.split(separator: "\n").contains { line in
+            let beforeComment = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+                .first.map(String.init) ?? ""
+            return beforeComment.trimmingCharacters(in: .whitespaces) == "[memory]"
+        }
     }
 
     /// Grok project directories end in an 8-hex-digit hash (`myrepo-a1b2c3d4`); strip it for display.

@@ -33,6 +33,66 @@ final class MemorySystemClientsTests: XCTestCase {
         XCTAssertEqual(try posixMode(of: path), 0o644)
     }
 
+    func testExclusiveCreateWritesWhenAbsentAndYieldsWhenPresent() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("AGENTS.md").path
+        let accessor = LocalTextFileAccessor()
+
+        XCTAssertTrue(try accessor.createTextFileExclusively(path, ""))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "")
+
+        // A second writer's content must stand — the exclusive rename reports EEXIST, no clobber.
+        try "the agent's content".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertFalse(try accessor.createTextFileExclusively(path, ""))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "the agent's content")
+    }
+
+    func testExclusiveCreateFollowsADanglingSymlink() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("real-CLAUDE.md").path
+        let link = directory.appendingPathComponent("CLAUDE.md").path
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+
+        XCTAssertTrue(try LocalTextFileAccessor().createTextFileExclusively(link, "created"),
+                      "a dangling link must not read as an existing destination")
+        XCTAssertEqual(try String(contentsOfFile: target, encoding: .utf8), "created",
+                       "creation lands where the link points, like a write-through")
+        XCTAssertEqual(try String(contentsOfFile: link, encoding: .utf8), "created",
+                       "the link now resolves")
+    }
+
+    func testExclusiveCreateThrowsOnASymlinkCycle() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let a = directory.appendingPathComponent("a.md").path
+        let b = directory.appendingPathComponent("b.md").path
+        try FileManager.default.createSymbolicLink(atPath: a, withDestinationPath: b)
+        try FileManager.default.createSymbolicLink(atPath: b, withDestinationPath: a)
+
+        XCTAssertThrowsError(try LocalTextFileAccessor().createTextFileExclusively(a, "x")) { error in
+            XCTAssertEqual((error as? POSIXError)?.code, .ELOOP,
+                           "a cycle must fail loudly, never read as another writer winning")
+        }
+    }
+
+    func testModificationDateFollowsSymlinksToTheTarget() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("MEMORY.md").path
+        let link = directory.appendingPathComponent("link.md").path
+        try "index".write(toFile: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+        let past = Date(timeIntervalSinceNow: -3600)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: target)
+
+        let viaLink = try XCTUnwrap(MemoryStore.filesystemModificationDate(of: link))
+
+        XCTAssertEqual(viaLink.timeIntervalSince1970, past.timeIntervalSince1970, accuracy: 1,
+                       "the contention check must watch the inode reads and writes actually touch")
+    }
+
     func testNewFileHonorsARestrictiveUmask() throws {
         // A 077 umask (a hardened multi-user Mac) must strip group/other bits from brand-new
         // memory files; only *preserving* an existing file's mode may ignore the umask.

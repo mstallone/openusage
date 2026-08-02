@@ -107,6 +107,12 @@ struct MemoryEditorView: View {
                     Task {
                         do {
                             try await performSave(bypassingConflictCheck: false)
+                            // Typed-during-save keystrokes stay dirty; switching away now would
+                            // drop them. Stay put — the next switch re-prompts.
+                            guard !isDirty else {
+                                pendingSelection = nil
+                                return
+                            }
                             switchToPendingSelection()
                         } catch MemoryEditorError.conflictDetected {
                             // Stay on this document with the Reload / Overwrite banner up; the

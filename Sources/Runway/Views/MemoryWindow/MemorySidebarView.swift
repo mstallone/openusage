@@ -36,6 +36,10 @@ struct MemorySidebarView: View {
                     }
                 }
             }
+            if let warning = store.scanWarning {
+                captionRow(warning, style: Theme.notice)
+                    .padding(.top, 8)
+            }
         }
         .listStyle(.sidebar)
         // The rows paint straight onto the window's vibrancy backdrop (see `MemoryWindowBackdrop`)
@@ -188,7 +192,10 @@ struct MemorySidebarView: View {
     }
 
     private func isExpanded(_ source: MemorySource) -> Bool {
-        expansionOverrides[source.id] ?? (source.status == .ready)
+        // Ready sources open by default; so does anything with a problem to show — a collapsed
+        // section would hide the unreadable-file caption or failure footnote it exists to surface.
+        expansionOverrides[source.id]
+            ?? (source.status == .ready || source.instructionsUnreadable || source.footnote != nil)
     }
 
     /// The popover's card rename, honored here: a Claude/Codex home claimed by an account record

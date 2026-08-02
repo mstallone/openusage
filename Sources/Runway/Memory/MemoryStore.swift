@@ -22,6 +22,9 @@ final class MemoryStore {
     private(set) var sources: [MemorySource] = []
     private(set) var isLoading = false
     private(set) var loadError: String?
+    /// Non-fatal scan problems worth showing beside a non-empty inventory — a budget-truncated
+    /// scan must not present partial homes as the complete picture.
+    private(set) var scanWarning: String?
     var selectedDocumentID: String?
 
     @ObservationIgnored private let files: any TextFileAccessing
@@ -109,6 +112,19 @@ final class MemoryStore {
         // With sources present the notes are informational and the log already has them.
         if scanned.isEmpty, !notes.isEmpty {
             loadError = "The memory scan ran into problems and may have missed files. Check the log for details."
+        }
+        // A truncated or partially failed scan beside a non-empty inventory gets its own visible
+        // warning — the sidebar must not present a partial list as the complete picture. Listing
+        // and read failures count too: one may hit a candidate root that never became a source,
+        // so no footnote carries it.
+        let budgetHit = notes.contains { $0.contains("hit its") && $0.contains("budget") }
+        let readOrListFailed = notes.contains { $0.contains("could not list") || $0.contains("could not read") }
+        scanWarning = if budgetHit {
+            "The scan ran out of time and this list may be incomplete. Refresh to rescan."
+        } else if readOrListFailed {
+            "Some files or folders could not be read, so this list may be incomplete. Check the log for details."
+        } else {
+            nil
         }
     }
 
@@ -327,6 +343,7 @@ final class MemoryStore {
         type: String
     ) async throws -> String {
         let files = files
+        let modificationDate = modificationDate
         let directory = project.directoryPath
         do {
             let path = try await loadOffMainActor {
@@ -344,13 +361,31 @@ final class MemoryStore {
                 )
                 do {
                     let indexPath = directory + "/MEMORY.md"
-                    let index = try files.readTextIfPresent(indexPath) ?? ""
                     let entry = ClaudeMemoryIndex.Entry(
                         title: name,
                         fileName: fileName,
                         hook: description.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                     )
-                    try files.writeTextPreservingMode(indexPath, ClaudeMemoryIndex.appendingEntry(entry, to: index))
+                    // Best-effort compare-and-retry against a live agent rewriting the index: stat
+                    // before the read, re-stat right before the write, and re-read when the file
+                    // moved in between. The residual stat→write window is microseconds — without
+                    // cross-process locking (which Claude Code itself does not use) that is as
+                    // narrow as this read-modify-write gets.
+                    var attempt = 0
+                    while true {
+                        attempt += 1
+                        let baseline = modificationDate(indexPath)
+                        let index = try files.readTextIfPresent(indexPath) ?? ""
+                        if modificationDate(indexPath) != baseline {
+                            // The index moved mid-read. Retry; after the limit, FAIL — knowingly
+                            // publishing a stale snapshot would erase the agent's latest update,
+                            // and the rollback below removes the new fact cleanly.
+                            guard attempt < 3 else { throw MemoryStoreError.indexContention }
+                            continue
+                        }
+                        try files.writeTextPreservingMode(indexPath, ClaudeMemoryIndex.appendingEntry(entry, to: index))
+                        break
+                    }
                 } catch {
                     // Roll the fact back: leaving it unindexed would make a retry mint a
                     // suffixed duplicate beside the orphan.
@@ -377,13 +412,10 @@ final class MemoryStore {
         let files = files
         do {
             try await loadOffMainActor {
-                // An agent may have created the file since the scan; its content wins — creating
-                // means "make the file exist", and it already does. The reload below picks it up.
-                guard !files.exists(path) else { return }
-                // Grok's memory/MEMORY.md may be the first file in a memory/ folder that does not
-                // exist yet; the atomic write needs the folder first.
-                try files.ensureParentDirectory(for: path)
-                try files.writeTextPreservingMode(path, "")
+                // Exclusive publish: an agent may create the file at any point up to the rename —
+                // its content wins (creating means "make the file exist", and it does). The
+                // reload below picks up whichever content landed.
+                _ = try files.createTextFileExclusively(path, "")
             }
         } catch {
             AppLog.error(.memory, "creating \(path) failed: \(error.localizedDescription)")
@@ -448,8 +480,12 @@ final class MemoryStore {
         }
     }
 
-    private nonisolated static func filesystemModificationDate(of path: String) -> Date? {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: expandHome(path))
+    /// Stats the symlink TARGET, not the link: reads and writes follow links, so the conflict and
+    /// contention checks must watch the same inode they read — a symlinked MEMORY.md whose target
+    /// an agent rewrites would otherwise never register as moved.
+    nonisolated static func filesystemModificationDate(of path: String) -> Date? {
+        let resolved = URL(fileURLWithPath: expandHome(path)).resolvingSymlinksInPath().path
+        let attributes = try? FileManager.default.attributesOfItem(atPath: resolved)
         return attributes?[.modificationDate] as? Date
     }
 }
@@ -458,6 +494,7 @@ enum MemoryStoreError: Error, LocalizedError, Equatable {
     case documentIsReadOnly
     case notAFact
     case unknownInstructionsPath
+    case indexContention
 
     var errorDescription: String? {
         switch self {
@@ -467,6 +504,8 @@ enum MemoryStoreError: Error, LocalizedError, Equatable {
             return "Only memory fact files can be deleted."
         case .unknownInstructionsPath:
             return "Runway does not know where this harness keeps its instruction file."
+        case .indexContention:
+            return "MEMORY.md is being rewritten by a live session right now. Try again in a moment."
         }
     }
 }
