@@ -21,7 +21,7 @@ Project folders show a decoded project path where possible (e.g. `/Users/you/Dev
 
 ## The four states
 
-Each source is in one of four states, and the sidebar ranks them: sources with content first, then homes with nothing in them yet, then harnesses whose memory feature is off. Within each group the usual provider order applies (Claude, Codex, then alphabetical). Every section collapses by clicking its header; sources with content start expanded, the rest start collapsed — their badge already says what's going on.
+Each source is in one of four states, and the sidebar ranks them: sources with content first, then homes with nothing in them yet, then harnesses whose memory feature is off. Within each group the usual provider order applies (Claude, Codex, then alphabetical). Every section collapses by clicking its header. Sources with content start expanded; so does any source with a problem to show (an unreadable file, a scan failure note), because a collapsed section would hide its explanation. The rest start collapsed — their badge already says what's going on.
 
 - **Ready** — memory files exist and have content. This is the normal state, so it shows no badge.
 - **Empty** — the file exists but is blank (common for a fresh `GEMINI.md`). You can start writing right away.
