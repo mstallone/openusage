@@ -72,6 +72,11 @@ final class StatusItemController: NSObject {
     init(container: AppContainer, updater: UpdaterController) {
         self.container = container
         let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // A stable autosave name, assigned before anything reads it: AppKit's auto-generated names
+        // ("Item-0") are not guaranteed stable across launches, and the notch rescue
+        // (`repositionStatusItemRightOfNotch`) works by rewriting this name's preferred-position
+        // default — without a deliberate name the rescue would silently never stick.
+        statusItem.autosaveName = "runway.statusItem"
         self.statusItem = statusItem
         let toolTipCoordinator = StatusItemToolTipCoordinator()
         self.toolTipCoordinator = toolTipCoordinator
@@ -304,8 +309,13 @@ final class StatusItemController: NSObject {
         let offset = screen.frame.maxX - notch.maxX - itemWidth - 12
         guard offset > 0 else { return }
         // `autosaveName` is an IUO; interpolating it directly would write a key literally named
-        // "… Optional(\"Item-0\")" that AppKit never reads.
-        guard let name = statusItem.autosaveName else { return }
+        // "… Optional(\"Item-0\")" that AppKit never reads. It is assigned at creation, so this
+        // guard is a can't-happen backstop — but if it ever fires, say so instead of silently
+        // skipping the advertised rescue.
+        guard let name = statusItem.autosaveName else {
+            AppLog.warn(.statusItem, "Notch rescue skipped: status item has no autosave name")
+            return
+        }
         UserDefaults.standard.set(
             Double(offset),
             forKey: "NSStatusItem Preferred Position \(name)"
