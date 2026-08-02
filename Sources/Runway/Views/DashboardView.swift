@@ -60,6 +60,12 @@ struct DashboardView: View {
     /// id, a freshly-started transition pins to the outgoing screen so the first frame never flashes
     /// the destination.
     @State private var animatedSlideID = 0
+    /// The `layout.screenSlideID` whose push has finished (its `withAnimation` completion fired).
+    /// The parked page's `.disabled` keys off this, NOT off `isSliding`: state-level progress hits
+    /// its target the instant the animation commits, so `isSliding` reads false while the exit
+    /// slide is still visibly running — disabling on it dimmed the outgoing page's controls
+    /// mid-flight.
+    @State private var settledSlideID = 0
     /// The pager's mounted pages, parked-outgoing (if any) first. THE single source of truth for
     /// what `modeBody` mounts, written atomically in the slide `onChange` — deriving the list from
     /// `layout.screen` plus separate outgoing state instead let the body evaluation between a
@@ -168,6 +174,10 @@ struct DashboardView: View {
             // Drive the backdrop's height on SwiftUI's clock. At the body root, outside `modeBody`'s
             // structural-animation suppression, so it can ride the active transition spring.
             .drivesPanelHeight(animatedHeight)
+            // Record the slide progress each rendered frame (identity effect, no visual change):
+            // a mid-flight reversal reads it to continue the push from where the pages visibly
+            // are — see the slide `onChange` and `SlideProgressEffect`.
+            .modifier(SlideProgressEffect(progress: slideProgress))
             .coordinateSpace(name: Self.reorderSpace)
             .background(
                 // Esc backs out of Customize first; only from the dashboard does it close the
@@ -243,6 +253,12 @@ struct DashboardView: View {
             .onChange(of: layout.screen) {
                 reorderLift = nil
                 layout.cancelDrag()
+                // The switched-away screen used to unmount here, and hover UI dismissal rode its
+                // rows' `onDisappear`. A parked page never disappears, so dismiss explicitly — a
+                // Usage Trend hover detail (or a tooltip) left open at switch time would otherwise
+                // keep floating over the destination screen.
+                HoverTooltips.dismissAll()
+                HoverPopoverState.dismissAll()
                 // A caret morph can't outlive its screen: leaving the dashboard mid-settle must
                 // not let Customize measurements learn a delta or take the caret debounce path.
                 measurementSettleTask?.cancel()
@@ -271,6 +287,7 @@ struct DashboardView: View {
                 // deferred cleanup the close-time settle exists to remove.
                 guard transparency.popoverShown else {
                     animatedSlideID = id
+                    settledSlideID = id
                     slideProgress = 1
                     // The hidden walk is not a push: drop any parked page so the close-time settle
                     // (not a later open) pays its unmount.
@@ -281,7 +298,14 @@ struct DashboardView: View {
                     }
                     return
                 }
-                slideProgress = 0
+                // A switch during a still-running push is always a direction flip (there are only
+                // two screens), and it must continue from the pages' RENDERED positions — the
+                // state-level progress hit 1 the instant the previous push committed, so only the
+                // bridge knows how far it visibly got. The travel is symmetric, so seeding
+                // `1 - rendered` puts both pages exactly where they are and the new push carries
+                // on seamlessly instead of snapping to the edges. A settled push has rendered = 1,
+                // which seeds the usual 0.
+                slideProgress = 1 - min(max(SlideProgressBridge.renderedProgress(), 0), 1)
                 animatedSlideID = id
                 // Park the screen being left, frozen at the panel height it holds this instant
                 // (`animatedHeight` is still the pre-switch value here), so it slides out beside
@@ -307,7 +331,12 @@ struct DashboardView: View {
                         if let coTarget { animatedHeight = coTarget }
                     } completion: {
                         // The parked outgoing page deliberately stays mounted (see `pages`) — the
-                        // settle leaves it exactly one panel-width offscreen, clipped away.
+                        // settle leaves it exactly one panel-width offscreen, clipped away — but
+                        // only NOW does it leave the interactive path (see the `.disabled` in
+                        // `modeBody`). Recording a stale id when a newer push superseded this one
+                        // is harmless: it simply doesn't match, so the newer push's pages stay
+                        // fully interactive until their own completion.
+                        settledSlideID = id
                         guard let target = heightCoordinator.target(for: layout.screen) else { return }
                         if !didEstablishHeight {
                             didEstablishHeight = true
@@ -621,12 +650,14 @@ struct DashboardView: View {
                     // click landing on a half-departed row would act on the wrong screen), and at
                     // rest it sits offscreen.
                     .allowsHitTesting(page.frozenHeight == nil)
-                    // Pointer hits are only one input path. Once the exit slide settles, the
-                    // parked page must also leave the keyboard focus loop and shortcut table —
-                    // deferred via `isSliding` so its still-visible controls don't grey out
-                    // mid-flight — and it leaves the accessibility tree immediately: even
-                    // mid-push it's decoration a VoiceOver user should never land on.
-                    .disabled(page.frozenHeight != nil && !isSliding)
+                    // Pointer hits are only one input path. Once the exit slide settles
+                    // (`settledSlideID` — the animation completion's signal; `isSliding` reads
+                    // false the instant the push COMMITS, long before it stops moving), the parked
+                    // page must also leave the keyboard focus loop and shortcut table — deferred
+                    // to the settle so its still-visible controls don't grey out mid-flight. It
+                    // leaves the accessibility tree immediately: even mid-push it's decoration a
+                    // VoiceOver user should never land on.
+                    .disabled(page.frozenHeight != nil && settledSlideID == layout.screenSlideID)
                     .accessibilityHidden(page.frozenHeight != nil)
             }
         }
