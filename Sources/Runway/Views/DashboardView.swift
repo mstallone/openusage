@@ -257,13 +257,25 @@ struct DashboardView: View {
                     // the retained height directly: springing a hidden panel just burns frames
                     // off-screen, and the next open expects the value to already be at rest.
                     measurementSettleTask?.cancel()
+                    measurementSettleTask = nil
                     if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
                 } else {
+                    // Leading edge: the FIRST change in a quiet period retargets immediately, so an
+                    // ordinary animated content change (the update banner or first-run hint
+                    // dismissing, a refresh loading rows) co-animates the panel instead of lagging
+                    // a full debounce behind and leaving a blank strip. Caret unfolds skip it —
+                    // their co-animate already set the target and their first measurement is a
+                    // partial mid-flight value (`pendingExpansion` marks that window).
+                    if measurementSettleTask == nil, pendingExpansion == nil,
+                       !isSliding, abs(target - animatedHeight) > 1 {
+                        withAnimation(Motion.spring) { animatedHeight = target }
+                    }
                     measurementSettleTask?.cancel()
                     measurementSettleTask = Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(120))
                         guard !Task.isCancelled else { return }
                         applySettledMeasurement()
+                        measurementSettleTask = nil
                     }
                 }
             }
@@ -279,7 +291,16 @@ struct DashboardView: View {
                     let fromIdeal = heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight
                     let key = expansionDeltaKey(for: providerID)
                     let delta = expansionDeltas[key] ?? estimatedExpansionDelta(for: providerID)
-                    pendingExpansion = (key, fromIdeal)
+                    // Learn only from a clean toggle: if an earlier toggle hasn't settled (or any
+                    // measurement is still in flight), `fromIdeal` is a partial mid-animation value
+                    // and the settled delta would be cached wrong — e.g. a rapid expand/collapse
+                    // learning a fraction of the section height. Skipping just means the estimate
+                    // covers this toggle and the next clean one re-learns exactly.
+                    if pendingExpansion == nil, measurementSettleTask == nil {
+                        pendingExpansion = (key, fromIdeal)
+                    } else {
+                        pendingExpansion = nil
+                    }
                     let ideal = fromIdeal + (expanding ? delta : -delta)
                     // Plain assignment: this runs inside the caret's `withAnimation(Motion.spring)`, so
                     // the change rides that same transaction. The measurement that follows only issues
@@ -329,6 +350,9 @@ struct DashboardView: View {
     /// has gone quiet, learns a pending caret toggle's exact expanded-section height from the settled
     /// value, and issues at most ONE spring re-target for the whole morph.
     private func applySettledMeasurement() {
+        // Belt over the close path's cancel: a settle that somehow fires after `orderOut` must not
+        // spring a hidden panel or learn from a collapsed tree.
+        guard transparency.popoverShown else { return }
         guard let target = heightCoordinator.target(for: layout.screen) else { return }
         // A caret toggle's measurement just settled: learn the provider's exact expanded-section
         // height so the NEXT toggle co-animates with zero correction.
