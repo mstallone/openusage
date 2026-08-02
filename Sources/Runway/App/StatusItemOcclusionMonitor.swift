@@ -173,7 +173,7 @@ final class StatusItemOcclusionMonitor {
         panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: SurrogatePillView(
+        panel.contentView = FirstMouseHostingView(rootView: SurrogatePillView(
             onActivate: { [weak self] in self?.onActivate() },
             onDismiss: { [weak self] in self?.dismissUntilRelaunch() }
         ))
@@ -187,32 +187,47 @@ final class StatusItemOcclusionMonitor {
     }
 }
 
+/// Hosting view for the pill that accepts first-mouse: another app is almost always active (this
+/// is an accessory app), and a stock `NSHostingView` in a nonactivating panel can swallow the first
+/// click as window activation before the SwiftUI action runs — the same AppKit behavior
+/// `NativeMenuButton` overrides for the footer's gear menu.
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// The pill's face: just the brand glyph in a small capsule — the status item's stand-in, so it
 /// reads (and takes space) like a menu-bar icon, not a widget. Click opens the dashboard; the
 /// context menu offers a way out for users who'd rather live with the hidden status item.
+///
+/// A real `Button`, not a tap gesture: VoiceOver announces it with a name and button role — this
+/// pill is the only visible recovery entry point while the status item is hidden, so assistive
+/// tech must be able to find and activate it.
 private struct SurrogatePillView: View {
     let onActivate: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
-        Group {
-            if let icon = MenuBarIcon.image {
-                Image(nsImage: icon)
-                    .renderingMode(.template)
-            } else {
-                Text("Runway")
-                    .font(.system(size: 11, weight: .semibold))
+        Button(action: onActivate) {
+            Group {
+                if let icon = MenuBarIcon.image {
+                    Image(nsImage: icon)
+                        .renderingMode(.template)
+                } else {
+                    Text("Runway")
+                        .font(.system(size: 11, weight: .semibold))
+                }
             }
+            .foregroundStyle(.primary)
+            .padding(6)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(.separator, lineWidth: 1))
+            .contentShape(Capsule())
         }
-        .foregroundStyle(.primary)
-        .padding(6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.separator, lineWidth: 1))
-        .contentShape(Capsule())
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open Runway")
         // The hosting view's fittingSize sizes the pill window; without this the content reports
         // its compressed size and clips.
         .fixedSize()
-        .onTapGesture(perform: onActivate)
         .contextMenu {
             Button("Hide Until Relaunch", action: onDismiss)
         }
