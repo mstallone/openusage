@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
+    private var container: AppContainer?
     private var singleInstanceLock: SingleInstanceLock.Token?
     private let updater = UpdaterController()
     private var launchTask: Task<Void, Never>?
@@ -65,6 +66,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let container = await AppContainer(shouldSeedFirstRun: shouldSeedFirstRun)
             guard !Task.isCancelled else { return }
+            self.container = container
             self.statusItemController = StatusItemController(container: container, updater: self.updater)
             // Starts background update checks (release build only; dormant under preview/`swift run`).
             self.updater.start()
@@ -73,5 +75,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         launchTask?.cancel()
+        // A quit mid-refresh must not drop completed providers' snapshot-cache writes: batch passes
+        // coalesce persistence, so flush whatever is pending before the process goes away.
+        container?.dataStore.flushPendingSnapshotWork()
     }
 }

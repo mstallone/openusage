@@ -93,10 +93,13 @@ final class WidgetDataStore {
     /// produces one write.
     @ObservationIgnored var onLocalStateChanged: (@MainActor () -> Void)?
     @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
-    /// Non-zero while `refreshAll` is coalescing per-provider completion work into one batch-end
-    /// rebuild + cache persist. Plain counters — everything here is MainActor-serialized.
+    /// Non-zero while `refreshAll` is coalescing per-provider completion work into short debounced
+    /// rebuilds plus one batch-end rebuild + cache persist. Plain counters — everything here is
+    /// MainActor-serialized.
     @ObservationIgnored private var snapshotRebuildDeferrals = 0
     @ObservationIgnored private var pendingSnapshotRebuild = false
+    /// The in-flight debounce for mid-batch publishing; see `requestSnapshotRebuild`.
+    @ObservationIgnored private var coalescedRebuildTask: Task<Void, Never>?
     /// Accounts synced from other Macs that have NO card here: surfaced in Total Spend only (their
     /// synthesized snapshots carry the usual Today/Yesterday/Last 30 Days lines), never as cards.
     private(set) var remoteOnlySpend: [(provider: Provider, snapshot: ProviderSnapshot)] = []
@@ -207,11 +210,11 @@ final class WidgetDataStore {
             outcomes.append(await task.value)
         }
         snapshotRebuildDeferrals -= 1
-        if pendingSnapshotRebuild, snapshotRebuildDeferrals == 0 {
-            pendingSnapshotRebuild = false
-            rebuildRenderedSnapshots()
+        if snapshotRebuildDeferrals == 0 {
+            coalescedRebuildTask?.cancel()
+            coalescedRebuildTask = nil
+            flushPendingSnapshotWork()
         }
-        cache.persistPending()
         // Stamp the end of the pass so the footer countdown targets the next scheduled refresh
         // (this time + one refresh interval), mirroring the periodic loop that sleeps one interval
         // after each pass.
@@ -242,18 +245,21 @@ final class WidgetDataStore {
     func evaluateNotifications(now: Date = Date()) async {
         guard let settingsProvider = notificationSettings else { return }
         let toggles = settingsProvider().toggles
-        // All triggers off (the default): nothing can fire, so skip resolving and formatting every
-        // visible metric. The evaluator still runs with an empty list so its per-metric state is
-        // pruned — re-enabling a trigger then starts fresh instead of trusting stale windows.
-        let allTriggersOff = !toggles.underTenPercent && !toggles.healthyToClose
-            && !toggles.closeToRunningOut
+        // All triggers off (the default): nothing can fire, so skip the whole pass — including the
+        // evaluator, whose per-metric state must be left UNTOUCHED. The pace logic deliberately
+        // keeps `previousBucket` behind while a trigger is off so an unconsumed worsening fires
+        // when the trigger comes back on (see `testOffToggleDoesNotConsumeTheEdge`); running the
+        // evaluator with an empty metric list here would prune that state and eat the edge.
+        guard toggles.underTenPercent || toggles.healthyToClose || toggles.closeToRunningOut else {
+            return
+        }
         // Gather this pass's enabled, bounded, visible metrics — unbounded rows and charts have no pace
         // story (their meterState never fires), so they're skipped here rather than occupying state.
         // Order is the layout order; the evaluator prunes state for anything not passed this pass.
         // Deliberate delta from the pre-extraction loop: the pass decides from this snapshot, taken
         // before the first delivery `await`, where the old inline loop re-read `data(for:)` between
         // deliveries — a mid-pass refresh no longer changes later metrics' inputs within one pass.
-        let metrics: [QuotaNotificationEvaluator.Metric] = allTriggersOff ? [] : orderedDescriptors()
+        let metrics = orderedDescriptors()
             .filter { isProviderEnabled($0.providerID) }
             .compactMap { descriptor -> QuotaNotificationEvaluator.Metric? in
                 let data = data(for: descriptor)
@@ -481,14 +487,34 @@ final class WidgetDataStore {
         )
     }
 
-    /// Rebuild now, unless a batch pass is in flight — then once at its end. Only the refresh paths
-    /// route through this; user-driven changes (enablement, peer documents) rebuild immediately.
+    /// Rebuild now, unless a batch pass is in flight — then via a short debounce so a burst of
+    /// provider completions costs one rebuild while a fast provider still publishes promptly
+    /// instead of waiting out the batch's slowest card. Only the refresh paths route through this;
+    /// user-driven changes (enablement, peer documents) rebuild immediately.
     private func requestSnapshotRebuild() {
-        if snapshotRebuildDeferrals > 0 {
-            pendingSnapshotRebuild = true
-        } else {
+        guard snapshotRebuildDeferrals > 0 else {
+            rebuildRenderedSnapshots()
+            return
+        }
+        pendingSnapshotRebuild = true
+        guard coalescedRebuildTask == nil else { return }
+        coalescedRebuildTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, !Task.isCancelled else { return }
+            self.coalescedRebuildTask = nil
+            self.flushPendingSnapshotWork()
+        }
+    }
+
+    /// Publish pending refresh results now: one rendered rebuild plus one cache persist. Runs from
+    /// the mid-batch debounce, the batch end, and app termination — a quit mid-batch must not drop
+    /// completed providers' snapshots on the floor.
+    func flushPendingSnapshotWork() {
+        if pendingSnapshotRebuild {
+            pendingSnapshotRebuild = false
             rebuildRenderedSnapshots()
         }
+        cache.persistPending()
     }
 
     private func rebuildRenderedSnapshots() {
