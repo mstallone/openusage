@@ -44,6 +44,20 @@ final class StatusItemController: NSObject {
         onInsidePanelClick: { [weak self] in self?.clearStrayFocus() },
         onDismiss: { [weak self] in self?.hidePanel() }
     )
+    /// Invisible first-open warm-up passes (layout, raster, window materialization) — the whole
+    /// lifecycle lives in `PanelPrewarmer`; this controller only reports the first real open.
+    private lazy var prewarmer = PanelPrewarmer(
+        panel: panel,
+        hostView: hostingController.view,
+        heightController: heightController,
+        anchorRect: { [weak self] in
+            guard let button = self?.statusItem.button, let window = button.window else { return nil }
+            return window.convertToScreen(button.convert(button.bounds, to: nil))
+        },
+        isRefreshInFlight: { [weak self] in
+            !(self?.container.dataStore.refreshingProviderIDs.isEmpty ?? true)
+        }
+    )
     private let hostingController: NSHostingController<AnyView>
     /// Owns the standalone Settings window (created lazily on first open, torn down on close).
     private let settingsWindow: SettingsWindowController
@@ -156,6 +170,10 @@ final class StatusItemController: NSObject {
         }
 
         AppLog.info(.statusItem, "Status item ready (button: \(self.statusItem.button != nil), shortcut: \(KeyboardShortcuts.getShortcut(for: .togglePopover)?.description ?? "none"))")
+
+        // Pre-warm the first open so the first click runs at warm speed — the passes, their
+        // scheduling, and the COLD escape hatch live in `PanelPrewarmer`.
+        prewarmer.scheduleWarmups()
 
         // UI profiling driver — inert unless RUNWAY_UI_PROFILE=1 (see UIProfiler / script/profile_ui.sh).
         UIProfiler.startDriverIfEnabled(
@@ -345,6 +363,7 @@ final class StatusItemController: NSObject {
 
     private func showPanel() {
         let openStart = CFAbsoluteTimeGetCurrent()
+        prewarmer.noteOpened()
         guard let button = statusItem.button, let buttonWindow = button.window else {
             AppLog.error(.statusItem, "Cannot show panel: status item has no button")
             return
