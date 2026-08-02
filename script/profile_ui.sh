@@ -41,8 +41,11 @@ echo "$(date -u +%Y-%m-%dT%H:%M:%S.000Z) [INFO] [uiprofile] $START_MARKER" >> "$
 env -u CLAUDE_CONFIG_DIR RUNWAY_UI_PROFILE=1 "$APP_BINARY" >/dev/null 2>&1 &
 APP_PID=$!
 # The profiled app must not outlive the script (it runs with the log-floor override and the stall
-# watchdog): kill it on ANY exit — poll timeout, a failed command under `set -e`, or Ctrl-C.
-trap 'kill "$APP_PID" 2>/dev/null || true' EXIT INT TERM
+# watchdog): kill it on ANY exit — poll timeout, a failed command under `set -e`, or Ctrl-C. A trap
+# handler does not exit by itself, so INT/TERM must exit explicitly or a supervisor's TERM would
+# leave the polling loop running with no producer.
+trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+trap 'exit 130' INT TERM
 echo "==> Runway (pid $APP_PID) profiling; the script takes ~2 minutes"
 
 for _ in $(seq 1 240); do
@@ -56,9 +59,13 @@ grep -a -A100000 "$START_MARKER" "$LOG" | grep -aq "PHASE done" || { echo "error
 RUN_LOG="$(mktemp -t runway_ui_profile)"
 grep -a -A100000 "$START_MARKER" "$LOG" | grep -a uiprofile > "$RUN_LOG"
 
-# A phase that silently did no work must fail the run, not masquerade as a clean result.
+# A phase that silently did no or partial work must fail the run, not masquerade as a clean result.
 if grep -aq "ERROR expand phase skipped" "$RUN_LOG"; then
     echo "error: the expand phase found no provider with a caret — configure at least one" >&2
+    exit 1
+fi
+if grep -aq "ERROR refresh phase aborted" "$RUN_LOG"; then
+    echo "error: launch refreshes never drained; the forced-refresh phase would have been partial" >&2
     exit 1
 fi
 
