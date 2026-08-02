@@ -56,7 +56,7 @@ struct CustomizeProviderListView: View {
             onOpen: { withAnimation(Motion.spring) { layout.customizeProviderID = row.id } }
         )
         .opacity(activeProviderID == row.id ? 0 : 1)
-        .reorderFrame(id: row.id, in: .named(reorderSpaceName))
+        .reorderFrame(id: row.id, in: .named(reorderSpaceName), store: rowFrames)
     }
 
     private func providerDragGesture(for row: ProviderRow) -> some Gesture {

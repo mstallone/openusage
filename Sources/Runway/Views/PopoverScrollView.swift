@@ -12,35 +12,35 @@ import SwiftUI
 /// Screen-specific modifiers — scroll position, edge-effect style, `onAppear`, reorder-frame
 /// preferences — are applied by the caller on the returned view, since those differ per screen.
 ///
-/// It also publishes its inner content's ideal height as a `ScrollContentHeightKey` preference so the
-/// popover can auto-fit the visual panel to its content (see `DashboardView`'s coordinated morph). A
-/// vertical `ScrollView` proposes `nil` height to its children, so the measured value is the content's
-/// intrinsic height — invariant to the window/viewport height, which is what keeps the auto-fit from
-/// feeding back on itself. The preference bubbles up past the `ScrollView` to the per-screen wrapper.
+/// It also reports its inner content's ideal height straight into the shared
+/// `PanelHeightCoordinator` so the popover can auto-fit the visual panel to its content (see
+/// `DashboardView`'s coordinated morph). A vertical `ScrollView` proposes `nil` height to its
+/// children, so the measured value is the content's intrinsic height — invariant to the
+/// window/viewport height, which is what keeps the auto-fit from feeding back on itself.
+///
+/// The report is an `onGeometryChange` call, deliberately NOT a `PreferenceKey` bubbled up to the
+/// per-screen wrapper (the original design): content height changes on every frame of a card-expand
+/// morph, and each per-frame preference update invalidated the hosting view's preference outputs,
+/// making AppKit rebuild the key-view loop every frame (see `reorderFrame`, which dropped the
+/// preference system for the same reason). The coordinator is an `@Observable` class held as
+/// `@State` by `DashboardView`, so its identity is stable across body evaluations and this input
+/// never dirties the scroll subtree.
 struct PopoverScrollView<Content: View>: View {
+    let heightCoordinator: PanelHeightCoordinator
+    let screen: PopoverScreen
     @ViewBuilder let content: Content
 
     var body: some View {
         ScrollView(.vertical) {
             content
                 .invisibleOverlayScroller()
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: ScrollContentHeightKey.self, value: proxy.size.height)
-                    }
-                )
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.height
+                } action: { height in
+                    guard height > 0 else { return }
+                    heightCoordinator.setScrollContent(height, for: screen)
+                }
         }
         .scrollBounceBehavior(.basedOnSize)
-    }
-}
-
-/// The intrinsic height of a popover screen's scroll content, published by `PopoverScrollView` and
-/// read per-screen in `DashboardView` to auto-fit the panel. One emitter per screen subtree, so the
-/// reduce just carries the most recent non-zero measurement.
-struct ScrollContentHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        let next = nextValue()
-        if next > 0 { value = next }
     }
 }

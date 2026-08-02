@@ -127,19 +127,6 @@ struct ReorderLiftPreview: View {
 
 }
 
-/// Lightweight in-view geometry used for reordering inside the menu-bar popover.
-///
-/// This deliberately avoids SwiftUI's pasteboard-backed `.draggable` / `.dropDestination` APIs, which are
-/// unreliable in this popover. A plain `DragGesture` stays inside the SwiftUI view tree: we record row frames,
-/// compare the pointer location to those frames, and then mutate `LayoutStore` directly.
-struct ReorderFramePreferenceKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
-    }
-}
-
 /// The latest reorder-row frames, held behind a plain reference (deliberately NOT `@Observable` /
 /// `@State`-value semantics). Row frames change on every animation frame of a card-expand or
 /// window-height morph, and storing them as view state re-rendered the whole list per frame — the
@@ -148,19 +135,68 @@ struct ReorderFramePreferenceKey: PreferenceKey {
 /// layout rather than a render-time snapshot.
 @MainActor
 final class ReorderFrameStore {
-    var frames: [String: CGRect] = [:]
+    private(set) var frames: [String: CGRect] = [:]
+    /// Which modifier instance last wrote each id. A drag between Customize sections remounts the
+    /// row under the same id, and the replacement can record its geometry BEFORE the outgoing
+    /// instance's delayed `onDisappear` runs — an unconditional removal there would delete the live
+    /// entry and leave the row untargetable until its next geometry change.
+    private var owners: [String: UUID] = [:]
+
+    func record(id: String, frame: CGRect, owner: UUID) {
+        frames[id] = frame
+        owners[id] = owner
+    }
+
+    /// Removes the entry only if `owner` is still the latest writer (see `owners`).
+    func removeIfOwned(id: String, owner: UUID) {
+        guard owners[id] == owner else { return }
+        frames[id] = nil
+        owners[id] = nil
+    }
 }
 
 extension View {
-    func reorderFrame(id: String, in coordinateSpace: CoordinateSpace, yOutset: CGFloat = 0) -> some View {
-        background(
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: ReorderFramePreferenceKey.self,
-                    value: [id: proxy.frame(in: coordinateSpace).insetBy(dx: 0, dy: -yOutset)]
-                )
+    /// Records this row's frame (in the popover's reorder coordinate space) into `store` so the
+    /// shared drag gesture can hit-test rows and build lifts.
+    ///
+    /// This deliberately avoids SwiftUI's pasteboard-backed `.draggable` / `.dropDestination` APIs,
+    /// which are unreliable in this popover, AND the preference system its first implementation
+    /// used: rows move on every animation frame of a screen slide or card-expand morph, and a
+    /// per-frame `PreferenceKey` update invalidated the hosting view's preference outputs, which
+    /// made AppKit rebuild the whole key-view loop (`FocusBridge.invalidateKeyViewLoop`) on every
+    /// frame — measured at ~30% of each morph frame's render time. `onGeometryChange` delivers the
+    /// same rect straight to the plain box: no preference propagation, no host invalidation, and
+    /// the write is a dictionary assignment.
+    func reorderFrame(
+        id: String,
+        in coordinateSpace: CoordinateSpace,
+        store: ReorderFrameStore,
+        yOutset: CGFloat = 0
+    ) -> some View {
+        modifier(ReorderFrameModifier(id: id, coordinateSpace: coordinateSpace, store: store, yOutset: yOutset))
+    }
+}
+
+private struct ReorderFrameModifier: ViewModifier {
+    let id: String
+    let coordinateSpace: CoordinateSpace
+    let store: ReorderFrameStore
+    let yOutset: CGFloat
+    /// This instance's identity for the store's ownership check — see `ReorderFrameStore.owners`.
+    @State private var token = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: coordinateSpace).insetBy(dx: 0, dy: -yOutset)
+            } action: { frame in
+                store.record(id: id, frame: frame, owner: token)
             }
-        )
+            // The preference dictionary used to drop a row's entry when it unmounted; direct writes
+            // need the same hygiene or a stale frame could satisfy a later hit-test (e.g. the L2
+            // grip scan iterates every recorded frame, not just current-row ids). Ownership-checked
+            // so a remounted replacement's fresh entry survives this instance's late teardown.
+            .onDisappear { store.removeIfOwned(id: id, owner: token) }
     }
 }
 

@@ -92,7 +92,7 @@ struct CustomizeProviderDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             )
-            .reorderFrame(id: expandedDividerID(for: providerID), in: .named(reorderSpaceName), yOutset: yOutset)
+            .reorderFrame(id: expandedDividerID(for: providerID), in: .named(reorderSpaceName), store: rowFrames, yOutset: yOutset)
             .accessibilityLabel("Drag metrics here")
     }
 
@@ -104,7 +104,7 @@ struct CustomizeProviderDetailView: View {
             // gesture can tell which row a drag started on. The drag gesture itself is on the section
             // stack, not the grip — see `metricDragGesture`.
             handle: { grip in
-                AnyView(grip.reorderFrame(id: "grip:\(metric.id)", in: .named(reorderSpaceName)))
+                AnyView(grip.reorderFrame(id: "grip:\(metric.id)", in: .named(reorderSpaceName), store: rowFrames))
             },
             trailing: {
                 StarButton(metric: metric)
@@ -117,7 +117,7 @@ struct CustomizeProviderDetailView: View {
         )
         .contentShape(Rectangle())
         .opacity(isActive ? 0 : 1)
-        .reorderFrame(id: metric.id, in: .named(reorderSpaceName))
+        .reorderFrame(id: metric.id, in: .named(reorderSpaceName), store: rowFrames)
     }
 
     // MARK: - Container drag-reorder

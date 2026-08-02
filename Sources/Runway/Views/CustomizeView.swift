@@ -12,19 +12,20 @@ import SwiftUI
 /// reset and the Esc handler drive the same state.
 struct CustomizeView: View {
     @Environment(LayoutStore.self) private var layout
+    /// The auto-fit height sink this screen's scroll content reports into (owned by `DashboardView`).
+    let heightCoordinator: PanelHeightCoordinator
     let reorderSpaceName: String
     @Binding var reorderLift: ReorderLift?
 
     @State private var rowFrames = ReorderFrameStore()
 
     var body: some View {
-        PopoverScrollView {
+        PopoverScrollView(heightCoordinator: heightCoordinator, screen: .customize) {
             content
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
         }
-        .onPreferenceChange(ReorderFramePreferenceKey.self) { [rowFrames] in rowFrames.frames = $0 }
         // The transient star/denial pill floats above the Customize content — the same capsule style
         // as the dashboard's "Copied to clipboard" share pill. Green for a successful star/unstar,
         // orange for the per-provider cap denial.

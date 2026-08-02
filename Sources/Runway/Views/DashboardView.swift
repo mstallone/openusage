@@ -12,8 +12,8 @@ import SwiftUI
 /// content underlaps the footer with the native soft scroll-edge fade (`softBottomScrollEdge` →
 /// `.scrollEdgeEffectStyle(.soft)`, macOS 26+) — Apple's blurred boundary, not a custom gradient or a
 /// material bar. On macOS 15 the footer/top bar still pin via `safeAreaInset`, just without the blur
-/// (content scrolls flush). The panel **auto-fits its content**: each screen publishes its intrinsic
-/// height (`ScrollContentHeightKey` + the fixed chrome heights), and the visual panel — a height-framed,
+/// (content scrolls flush). The panel **auto-fits its content**: each screen reports its intrinsic
+/// height (`PopoverScrollView` → `PanelHeightCoordinator`, plus the fixed chrome heights), and the visual panel — a height-framed,
 /// corner-clipped card pinned to the top of a fixed-size transparent window (see
 /// `PanelHeightController`) — animates to that on SwiftUI's clock, with the AppKit backdrop following
 /// via `drivesPanelHeight` / `PanelHeightModifier`. The destination is the only live screen tree
@@ -59,9 +59,19 @@ struct DashboardView: View {
     /// provider's expanded-section *composition* (`expansionDeltaKey`), so customizing what sits
     /// behind the caret misses the cache and re-learns instead of retargeting by a stale height.
     @State private var expansionDeltas: [String: CGFloat] = [:]
-    /// The composition key whose caret toggle is awaiting its measurement, with the pre-toggle target
-    /// the actual delta is derived from. Cleared when the next dashboard measurement lands.
-    @State private var pendingExpansion: (cacheKey: String, fromTarget: CGFloat)?
+    /// The composition key whose caret toggle is awaiting its measurement, with the pre-toggle
+    /// target the actual delta is derived from and the row-count estimate the settled value is
+    /// sanity-checked against. Cleared when the dashboard measurement settles.
+    @State private var pendingExpansion: (cacheKey: String, fromTarget: CGFloat, estimate: CGFloat)?
+    /// Debounce for measurement-driven re-targets: armed on every `measuredIdeal` change while the
+    /// popover is shown, fired ~2 quiet frames after the last one (see the `onChange` below).
+    @State private var measurementSettleTask: Task<Void, Never>?
+    /// Explicit caret-morph-in-flight marker: set by every caret toggle, cleared only when the
+    /// settle actually lands (or the popover closes / the screen changes). Branch selection and
+    /// learning eligibility key off THIS, not off `pendingExpansion` — a superseding toggle clears
+    /// `pendingExpansion`, and inferring "clean" from that let a third rapid toggle learn from an
+    /// intermediate measurement.
+    @State private var expansionSettling = false
     /// Drives the macOS-native confirmation sheet for the Customize "reset all" button. The alert
     /// attaches to this panel as a sheet (see `StatusItemController`'s attached-sheet guard), so a
     /// click on its buttons can't be misread as an outside click that dismisses the popover.
@@ -198,6 +208,12 @@ struct DashboardView: View {
             .onChange(of: layout.screen) {
                 reorderLift = nil
                 layout.cancelDrag()
+                // A caret morph can't outlive its screen: leaving the dashboard mid-settle must
+                // not let Customize measurements learn a delta or take the caret debounce path.
+                measurementSettleTask?.cancel()
+                measurementSettleTask = nil
+                pendingExpansion = nil
+                expansionSettling = false
             }
             // The Reset All alert attaches to the Customize L1 nav bar. Leaving the list — back to the
             // dashboard or into a provider's L2 detail — unmounts that host, which dismisses the alert
@@ -252,18 +268,15 @@ struct DashboardView: View {
                 }
             }
             // In-screen growth/shrink (a provider card expands, the footer notice appears, a refresh
-            // loads rows): re-target the height on the same spring. Establishment is allowed even mid-
-            // slide (a measurement that lands during a switch must seed the height — there's nothing to
-            // fight yet); the animated *re-target* defers to the switch path while a slide is in flight.
+            // loads rows): re-target the height on the same spring — but only once the measurement
+            // SETTLES. Content re-measures on every frame of an unfold morph (the rows' interpolated
+            // heights land here one by one), and re-targeting per measurement thrashed the spring —
+            // dozens of overlapping retargets per caret toggle, measured as the popover's worst
+            // stall source — and made the delta learning below record partial mid-animation heights.
+            // Establishment and the hidden-close walk stay immediate; only the animated re-target
+            // (and the learning) waits for ~2 quiet frames.
             .onChange(of: heightCoordinator.measuredIdeal[layout.screen]) { _, _ in
                 guard let target = heightCoordinator.target(for: layout.screen) else { return }
-                // A caret toggle's measurement just landed: learn the provider's exact expanded-section
-                // height so the NEXT toggle co-animates with zero correction.
-                if let pending = pendingExpansion, layout.screen == .dashboard,
-                   let ideal = heightCoordinator.measuredIdeal[.dashboard] {
-                    expansionDeltas[pending.cacheKey] = abs(ideal - pending.fromTarget)
-                    pendingExpansion = nil
-                }
                 if !didEstablishHeight {
                     didEstablishHeight = true
                     animatedHeight = target
@@ -271,9 +284,32 @@ struct DashboardView: View {
                     // Hidden — this is the close-time settle's collapsed re-measure landing. Walk
                     // the retained height directly: springing a hidden panel just burns frames
                     // off-screen, and the next open expects the value to already be at rest.
+                    measurementSettleTask?.cancel()
+                    measurementSettleTask = nil
                     if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
-                } else if !isSliding, abs(target - animatedHeight) > 1 {
-                    withAnimation(Motion.spring) { animatedHeight = target }
+                } else if !expansionSettling {
+                    // Ordinary content change (the update banner or first-run hint dismissing, a
+                    // refresh loading rows): re-target throughout the change so the panel
+                    // co-animates with the content instead of trailing it by a debounce and
+                    // leaving a blank strip or clipped rows. These are one-off, short animations;
+                    // the measured per-frame-retarget stall source was the caret unfold, which
+                    // keeps its debounce below.
+                    measurementSettleTask?.cancel()
+                    measurementSettleTask = nil
+                    if !isSliding, abs(target - animatedHeight) > 1 {
+                        withAnimation(Motion.spring) { animatedHeight = target }
+                    }
+                } else {
+                    // Caret unfold in flight: its co-animate already set the estimated target, and
+                    // every interpolated measurement until it settles is partial — wait for ~2
+                    // quiet frames, then learn the exact delta and issue at most one correction.
+                    measurementSettleTask?.cancel()
+                    measurementSettleTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(120))
+                        guard !Task.isCancelled else { return }
+                        applySettledMeasurement()
+                        measurementSettleTask = nil
+                    }
                 }
             }
             // Watches for the secret transparency code while the panel is key and toggles the egg. A
@@ -285,10 +321,31 @@ struct DashboardView: View {
             .onAppear {
                 MenuBarPopover.coAnimateExpansion = { providerID, expanding in
                     guard didEstablishHeight, animatedHeight > 0, layout.screen == .dashboard else { return }
-                    let fromIdeal = heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight
+                    // The baseline the delta applies to. A SUPERSEDING toggle (an earlier morph is
+                    // still settling) must build on the DRIVEN model target — `animatedHeight`
+                    // already holds where the previous toggle is heading — because `measuredIdeal`
+                    // is still an interpolated mid-flight height; deriving from it could drive a
+                    // rapid expand/collapse below the collapsed height or swallow a second card's
+                    // expansion. A clean toggle uses the settled measurement as before.
+                    let fromIdeal = expansionSettling
+                        ? animatedHeight
+                        : (heightCoordinator.measuredIdeal[.dashboard] ?? animatedHeight)
                     let key = expansionDeltaKey(for: providerID)
-                    let delta = expansionDeltas[key] ?? estimatedExpansionDelta(for: providerID)
-                    pendingExpansion = (key, fromIdeal)
+                    let estimate = estimatedExpansionDelta(for: providerID)
+                    let delta = expansionDeltas[key] ?? estimate
+                    // Learn only from a clean toggle: while an earlier caret morph is still
+                    // settling (`expansionSettling` — an explicit marker cleared only when the
+                    // settle actually lands, so a third rapid toggle can't sneak through the
+                    // window where a second one already cancelled the debounce) or any measurement
+                    // is in flight, `fromIdeal` is a partial mid-animation value and the settled
+                    // delta would be cached wrong. Skipping just means the estimate covers this
+                    // toggle and the next clean one re-learns exactly.
+                    if !expansionSettling, measurementSettleTask == nil {
+                        pendingExpansion = (key, fromIdeal, estimate)
+                    } else {
+                        pendingExpansion = nil
+                    }
+                    expansionSettling = true
                     let ideal = fromIdeal + (expanding ? delta : -delta)
                     // Plain assignment: this runs inside the caret's `withAnimation(Motion.spring)`, so
                     // the change rides that same transaction. The measurement that follows only issues
@@ -334,6 +391,41 @@ struct DashboardView: View {
         return rows + links
     }
 
+    /// The debounced tail of the measurement `onChange`: runs once the screen's content measurement
+    /// has gone quiet, learns a pending caret toggle's exact expanded-section height from the settled
+    /// value, and issues at most ONE spring re-target for the whole morph.
+    private func applySettledMeasurement() {
+        // The morph this settle belongs to is over either way; every exit below must drop the
+        // in-flight marker or the next ordinary content change would wrongly take the debounce path.
+        expansionSettling = false
+        // Belt over the close path's cancel: a settle that somehow fires after `orderOut` must not
+        // spring a hidden panel or learn from a collapsed tree.
+        guard transparency.popoverShown else { pendingExpansion = nil; return }
+        // Consumed on another screen (the user opened Customize before the dashboard settle fired):
+        // never learn from Customize measurements, and never leave the stale pending state to
+        // misclassify later Customize changes or the next dashboard toggle.
+        guard layout.screen == .dashboard else { pendingExpansion = nil; return }
+        guard let target = heightCoordinator.target(for: layout.screen) else { return }
+        // A caret toggle's measurement just settled: learn the provider's exact expanded-section
+        // height so the NEXT toggle co-animates with zero correction. Sanity-checked against the
+        // row-count estimate: an unrelated height change overlapping the settle (a refresh
+        // replacing loading rows, the update banner dismissing) folds into the measured
+        // difference, and caching that would drive the next toggle to the wrong height — a delta
+        // implausibly far from the estimate is discarded, the estimate keeps covering toggles,
+        // and a clean settle later re-learns exactly.
+        if let pending = pendingExpansion, let ideal = heightCoordinator.measuredIdeal[.dashboard] {
+            let learned = abs(ideal - pending.fromTarget)
+            if abs(learned - pending.estimate) <= max(60, pending.estimate * 0.75) {
+                expansionDeltas[pending.cacheKey] = learned
+            }
+            pendingExpansion = nil
+        }
+        // Mid-slide the switch path's completion owns the target; deferring here matches the old
+        // per-measurement guard.
+        guard !isSliding, abs(target - animatedHeight) > 1 else { return }
+        withAnimation(Motion.spring) { animatedHeight = target }
+    }
+
     private func resetTransientState() {
         // Backstop for any popover-close path the status-item controller's hide doesn't cover: clear a
         // tooltip the cursor was resting on, since the closed popover fires no hover-exit. The Usage
@@ -350,6 +442,17 @@ struct DashboardView: View {
         // Dismiss a pending Reset All confirmation if the popover closes mid-alert — the SwiftUI tree
         // survives `orderOut`, so without this the sheet would reappear stale on the next open.
         isPresentingResetAllConfirm = false
+        // A debounce armed just before the close would otherwise fire ~120ms after `orderOut` and
+        // spring a hidden panel (per-frame layout and backdrop work with nothing on screen). The
+        // close-time settle re-measures the collapsed tree anyway, and its hidden-branch walk
+        // handles the height directly.
+        measurementSettleTask?.cancel()
+        measurementSettleTask = nil
+        // A caret toggle whose measurement never settled must not learn from the close: the next
+        // (collapsed) measurement would record a wrong — even zero — expanded-section delta and the
+        // provider's next caret toggle would co-animate to a bogus height until re-learned.
+        pendingExpansion = nil
+        expansionSettling = false
         // The driven height is deliberately KEPT across the close (it used to reset to the 0
         // sentinel here). The close-time settle re-measures the collapsed dashboard while hidden and
         // the `measuredIdeal` onChange walks the retained value to the collapsed target, so the next
@@ -404,11 +507,9 @@ struct DashboardView: View {
     private func screenView(_ screen: PopoverScreen) -> some View {
         scrollBody(for: screen)
             .offset(x: screenEntranceOffset)
-            // Auto-fit: the scroll content publishes its intrinsic height (invariant to the viewport),
-            // which we sum with the chrome into this screen's ideal window height.
-            .onPreferenceChange(ScrollContentHeightKey.self) { height in
-                heightCoordinator.setScrollContent(height, for: screen)
-            }
+            // Auto-fit: the scroll content reports its intrinsic height (invariant to the viewport)
+            // straight into `heightCoordinator`, which sums it with the chrome into this screen's
+            // ideal window height — see `PopoverScrollView` for why it's not a preference.
             .softTopScrollEdge()
             .softBottomScrollEdge()
             .pinnedTopBar(spacing: 0) {
@@ -451,6 +552,7 @@ struct DashboardView: View {
                 container: container,
                 layout: layout,
                 updater: updater,
+                heightCoordinator: heightCoordinator,
                 reorderSpaceName: Self.reorderSpace,
                 horizontalPadding: Self.outerPadding,
                 bottomGap: Self.contentBottomGap,
@@ -459,6 +561,7 @@ struct DashboardView: View {
             )
         case .customize:
             CustomizeView(
+                heightCoordinator: heightCoordinator,
                 reorderSpaceName: Self.reorderSpace,
                 reorderLift: $reorderLift
             )
