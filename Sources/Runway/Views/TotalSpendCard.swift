@@ -63,7 +63,10 @@ struct TotalSpendCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: density.headerToCardSpacing) {
             header
-            card
+            // Computed once per body evaluation: `projection` re-copies the snapshots dictionary
+            // and re-aggregates every provider, so reading the computed property per subview use
+            // multiplies that work.
+            card(projection: projection)
         }
     }
 
@@ -135,7 +138,7 @@ struct TotalSpendCard: View {
 
     // MARK: - Card
 
-    private var card: some View {
+    private func card(projection: TotalSpendProjection) -> some View {
         VStack(spacing: 12) {
             periodPicker
             if projection.isEmpty {

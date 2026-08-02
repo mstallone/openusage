@@ -1,18 +1,35 @@
 import Foundation
+import os
 
 /// Shared display formatters for live usage data: the mode-aware deadline/reset phrasing
 /// (`deadlineLabel`, `resetRelativeLabel`, `resetAbsoluteLabel`), compact durations, and USD currency.
 enum Formatters {
+    /// Configured formatters by fraction digits. `NumberFormatter` construction costs tens of
+    /// microseconds and this runs inside SwiftUI `body` for every dollar value on screen, so the
+    /// instances are built once. Formatting happens inside the lock — `NumberFormatter` is not
+    /// documented thread-safe, and off-main callers (the one-shot CLI, share renders) exist.
+    private static let currencyFormatters = OSAllocatedUnfairLock<[Int: NumberFormatter]>(initialState: [:])
+
     static func currency(_ amount: Double, fractionDigits: Int = 2) -> String {
-        let f = NumberFormatter()
-        f.numberStyle = .currency
-        f.currencyCode = "USD"
-        f.locale = Locale(identifier: "en_US")
-        f.maximumFractionDigits = fractionDigits
-        f.minimumFractionDigits = fractionDigits
+        let formatted = currencyFormatters.withLock { cache -> String? in
+            let formatter: NumberFormatter
+            if let cached = cache[fractionDigits] {
+                formatter = cached
+            } else {
+                let f = NumberFormatter()
+                f.numberStyle = .currency
+                f.currencyCode = "USD"
+                f.locale = Locale(identifier: "en_US")
+                f.maximumFractionDigits = fractionDigits
+                f.minimumFractionDigits = fractionDigits
+                cache[fractionDigits] = f
+                formatter = f
+            }
+            return formatter.string(from: amount as NSNumber)
+        }
         // The fallback must also respect the requested precision: a raw "$\(amount)" would leak the
         // double's full decimals (e.g. "$180.168"), which is exactly the rounding glitch we're fixing.
-        return f.string(from: amount as NSNumber) ?? "$\(String(format: "%.\(fractionDigits)f", amount))"
+        return formatted ?? "$\(String(format: "%.\(fractionDigits)f", amount))"
     }
 
     /// The app's compact month/day, e.g. "Jun 21" — localized, no year. Shared so every short calendar
