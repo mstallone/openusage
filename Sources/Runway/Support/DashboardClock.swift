@@ -36,8 +36,11 @@ final class DashboardClock {
                 // Elapsed wall time, not loop iterations: counting beats under-reports across a
                 // system sleep or a blocked main actor (one resumed sleep ≠ one second), which
                 // left reset countdowns up to 29 ticks stale after wake. Comparing dates makes the
-                // first tick after any gap ≥30s refresh the dated rows immediately.
-                if now.timeIntervalSince(self.halfMinute) >= 30 {
+                // first tick after any gap ≥30s refresh the dated rows immediately. A NEGATIVE
+                // elapsed means the system clock moved backward past the stamp — rebase right away,
+                // or dated rows would freeze until wall time caught back up (potentially hours).
+                let elapsed = now.timeIntervalSince(self.halfMinute)
+                if elapsed >= 30 || elapsed < 0 {
                     self.halfMinute = now
                 }
             }

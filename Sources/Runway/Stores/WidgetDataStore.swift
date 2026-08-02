@@ -39,11 +39,12 @@ final class WidgetDataStore {
     static let defaultProviderRefreshTimeout: TimeInterval = 90
     /// Providers whose timed-out refresh is still running detached (the deadline race resumed
     /// without awaiting it). Blocks new attempts for that provider so network/auth work never
-    /// overlaps on one runtime — cleared the moment the straggler actually exits, with
-    /// `hungRefreshSafetyValve` as the ceiling so a permanently-wedged provider still becomes
-    /// refreshable again instead of being locked out until relaunch.
-    private var hungRefreshUntil: [String: Date] = [:]
-    private static let hungRefreshSafetyValve: TimeInterval = 300
+    /// overlaps on one runtime — cleared ONLY when the straggler actually exits. Deliberately no
+    /// time-based expiry: the periodic loop's cadence (5 min) would sail past any reasonable valve
+    /// and stack overlapping attempts on a permanently wedged runtime every cycle; the timeout
+    /// error card already tells the user the provider is stuck, and a straggler that never exits
+    /// means retrying couldn't succeed anyway.
+    private var hungRefreshProviderIDs: Set<String> = []
     /// Quota-notification preferences (three independent triggers). Injected; `nil` disables
     /// notifications entirely (tests and previews that don't wire it).
     private let notificationSettings: (@MainActor () -> NotificationSettingsStore)?
@@ -355,13 +356,10 @@ final class WidgetDataStore {
             return .skipped
         }
         // A timed-out attempt's straggler may still be running detached; don't stack a second
-        // network/auth pass on the same runtime while it lives (see `hungRefreshUntil`).
-        if let hungUntil = hungRefreshUntil[providerID] {
-            if now() < hungUntil {
-                AppLog.debug(.refresh, "hung-refresh skip \(providerID) (straggler still running)")
-                return .skipped
-            }
-            hungRefreshUntil[providerID] = nil
+        // network/auth pass on the same runtime while it lives (see `hungRefreshProviderIDs`).
+        guard !hungRefreshProviderIDs.contains(providerID) else {
+            AppLog.debug(.refresh, "hung-refresh skip \(providerID) (straggler still running)")
+            return .skipped
         }
         refreshingProviderIDs.insert(providerID)
         defer { refreshingProviderIDs.remove(providerID) }
@@ -382,8 +380,8 @@ final class WidgetDataStore {
                 }
                 guard !state.resumed else {
                     // Lost the race: this straggler just exited, so the runtime is idle again —
-                    // lift the overlap guard early instead of waiting out the safety valve.
-                    self.hungRefreshUntil[providerID] = nil
+                    // lift the overlap guard.
+                    self.hungRefreshProviderIDs.remove(providerID)
                     return
                 }
                 state.resumed = true
@@ -400,7 +398,7 @@ final class WidgetDataStore {
                 // `defer` is about to release `refreshingProviderIDs`, so hold a separate overlap
                 // guard until the straggler exits — overlapping auth/network attempts on one
                 // runtime is worse than waiting.
-                self.hungRefreshUntil[providerID] = self.now().addingTimeInterval(Self.hungRefreshSafetyValve)
+                self.hungRefreshProviderIDs.insert(providerID)
                 continuation.resume(returning: nil)
             }
         }

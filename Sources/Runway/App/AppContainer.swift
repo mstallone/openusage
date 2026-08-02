@@ -168,7 +168,12 @@ final class AppContainer {
                     // behind a success banner — before giving up loudly (the provider error already
                     // shows on the card, so the staleness isn't silent).
                     var failures = 0
-                    for attempt in 0..<45 {
+                    // 180 one-second waits: must outlast not just the provider's slowest refresh
+                    // (~45s of request budgets) but also the store's 90s refresh deadline PLUS a
+                    // timed-out attempt's straggler hold (`hungRefreshProviderIDs`), during which
+                    // every probe returns `.skipped` — giving up sooner would strand pre-claim
+                    // meters behind a success banner exactly when Codex was already struggling.
+                    for attempt in 0..<180 {
                         guard let dataStore else { return }
                         switch await dataStore.refresh(providerID: providerID, force: true) {
                         case .refreshed, .cacheHit, .backedOff:

@@ -74,8 +74,11 @@ struct CustomizeView: View {
 
     /// The L1↔L2 push. Under Reduce Motion the full-width slide is exactly the kind of large
     /// travel the setting asks to avoid — shortening the curve alone (see `Motion`) wouldn't
-    /// change the distance — so it becomes a plain crossfade.
+    /// change the distance — so it becomes an instant swap. Deliberately `.identity`, NOT
+    /// `.opacity`: fading composites the whole card tree into a transparency layer where the
+    /// translucent `cardSurface()` materials lose their vibrant backdrop and flash near-white —
+    /// the same regression `DashboardView.modeBody` documents for its screen switch.
     private func masterDetailTransition(edge: Edge) -> AnyTransition {
-        reduceMotion ? .opacity : .move(edge: edge)
+        reduceMotion ? .identity : .move(edge: edge)
     }
 }
