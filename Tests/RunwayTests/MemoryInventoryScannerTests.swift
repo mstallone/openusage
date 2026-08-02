@@ -194,6 +194,49 @@ final class MemoryInventoryScannerTests: XCTestCase {
         XCTAssertTrue(notes.contains { $0.contains("could not read") })
     }
 
+    func testGrokHomeHonorsGROKHOMEOverride() throws {
+        let scanner = makeScanner(
+            environment: ["GROK_HOME": "/Users/dev/custom-grok"],
+            files: [
+                "/Users/dev/custom-grok/config.toml": "[memory]\nenabled = true",
+                "/Users/dev/custom-grok/memory/MEMORY.md": "custom-home memory",
+            ],
+            subdirectories: ["/Users/dev/custom-grok", "/Users/dev/custom-grok/memory"]
+        )
+
+        let (sources, _) = scanner.scan()
+
+        XCTAssertEqual(sources.map(\.homePath), ["/Users/dev/custom-grok"],
+                       "the memory inventory must look where GROK_HOME points, like the usage scanners do")
+        XCTAssertEqual(sources.first?.status, .ready)
+    }
+
+    func testListingFailuresAttachOnAPathComponentBoundary() {
+        var sources = [
+            MemorySource(
+                id: "codex:/Users/dev/.codex", harness: "Codex", homePath: "/Users/dev/.codex",
+                status: .ready, instructions: nil, projects: [], legacyDocuments: [],
+                databaseDocuments: [], footnote: nil
+            ),
+            MemorySource(
+                id: "codex:/Users/dev/.codex-work", harness: "Codex", homePath: "/Users/dev/.codex-work",
+                status: .ready, instructions: nil, projects: [], legacyDocuments: [],
+                databaseDocuments: [], footnote: nil
+            ),
+        ]
+        var notes: [String] = []
+
+        MemoryInventoryScanner.attachListingFailures(
+            [(path: "/Users/dev/.codex-work/memories", message: "denied")],
+            to: &sources,
+            notes: &notes,
+            logPath: { $0 }
+        )
+
+        XCTAssertNil(sources[0].footnote, "a shared string prefix is not containment")
+        XCTAssertNotNil(sources[1].footnote, "the failure belongs to the home that actually contains the path")
+    }
+
     func testGrokStaleFilesWithFeatureOffAreDisabledButStillListed() throws {
         // The [memory] section was removed while memory/ files remain: the gate wins over the
         // directory, but readable files still list.

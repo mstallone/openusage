@@ -79,7 +79,10 @@ struct MemoryInventoryScanner: Sendable {
             (.claude, claudeHomeCandidates()),
             (.codex, codexHomeCandidates()),
             (.gemini, [homeDirectory().appendingPathComponent(".gemini").path]),
-            (.grok, [homeDirectory().appendingPathComponent(".grok").path]),
+            // GROK_HOME first, like the Claude/Codex overrides — the usage scanners already honor
+            // it, and the memory inventory must look where the CLI actually lives. The per-harness
+            // `seen` dedupe collapses it with the default when they point at the same place.
+            (.grok, commaListEnvironmentPaths("GROK_HOME") + [homeDirectory().appendingPathComponent(".grok").path]),
         ]
         for (harness, homes) in harnesses {
             var seen = Set<String>()
@@ -100,13 +103,7 @@ struct MemoryInventoryScanner: Sendable {
         }
         // Listing failures become user-visible: a note for the log, and a footnote on the source
         // whose home the unlistable folder lives under — an EACCES must not read as "no projects".
-        for failure in listingDiagnostics.drain() {
-            notes.append("memory scan could not list \(logPath(failure.path)): \(failure.message)")
-            if let index = sources.firstIndex(where: { failure.path.hasPrefix($0.homePath) }) {
-                sources[index].footnote = sources[index].footnote
-                    ?? "Some folders under this home could not be listed. Check the log for details."
-            }
-        }
+        Self.attachListingFailures(listingDiagnostics.drain(), to: &sources, notes: &notes, logPath: logPath)
         // Status ranks the sections: sources with something to read now, then homes with nothing
         // in them yet (one click from useful via Create Instruction File), then harnesses whose
         // memory feature is off (fixing that lives in the other tool, not here). Offsets break
@@ -154,7 +151,7 @@ struct MemoryInventoryScanner: Sendable {
     ) -> MemorySource {
         switch harness {
         case .claude: return claudeSource(home: home, notes: &notes, expired: expired)
-        case .codex: return codexSource(home: home, notes: &notes)
+        case .codex: return codexSource(home: home, notes: &notes, expired: expired)
         case .gemini: return geminiSource(home: home, notes: &notes)
         case .grok: return grokSource(home: home, notes: &notes, expired: expired)
         }
@@ -205,12 +202,15 @@ struct MemoryInventoryScanner: Sendable {
         let (instructionsText, unreadable) = readInstruction(instructionsPath, notes: &notes)
         let projectsDir = URL(fileURLWithPath: home).appendingPathComponent("projects")
         var projects: [MemoryProjectGroup] = []
+        var readFailed = false
         for projectDir in listSubdirectories(projectsDir).sorted(by: { $0.path < $1.path }) {
             if expired() {
                 notes.append("memory scan hit its budget inside \(logPath(home)); the project list is partial")
                 break
             }
-            if let group = claudeProjectGroup(projectDir: projectDir, notes: &notes, expired: expired) {
+            if let group = claudeProjectGroup(
+                projectDir: projectDir, notes: &notes, expired: expired, readFailed: &readFailed
+            ) {
                 projects.append(group)
             }
         }
@@ -223,10 +223,14 @@ struct MemoryInventoryScanner: Sendable {
             projects: projects,
             legacyDocuments: [],
             databaseDocuments: [],
-            footnote: nil,
+            footnote: readFailed ? Self.readFailureFootnote : nil,
             instructionsUnreadable: unreadable
         )
     }
+
+    /// A memory file that exists but could not be read must not vanish silently — the log has the
+    /// path, the sidebar gets this pointer.
+    static let readFailureFootnote = "Some memory files could not be read. Check the log for details."
 
     /// One `projects/<slug>/memory/` directory. Facts come from the directory listing (every `*.md`
     /// except MEMORY.md) so a fact whose index line was lost still shows; titles and hooks are
@@ -235,11 +239,12 @@ struct MemoryInventoryScanner: Sendable {
     private func claudeProjectGroup(
         projectDir: URL,
         notes: inout [String],
-        expired: () -> Bool
+        expired: () -> Bool,
+        readFailed: inout Bool
     ) -> MemoryProjectGroup? {
         let memoryDir = projectDir.appendingPathComponent("memory")
         let indexPath = memoryDir.path + "/MEMORY.md"
-        let indexText = readIfPresent(indexPath, notes: &notes)
+        let indexText = readIfPresent(indexPath, notes: &notes, failed: &readFailed)
         let indexEntries = indexText.map(ClaudeMemoryIndex.entries(in:)) ?? []
 
         var facts: [MemoryDocument] = []
@@ -253,7 +258,7 @@ struct MemoryInventoryScanner: Sendable {
                 notes.append("memory scan hit its budget inside \(logPath(memoryDir.path)); the fact list is partial")
                 break
             }
-            let frontmatter = readIfPresent(url.path, notes: &notes)
+            let frontmatter = readIfPresent(url.path, notes: &notes, failed: &readFailed)
                 .flatMap { MemoryFrontmatter.parse($0).frontmatter }
             let entry = indexEntries.first { $0.fileName == url.lastPathComponent }
             facts.append(MemoryDocument(
@@ -282,16 +287,23 @@ struct MemoryInventoryScanner: Sendable {
 
     // MARK: - Codex
 
-    private func codexSource(home: String, notes: inout [String]) -> MemorySource {
+    private func codexSource(home: String, notes: inout [String], expired: () -> Bool) -> MemorySource {
         let instructionsPath = home + "/AGENTS.md"
         let (instructionsText, unreadable) = readInstruction(instructionsPath, notes: &notes)
 
         var legacy: [MemoryDocument] = []
+        var readFailed = false
         let legacyURLs = listFiles(URL(fileURLWithPath: home).appendingPathComponent("memories"))
             .filter { $0.pathExtension == "md" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         for url in legacyURLs {
-            let frontmatter = readIfPresent(url.path, notes: &notes)
+            // Legacy memories can be large (MEMORY.md alone is ~100KB on real machines); this
+            // full-read loop honors the scan budget like the Claude fact loop does.
+            if expired() {
+                notes.append("memory scan hit its budget inside \(logPath(home)); the legacy memory list is partial")
+                break
+            }
+            let frontmatter = readIfPresent(url.path, notes: &notes, failed: &readFailed)
                 .flatMap { MemoryFrontmatter.parse($0).frontmatter }
             legacy.append(MemoryDocument(
                 id: url.path,
@@ -331,7 +343,7 @@ struct MemoryInventoryScanner: Sendable {
             projects: [],
             legacyDocuments: legacy,
             databaseDocuments: [],
-            footnote: nil,
+            footnote: readFailed ? Self.readFailureFootnote : nil,
             instructionsUnreadable: unreadable
         )
     }
@@ -405,13 +417,14 @@ struct MemoryInventoryScanner: Sendable {
         let globalPath = memoryDir + "/MEMORY.md"
         let (globalText, unreadable) = readInstruction(globalPath, notes: &notes)
         var projects: [MemoryProjectGroup] = []
+        var readFailed = false
         for projectDir in listSubdirectories(URL(fileURLWithPath: memoryDir)).sorted(by: { $0.path < $1.path }) {
             if expired() {
                 notes.append("memory scan hit its budget inside \(logPath(home)); the project list is partial")
                 break
             }
             let indexPath = projectDir.path + "/MEMORY.md"
-            guard readIfPresent(indexPath, notes: &notes) != nil else { continue }
+            guard readIfPresent(indexPath, notes: &notes, failed: &readFailed) != nil else { continue }
             let slug = projectDir.lastPathComponent
             projects.append(MemoryProjectGroup(
                 id: projectDir.path,
@@ -436,7 +449,7 @@ struct MemoryInventoryScanner: Sendable {
             projects: projects,
             legacyDocuments: [],
             databaseDocuments: [],
-            footnote: nil,
+            footnote: readFailed ? Self.readFailureFootnote : nil,
             instructionsUnreadable: unreadable
         )
     }
@@ -447,6 +460,31 @@ struct MemoryInventoryScanner: Sendable {
         let suffix = directoryName[directoryName.index(after: dash)...]
         guard suffix.count == 8, suffix.allSatisfy(\.isHexDigit) else { return directoryName }
         return String(directoryName[..<dash])
+    }
+
+    /// Matches on a path-component boundary — `~/.codex-work`'s failure must not attach to
+    /// `~/.codex` just because one string prefixes the other — and prefers the longest matching
+    /// home when homes nest. Internal for direct testing (the diagnostics only populate from the
+    /// default filesystem closures, which fakes replace).
+    static func attachListingFailures(
+        _ failures: [(path: String, message: String)],
+        to sources: inout [MemorySource],
+        notes: inout [String],
+        logPath: (String) -> String
+    ) {
+        for failure in failures {
+            notes.append("memory scan could not list \(logPath(failure.path)): \(failure.message)")
+            let match = sources.indices
+                .filter { index in
+                    let home = sources[index].homePath
+                    return failure.path == home || failure.path.hasPrefix(home + "/")
+                }
+                .max { sources[$0].homePath.count < sources[$1].homePath.count }
+            if let match {
+                sources[match].footnote = sources[match].footnote
+                    ?? "Some folders under this home could not be listed. Check the log for details."
+            }
+        }
     }
 
     // MARK: - Shared building blocks
@@ -494,10 +532,18 @@ struct MemoryInventoryScanner: Sendable {
     /// A read failure that is not plain absence goes into the notes trail — the scan keeps going,
     /// but the problem stays diagnosable from a default log.
     private func readIfPresent(_ path: String, notes: inout [String]) -> String? {
+        var ignored = false
+        return readIfPresent(path, notes: &notes, failed: &ignored)
+    }
+
+    /// Like `readIfPresent`, but also flips `failed` so per-source traversals can surface a
+    /// footnote — a project whose only MEMORY.md is unreadable must not silently vanish.
+    private func readIfPresent(_ path: String, notes: inout [String], failed: inout Bool) -> String? {
         do {
             return try files.readTextIfPresent(path)
         } catch {
             notes.append("memory scan could not read \(logPath(path)): \(error.localizedDescription)")
+            failed = true
             return nil
         }
     }
