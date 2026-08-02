@@ -2,9 +2,9 @@ import XCTest
 @testable import Runway
 
 // MARK: - Sample payloads
-/// Mirrors the undocumented Z.ai internal-API shapes the legacy Tauri plugin relied on, captured in
-/// `docs/providers/zai.md`. These endpoints are not in Z.ai's public API reference but are stable in
-/// practice (used by Z.ai's own subscription UI).
+/// Mirrors the undocumented Z.ai internal-API shapes captured in `docs/providers/zai.md`. These
+/// endpoints are not in Z.ai's public API reference but are stable in practice (used by Z.ai's own
+/// subscription UI).
 
 private let quotaBothLimitsJSON = #"""
 {

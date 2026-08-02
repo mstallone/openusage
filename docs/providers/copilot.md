@@ -30,18 +30,18 @@ Since June 2026 GitHub Copilot bills all plans by **AI credits**, so what each a
 - **Org-managed seats (Copilot Business / Enterprise assigned by an organization)** return no per-seat quota, so the personal meters have nothing to show. Runway then looks the usage up at the seat's billing entity—its organization, or its enterprise when billing is consolidated—and shows **AI Credits Used** (total organization usage, broken into included and additional credits) and **Additional Spend** (dollars billed beyond the included pool). Caveats:
   - The numbers are **organization-wide**, not your personal share — GitHub doesn't expose per-seat usage.
   - Reading an org's billing requires you to be an **org owner or billing manager**. Regular members see a clear managed-account message instead of personal "No data" placeholders.
-  - When Copilot identifies the seat's organization, Runway checks its enterprise before accepting an
+  - When Copilot identifies the seat's organization, Runway checks its enterprise before it accepts an
     empty organization report, because consolidated usage is billed at the enterprise level. If a
     proven enterprise association stays unreadable — or the seat is a Copilot **Enterprise** seat and
-    the credential can't see enterprise associations at all — the managed-account state is kept. For
-    a **Business** seat, when no enterprise claims the organization (or associations can't be read),
-    a readable empty organization report stands: at the start of a billing month the card shows zero
-    credits used, not the managed-account message — and as soon as usage happens under that login,
-    the org report carries the real numbers on the next refresh. An unrelated empty report is never
+    the credential can't see enterprise associations at all — Runway keeps the managed-account state.
+    For a **Business** seat, when no enterprise claims the organization (or associations can't be
+    read), a readable empty organization report stands. At the start of a billing month the card shows
+    zero credits used, not the managed-account message. As soon as usage happens under that login, the
+    org report carries the real numbers on the next refresh. An unrelated empty report is never
     attributed to the seat.
 - AI Credits Used is shown as a plain count, not a percentage. The API reports total, discounted/included, and additional usage, but not the organization's full available pool; Runway doesn't fabricate a denominator.
 
-A dollar credit figure (e.g. "$12 of $15 used") isn't shown: GitHub only exposes that through its logged-in web billing page, which would require reading browser cookies — Runway does not do that. Editors like VS Code show the same credit *percentage* from this endpoint, not a dollar amount.
+A dollar credit figure (e.g. "$12 of $15 used") is not shown: GitHub only exposes it through the logged-in web billing page, which requires browser cookies — the Copilot provider does not read browser cookies. Editors like VS Code show the same credit *percentage* from this endpoint, not a dollar amount.
 
 ## Where credentials come from
 

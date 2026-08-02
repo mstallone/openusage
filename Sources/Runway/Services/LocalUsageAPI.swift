@@ -3,7 +3,7 @@ import Foundation
 /// Routing + JSON for the read-only local usage API, kept pure so it's unit-testable —
 /// `LocalUsageServer` is just the transport. The wire format follows docs/local-http-api.md
 /// (camelCase `providerId`, `color`, `fetchedAt`, type-tagged `lines`, `{"error": code}` bodies).
-/// One deliberate break from the original app, made before multi-account ships: `/v1/usage/:token`
+/// One deliberate wire-format change, made before multi-account ships: `/v1/usage/:token`
 /// returns an array, and both single-token routes answer by plain string matching (exact card id or
 /// family id) — never by resolving state.
 enum LocalUsageAPI {
@@ -149,7 +149,7 @@ enum LocalUsageAPI {
                 try container.encode("text", forKey: .type)
                 try container.encode(label, forKey: .label)
                 try container.encode(value, forKey: .value)
-                try container.encode(color, forKey: .color)        // explicit null, like the original
+                try container.encode(color, forKey: .color)        // explicit null, per docs/local-http-api.md
                 try container.encode(subtitle, forKey: .subtitle)
             case .values(let label, let values, let color, let expiriesAt, _, _):
                 // Serialize as the original `text` shape (one combined `value` string) so existing
@@ -181,8 +181,9 @@ enum LocalUsageAPI {
                 try container.encode(color, forKey: .color)
                 try container.encode(subtitle, forKey: .subtitle)
             case .chart(let label, let points, let note):
-                // The original app's `barChart` line shape: per-day {label, value, valueLabel} points
-                // plus an optional source note, so existing local-API integrations read the trend too.
+                // The documented `barChart` line shape (docs/local-http-api.md): per-day
+                // {label, value, valueLabel} points plus an optional source note, so existing
+                // local-API integrations read the trend too.
                 try container.encode("barChart", forKey: .type)
                 try container.encode(label, forKey: .label)
                 try container.encode(points, forKey: .points)

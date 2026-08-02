@@ -57,7 +57,7 @@ struct DashboardContentView: View {
                 .padding(.bottom, density.sectionSpacing)
         }
         if displayGroups.isEmpty {
-            Text("Turn on Customize to choose what to show.")
+            Text("Open Customize to choose what to show.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

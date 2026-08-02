@@ -1,10 +1,9 @@
 import XCTest
 @testable import Runway
 
-/// Covers the local HTTP API's routing and wire format (ported from the original's
-/// docs/local-http-api.md): collection ordering + enablement filtering, single-provider status
-/// codes, method/route errors, and the documented JSON keys (`providerId`, `fetchedAt`, tagged
-/// `lines` with `format.kind`).
+/// Covers the local HTTP API's routing and wire format (documented in docs/local-http-api.md):
+/// collection ordering + enablement filtering, single-provider status codes, method/route errors,
+/// and the documented JSON keys (`providerId`, `fetchedAt`, tagged `lines` with `format.kind`).
 final class LocalUsageAPITests: XCTestCase {
     private func makeState() -> LocalUsageAPI.State {
         let refreshedAt = RunwayISO8601.date(from: "2026-03-26T11:16:29.000Z")!

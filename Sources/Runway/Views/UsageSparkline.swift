@@ -16,7 +16,7 @@ struct UsageSparkline: View {
     /// Widest the bar strip grows to, and a floor so it can't collapse to a sliver next to a long title.
     private static let maxChartWidth: CGFloat = 150
     private static let minChartWidth: CGFloat = 90
-    /// Per-bar floor (matches the original app) so a dense window never squashes bars below visibility.
+    /// Per-bar floor so a dense window never squashes bars below visibility.
     private static let minBarWidth: CGFloat = 2
 
     init(data: WidgetData) {

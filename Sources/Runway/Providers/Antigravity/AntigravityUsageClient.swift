@@ -30,7 +30,7 @@ struct AntigravityUsageClient: Sendable {
     static let quotaSummaryPath = "/v1internal:retrieveUserQuotaSummary"
     static let googleOAuthURL = "https://oauth2.googleapis.com/token"
     // Google OAuth "installed application" client credentials, extracted verbatim from the Antigravity
-    // app bundle — the same pair the shipped app and the legacy Tauri plugin use. For installed-app OAuth
+    // app bundle — the same pair the shipped Antigravity app uses. For installed-app OAuth
     // clients Google does not treat the "secret" as confidential (it ships in every copy of the client),
     // so committing it here is an intentional, accepted trade-off, not a leaked private key. It's required
     // for the refresh-token grant — without it we can't refresh the keychain token when the app is closed.

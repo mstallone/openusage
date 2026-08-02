@@ -1,8 +1,8 @@
 # Updates
 
 Runway keeps itself up to date using [Sparkle](https://sparkle-project.org), the standard update
-framework for Mac apps. Updates are downloaded from Runway's own release feed and verified before
-they install, so you always get a genuine, unmodified build.
+framework for Mac apps. The app downloads updates from Runway's own release feed and verifies them
+before they install, so you always get a genuine, unmodified build.
 
 ## How it works
 
@@ -22,8 +22,8 @@ they install, so you always get a genuine, unmodified build.
 
 ## Where updates come from
 
-Stable update builds are published on Runway's GitHub releases, and the list of available versions (the
-"appcast") is served from `https://mstallone.github.io/runway/appcast.xml`. Each download is
+Runway publishes stable update builds on its GitHub releases and serves the list of available versions
+(the "appcast") from `https://mstallone.github.io/runway/appcast.xml`. Each download is
 signed two ways — Apple notarization plus Runway's own signature — and the app refuses anything that
 doesn't match. This is only available in the official signed release build, not in local developer
 builds.

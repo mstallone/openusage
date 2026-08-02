@@ -71,8 +71,8 @@ instead of inventing zero usage.
 - **"Kimi Code session expired"** — repeat `/login`; the saved refresh token was rejected or revoked.
 - **"Kimi Code credentials couldn't be read"** — check that the credential file belongs to your
   macOS account and is readable.
-- **"Couldn't safely refresh Kimi Code credentials"** — Kimi Code may currently be rotating the same
-  token. Wait for it to finish, then refresh again.
+- **"Couldn't safely refresh Kimi Code credentials"** — Kimi Code is probably rotating the same
+  token at this moment. Wait for it to finish, then refresh again.
 - **"Kimi Code subscription usage is unavailable"** — the login works, but this account or endpoint
   does not expose managed Kimi Code membership usage.
 - **Kimi stays off after changing `KIMI_CODE_HOME` in your shell profile** — relaunch Runway. Shell

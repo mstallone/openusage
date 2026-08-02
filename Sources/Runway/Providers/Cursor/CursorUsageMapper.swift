@@ -262,9 +262,8 @@ enum CursorUsageMapper {
     /// effort / fast combination (`claude-opus-4-8-thinking-max`, `gpt-5.5-extra-high-fast`, …), and a
     /// panel of near-duplicate rows hides the actual ranking. The supplement's alias rules already
     /// collapse those slugs to a canonical pricing key, and `-fast` canonicals fold into their base, so
-    /// the family comes from the same machinery that prices the row (ported from cursorcat's
-    /// family grouping). The raw slugs survive as `variants` — the per-effort breakdown the row's
-    /// tooltip shows.
+    /// the family comes from the same machinery that prices the row. The raw slugs survive as
+    /// `variants` — the per-effort breakdown the row's tooltip shows.
     static func appendSpendLines(
         rows: [CursorUsageCSVRow],
         now: Date,

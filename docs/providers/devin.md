@@ -19,7 +19,7 @@ Checked in this order — whichever works first wins:
 1. Devin CLI credentials: `~/.local/share/devin/credentials.toml` (uses `windsurf_api_key`, and `api_server_url` when present)
 2. The Devin app's local state database
 
-If the CLI credentials fail but the app is signed in with a different account, the app's auth is used instead.
+If the CLI credentials fail but the app is signed in with a different account, Runway uses the app's login instead.
 
 ## Troubleshooting
 

@@ -4,7 +4,7 @@ Runway exposes a read-only HTTP API on the loopback interface so other local app
 
 **Base URL:** `http://127.0.0.1:6736`
 
-The server starts automatically with the app. If the port is already in use, the feature is silently disabled for that session.
+The server starts automatically with the app. If the port is already in use, the app disables the API for that session and notes it in the log.
 
 ## Routes
 
@@ -17,10 +17,10 @@ and the exact format printed by the `runway` CLI.
 ### `GET /v1/limits/:id`
 
 Returns the same envelope containing every provider the ID names. It works for disabled providers too.
-Matching is plain string comparison: an exact provider ID names that provider, and a family ID
-(`claude`, `codex`) names every account card of that family — with one account that's exactly the one
-card. There is no aliasing or "pick the right account" logic; the same request always names the same
-providers.
+Matching is plain string comparison. An exact provider ID names that provider. A family ID
+(`claude`, `codex`) names every account card of that family. With one account, the family ID names
+exactly that one card. There is no aliasing or "pick the right account" logic; the same request
+always names the same providers.
 
 - **200 OK** — limits envelope with every matched provider that has data (an `errors` entry appears
   when a refresh failed; a matched provider with no data yet simply has no entry).
@@ -29,13 +29,13 @@ providers.
 ### `GET /v1/usage`
 
 Returns the legacy UI-oriented snapshots for all **enabled** providers, in your dashboard order. Existing
-consumers remain supported while this route is deprecated; new consumers should use `/v1/limits`.
+consumers remain supported while this route is deprecated; new consumers must use `/v1/limits`.
 
 Both routes read the same rendered provider snapshots. When iCloud Sync is on, that means they both see
 the same iCloud-combined usage as the dashboard; `/v1/usage` returns the old UI-oriented shape, while
 `/v1/limits` projects the data into stable resource IDs and raw scalar values.
 
-- **200 OK** — JSON array (may be empty `[]` if nothing has been fetched yet).
+- **200 OK** — JSON array (empty `[]` when the app has not fetched anything yet).
 
 ### `GET /v1/usage/:id`
 
@@ -168,7 +168,7 @@ contract. Codex's combined Credits UI row becomes two scalar resources: `credits
 
 Line types are `progress`, `text`, `badge`, and `barChart`. A `barChart` line carries a `points` array — one `{ label, value, valueLabel? }` per day, oldest first — plus an optional `note`; `value` is the day's token count, `valueLabel` its pre-formatted readout, and `label` a localized month/day (e.g. "Mar 25"). `fetchedAt` is when the snapshot was last fetched successfully (ISO 8601).
 
-The in-app model breakdown shown when hovering spend rows is not included in this API yet. Spend rows continue to serialize as the same `text` lines so existing local integrations keep their current shape.
+This API does not yet include the in-app model breakdown that appears when you hover a spend row. Spend rows continue to serialize as the same `text` lines so existing local integrations keep their current shape.
 
 In both response shapes, `displayName` is the card's current name — if you renamed a card in the app, the rename shows here too. Match on `providerId` (or the envelope key), never on the name.
 
@@ -184,7 +184,7 @@ Codes: `provider_not_found`, `not_found`, `method_not_allowed`, `server_busy`.
 
 All responses include permissive CORS headers (`Access-Control-Allow-Origin: *`, methods `GET, OPTIONS`). `OPTIONS` requests return **204** for preflight.
 
-The server only listens on the loopback interface (`127.0.0.1`), so it is not reachable from other machines on your network. Because the CORS header is permissive, though, a web page open in your browser can read your usage snapshots from this API while the app is running. The data exposed is the same usage numbers shown in the menu bar — no credentials or tokens are ever served. This matches the original app's behavior so existing integrations keep working.
+The server only listens on the loopback interface (`127.0.0.1`), so it is not reachable from other machines on your network. Because the CORS header is permissive, though, a web page open in your browser can read your usage snapshots from this API while the app is running. The data exposed is the same usage numbers shown in the menu bar — no credentials or tokens are ever served. The header stays permissive so existing local integrations keep working.
 
 ## Caching behavior
 

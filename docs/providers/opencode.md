@@ -17,7 +17,7 @@ When you have the Go subscription, Runway shows "Go" beside the provider name.
 
 The Session / Weekly / Monthly meters show **observed local spend** — the usage recorded on *this* Mac. If
 you also use OpenCode Go on another machine, or OpenCode hasn't finished writing a session locally, the
-local figure can be lower than your true account usage, so treat the caps as a guide rather than the last
+local figure can be lower than your true account usage. Treat the caps as a guide rather than the last
 word. (When OpenCode ships an official usage API, Runway can switch to authoritative numbers without any
 change on your side.) If you only use the Zen pay-as-you-go gateway (no Go subscription), the cap meters are
 hidden and you'll just see the spend tiles.

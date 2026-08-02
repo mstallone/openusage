@@ -17,11 +17,11 @@ When Cursor reports your plan name, Runway shows it beside the provider name.
 
 ## Where credentials come from
 
-Just be signed into the Cursor app. Runway reads Cursor's local state database (and its keychain entries) for the session tokens; refreshed tokens are persisted back. Nothing extra to install or configure.
+Just be signed into the Cursor app. Runway reads Cursor's local state database (and its keychain entries) for the session tokens and writes refreshed tokens back. Nothing extra to install or configure.
 
-## Spend history
+## The spend tiles
 
-Today, Yesterday, Last 30 Days, and Usage Trend come from Cursor's usage export. Runway uses the exported token counts and shared model pricing to estimate the cost locally. Cursor's export may occasionally arrive late, so the newest figures can lag behind current activity. Runway leaves isolated malformed rows out instead of silently counting broken values as zero. A failed download, invalid export schema, or broken CSV structure leaves spend history unavailable for that refresh. Each failure is recorded in the diagnostic log without including the exported usage data.
+Today, Yesterday, Last 30 Days, and Usage Trend come from Cursor's usage export. Runway uses the exported token counts and shared model pricing to estimate the cost locally. Cursor's export can arrive late, so the newest figures can lag behind current activity. Runway leaves isolated malformed rows out instead of silently counting broken values as zero. A failed download, invalid export schema, or broken CSV structure leaves spend history unavailable for that refresh. Each failure is recorded in the diagnostic log without including the exported usage data.
 
 ## Troubleshooting
 

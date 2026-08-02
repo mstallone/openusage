@@ -30,14 +30,14 @@ widget while customizing), so one slot can show spend while another shows tokens
 
 The widget extension reads the same CloudKit data itself on WidgetKit's budgeted schedule
 (roughly every half hour), and the app also asks widgets to reload whenever it fetches fresher
-data in the foreground. The last good numbers are cached so a failed refresh shows slightly stale
-totals instead of an empty widget — honestly: cached entries show their fetch age, day tiles
-re-anchor to the current date (a cached "Today" never mislabels an older day), and the cache is
-tied to the iCloud account (and cleared on sign-out), so another account's numbers can never
-appear. Like the dashboard, incomplete totals are never silent: a warning triangle appears when
-payloads were unreadable or models unpriced, and an all-unreadable container says "Update this
-app". Signed-out, restricted, waiting-for-first-sync, and unreachable states each show a short
-notice instead of numbers.
+data in the foreground. The widget caches the last good numbers, so a failed refresh shows slightly
+stale totals instead of an empty widget. The cache stays honest: cached entries show their fetch
+age, and day tiles re-anchor to the current date, so a cached "Today" never mislabels an older
+day. The cache is tied to the iCloud account and cleared on sign-out, so another account's
+numbers can never appear. Like the dashboard, incomplete totals are never silent: a warning
+triangle appears when payloads were unreadable or models unpriced, and an all-unreadable
+container says "Update this app". Signed-out, restricted, waiting-for-first-sync, and
+unreachable states each show a short notice instead of numbers.
 
 ## Wire contract
 
@@ -57,9 +57,9 @@ xcodebuild -project ios/RunwayMobile.xcodeproj -target RunwayMobile \
   -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
 ```
 
-That unsigned simulator build is for compile verification only — launching it would abort at
-CloudKit setup, since it carries no iCloud entitlements (iOS offers no public API to probe for
-them first). Run the app from Xcode instead, which signs simulator and device builds alike.
+That unsigned simulator build is for compile verification only — a launch aborts at CloudKit
+setup, since it carries no iCloud entitlements (iOS offers no public API to probe for them
+first). Run the app from Xcode instead, which signs simulator and device builds alike.
 
 Debug builds read the development container (`iCloud.com.mattstallone.runway.dev`, Development
 environment — the same place dev Mac builds write); Release builds read the production container.
@@ -72,11 +72,11 @@ iCloud account as the Macs.
 
 The iOS app ships from the same `v*` tag as the Mac app — when the release actually touches it.
 An "iOS Gate" job (`script/testflight_gate.mjs`) checks what changed since the last build the
-external TestFlight testers actually received: a Mac-only release skips the iOS jobs entirely, because every
-upload is a new version that goes through a fresh Beta App Review and pushes a pointless update
-at testers. When the gate says
-ship, the "iOS TestFlight" job archives the app, signs it, and uploads it to App Store Connect,
-which serves it to internal TestFlight testers once Apple finishes processing. A follow-up
+external TestFlight testers actually received. A Mac-only release skips the iOS jobs entirely:
+every upload is a new version, and each one goes through a fresh Beta App Review and pushes a
+pointless update at testers. When the gate says ship, the "iOS TestFlight" job archives
+the app, signs it, and uploads it to App Store Connect, which serves it to internal TestFlight
+testers once Apple finishes processing. A follow-up
 "TestFlight External" job then waits for that processing, adds the build to the external tester
 group(s), and submits it for Beta App Review — external testers receive it when Apple approves
 (`script/testflight_distribute.mjs` does that through the App Store Connect API). Testers install
@@ -84,15 +84,16 @@ and update through the TestFlight app — there is no Sparkle feed on iOS, and n
 either (the App Store Connect upload plays that role).
 
 The gate ships when anything under `ios/` or the TestFlight pipeline scripts changed since the
-newest processed build present in every external TestFlight group (its version names the tag it
-was built from, so a failed upload or a failed external distribution never advances the baseline
-and its changes cannot be stranded by a later Mac-only tag), and also when that build is older
-than 60 days — TestFlight builds expire 90 days after upload, so an unchanged app still re-ships
-before testers' installs go dark. Beta App Review approval is deliberately not part of the
-baseline: it stays pending for up to a day after every ship, and waiting on it would re-submit
-identical builds. This means TestFlight can lag the Mac version (say, 0.8.9 on the Mac while TestFlight
-shows 0.8.5); that is expected and harmless — a Mac-side change that matters to the phone must
-update the wire decoders in `ios/`, which trips the gate. To ship iOS regardless, run the Release
+baseline build. The baseline is the newest processed build present in every external TestFlight
+group. Its version names the tag it was built from, so a failed upload or a failed external
+distribution never advances the baseline, and its changes cannot be stranded by a later Mac-only
+tag. The gate also ships when the baseline build is older than 60 days: TestFlight builds expire
+90 days after upload, so an unchanged app still re-ships before testers' installs go dark. Beta
+App Review approval is deliberately not part of the baseline: it stays pending for up to a day
+after every ship, and a wait for it re-submits identical builds. This means TestFlight can
+lag the Mac version (say, 0.8.9 on the Mac while TestFlight shows 0.8.5); that is expected and
+harmless — a Mac-side change that matters to the phone must update the wire decoders in `ios/`,
+which trips the gate. To ship iOS regardless, run the Release
 workflow manually with the `force_ios` input checked.
 
 - The version is the tag (`v0.7.1` → `0.7.1`) and the build number is the git commit count, both

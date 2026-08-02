@@ -138,7 +138,7 @@ struct WidgetGroupedListView: View {
     private enum DashboardMetricCardRow: Identifiable {
         case metric(ResolvedRow)
         case divider
-        /// #596: the provider's quick-link buttons (Status / Console / Dashboard ...), pinned at the
+        /// The provider's quick-link buttons (Status / Console / Dashboard ...), pinned at the
         /// bottom of the collapsible expanded section. They collapse with the caret — part of the
         /// expander, not always-visible chrome.
         case links([ProviderLink])
@@ -277,7 +277,7 @@ struct WidgetGroupedListView: View {
         isExpanded: Bool,
         links: [ProviderLink]
     ) -> [DashboardMetricCardRow] {
-        // #596: provider quick-link buttons live INSIDE the collapsible expanded section, pinned at its
+        // Provider quick-link buttons live INSIDE the collapsible expanded section, pinned at its
         // bottom, so collapsing the caret hides them along with the expanded metrics — they're part of
         // the expander, not always-visible chrome. The caret shows for any provider with expanded
         // content (metrics OR links), so a links-only provider still gets a caret to reveal its buttons.

@@ -367,8 +367,7 @@ final class WidgetDataStoreTests: XCTestCase {
     }
 
     func testCreditsDollarLimitAppendsLimitNoun() {
-        // Matches the original OpenUsage, which renders every bounded dollar metric's subtitle as
-        // "$X limit" — never "total".
+        // Every bounded dollar metric's subtitle renders as "$X limit" — never "total".
         let credits = WidgetData(
             title: "Credits",
             icon: .providerMark("cursor"),

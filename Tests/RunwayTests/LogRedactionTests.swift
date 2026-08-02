@@ -1,9 +1,8 @@
 import XCTest
 @testable import Runway
 
-/// The never-log-secrets regression guard. Each case mirrors a Rust test from
-/// `src-tauri/src/plugin_engine/host_api.rs` / `src-tauri/src/config.rs`, ported verbatim where a
-/// vector exists, so a subtle regex divergence (leak or over-redaction) trips here.
+/// The never-log-secrets regression guard: fixed vectors pin the redaction regexes, so a subtle
+/// regex divergence (leak or over-redaction) trips here.
 final class LogRedactionTests: XCTestCase {
     // MARK: - redactValue
 
@@ -14,7 +13,7 @@ final class LogRedactionTests: XCTestCase {
     }
 
     func testRedactValueLongMasksEnds() {
-        // 13 characters: first4...last4. Mirrors the Rust `sk-1...cdef` vector.
+        // 13 characters: first4...last4.
         XCTAssertEqual(LogRedaction.redactValue("sk-1234567890abcdef"), "sk-1...cdef")
         XCTAssertEqual(LogRedaction.redactValue("abcdefghijklm"), "abcd...jklm")
     }
