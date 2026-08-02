@@ -156,6 +156,23 @@ final class StatusItemController: NSObject {
 
         AppLog.info(.statusItem, "Status item ready (button: \(self.statusItem.button != nil), shortcut: \(KeyboardShortcuts.getShortcut(for: .togglePopover)?.description ?? "none"))")
 
+        // Pre-warm the first open. The hidden tree is laid out at panel setup, but nothing RENDERS
+        // and the window is never MATERIALIZED until the first click, so that click used to pay
+        // every one-time cost — font glyph caches, glass materials, CoreAnimation layer
+        // construction, and the window server creating the panel — on top of the normal open
+        // (measured ~87ms cold vs ~35ms warm). Two passes after launch settles move all of it to
+        // idle time: the early one pays the one-time costs, the later one re-lays-out the content
+        // the first refresh batch delivered in between. Each pass is invisible (offscreen raster
+        // via `cacheDisplay`, window ordered front at alpha 0 and straight back out) and skipped
+        // once the user has opened the panel for real.
+        Task { @MainActor [weak self] in
+            for delay in [2.0, 12.0] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, !self.panel.isVisible else { return }
+                self.prewarmPanel()
+            }
+        }
+
         // UI profiling driver — inert unless RUNWAY_UI_PROFILE=1 (see UIProfiler / script/profile_ui.sh).
         UIProfiler.startDriverIfEnabled(
             open: { [weak self] in self?.showPopover() },
@@ -390,6 +407,34 @@ final class StatusItemController: NSObject {
         clearStrayFocus()
         button.highlight(true)
         outsideClickMonitor.start()
+    }
+
+    /// One invisible warm-up pass over everything the first open would otherwise pay for the first
+    /// time: the real opening frame, a full layout at it, an offscreen raster (fonts, materials,
+    /// layer construction), and the window server's panel materialization. See the launch task above.
+    private func prewarmPanel() {
+        UIProfiler.measure("prewarm.render") {
+            // Anchor at the real opening frame first — warming up at the setup-time default frame
+            // leaves the first open re-laying-out everything at the actual anchor size anyway.
+            if let button = statusItem.button, let buttonWindow = button.window {
+                let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+                heightController.prepareForOpening(below: buttonRect)
+            }
+            let view = hostingController.view
+            view.layoutSubtreeIfNeeded()
+            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+            }
+            // First-ever ordering makes the window server create the panel (~30ms billed to the
+            // first open otherwise). Do it invisibly: alpha 0, no key, straight back out. The real
+            // open runs `prepareForOpening` again, so no anchor state leaks from here.
+            let alpha = panel.alphaValue
+            panel.alphaValue = 0
+            panel.orderFront(nil)
+            panel.orderOut(nil)
+            panel.alphaValue = alpha
+            heightController.finishClosing()
+        }
     }
 
     private func hidePanel() {
