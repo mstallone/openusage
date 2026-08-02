@@ -144,12 +144,14 @@ enum JSONLTailIO {
 
         let appended = buffer.dropFirst(prefixLength)
         let boundary = lineBoundary(in: appended)
-        guard boundary > 0 else {
-            // The appended bytes contain no complete line. Fall back to a full parse — it handles
-            // an unterminated final record (parses it, disables resume), so a writer that stopped
-            // mid-line without a newline still gets its last record counted, exactly like the
-            // whole-file path. Caching a "nothing new" result here instead would mark those bytes
-            // as covered and permanently skip that record if the file never grows again.
+        guard boundary == appended.count, boundary > 0 else {
+            // Bytes trail the last newline (no complete line at all, or a final record missing its
+            // newline). Fall back to a full parse: it counts an unterminated final record and
+            // disables resume, exactly like the whole-file path. Caching partial coverage instead
+            // does not persist — the cache writer verifies a record's size against the source file
+            // before publishing, so a coverage-sized record is rejected and repeated one-shot CLI
+            // scans (which reload persisted state every run) would omit that record forever.
+            // Torn reads are rare: the log writers emit whole lines.
             return nil
         }
         // Copy so the parser sees a zero-based chunk containing only whole lines.

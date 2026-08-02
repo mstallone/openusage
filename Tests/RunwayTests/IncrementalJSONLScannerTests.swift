@@ -541,21 +541,60 @@ final class IncrementalJSONLScannerTests: XCTestCase {
         let scanner = IncrementalJSONLScanner<Int>()
         _ = await scanner.items(from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser)
 
-        // One complete line plus an unterminated record. The tail parses "3\n" now; the cache must
-        // record only the parsed coverage so "4" is not marked as covered.
+        // One complete line plus an unterminated record. The tail path must hand off to a full
+        // parse: partial coverage cannot persist (the cache writer verifies a record's size
+        // against the source file), so counting the fragment now is the only durable behavior.
         try append("3\n4", to: url)
         let second = await scanner.items(
             from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
         )
-        XCTAssertEqual(second, [1, 2, 3])
+        XCTAssertEqual(second, [1, 2, 3, 4])
 
-        // No further writes: if the writer stopped here, the next scan must still pick "4" up
-        // (size mismatch → tail retry finds no newline → full parse counts the fragment).
+        // No further writes: the full parse covered the whole file, so this is a cache hit.
         let third = await scanner.items(
             from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
         )
         XCTAssertEqual(third, [1, 2, 3, 4])
-        XCTAssertEqual(recorder.chunks, ["1\n2\n", "3\n", "1\n2\n3\n4"])
+        XCTAssertEqual(recorder.chunks, ["1\n2\n", "1\n2\n3\n4"])
+    }
+
+    func testFragmentTailPersistsForOneShotScans() async throws {
+        // The one-shot CLI reloads persisted state every run. A fragment tail must produce a
+        // persistable record (the writer rejects records whose size disagrees with the source
+        // file), or repeated CLI runs would re-omit the unterminated final record forever.
+        let base = try makeDirectory("TailFragmentPersistence")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n2\n".utf8).write(to: url)
+        let persistence = JSONLScanCachePersistence(
+            namespace: "test", schemaVersion: 1,
+            directory: base.appendingPathComponent("cache"), writeDebounce: .milliseconds(1)
+        )
+        let first = IncrementalJSONLScanner<Int>(persistence: persistence)
+        _ = await first.items(
+            from: [try discovered(url)], since: .distantPast, cacheIdentity: "home",
+            tailParser: ChunkRecorder().parser
+        )
+        await first.waitForPendingWritesForTesting()
+
+        try append("3\n4", to: url)
+        let second = IncrementalJSONLScanner<Int>(persistence: persistence)
+        let secondItems = await second.items(
+            from: [try discovered(url)], since: .distantPast, cacheIdentity: "home",
+            tailParser: ChunkRecorder().parser
+        )
+        XCTAssertEqual(secondItems, [1, 2, 3, 4])
+        await second.waitForPendingWritesForTesting()
+
+        // A third one-shot run must serve the whole file from the persisted record.
+        let thirdRecorder = ChunkRecorder()
+        let third = IncrementalJSONLScanner<Int>(persistence: persistence)
+        let thirdItems = await third.items(
+            from: [try discovered(url)], since: .distantPast, cacheIdentity: "home",
+            tailParser: thirdRecorder.parser
+        )
+        XCTAssertEqual(thirdItems, [1, 2, 3, 4])
+        XCTAssertEqual(thirdRecorder.chunks, [], "the fragment-covering record must have persisted")
     }
 
     func testAppendedFragmentWithoutNewlineFallsBackToFullParse() async throws {
