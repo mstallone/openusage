@@ -245,12 +245,19 @@ final class WidgetDataStore {
     func evaluateNotifications(now: Date = Date()) async {
         guard let settingsProvider = notificationSettings else { return }
         let toggles = settingsProvider().toggles
-        // All triggers off (the default): nothing can fire, so skip the whole pass — including the
-        // evaluator, whose per-metric state must be left UNTOUCHED. The pace logic deliberately
-        // keeps `previousBucket` behind while a trigger is off so an unconsumed worsening fires
-        // when the trigger comes back on (see `testOffToggleDoesNotConsumeTheEdge`); running the
-        // evaluator with an empty metric list here would prune that state and eat the edge.
+        // All triggers off (the default): nothing can fire, so skip resolving and formatting every
+        // visible metric. Present metrics keep their evaluator state UNTOUCHED — the pace logic
+        // deliberately keeps `previousBucket` behind while a trigger is off so an unconsumed
+        // worsening fires when the trigger comes back on (see `testOffToggleDoesNotConsumeTheEdge`).
+        // Metrics no longer in the layout still prune (cheap — descriptor keys only, no data
+        // resolution), so re-adding one starts fresh instead of firing on stale state.
         guard toggles.underTenPercent || toggles.healthyToClose || toggles.closeToRunningOut else {
+            let presentKeys = Set(
+                orderedDescriptors()
+                    .filter { isProviderEnabled($0.providerID) }
+                    .map { "\($0.providerID).\($0.id)" }
+            )
+            notificationEvaluator.prune(keeping: presentKeys)
             return
         }
         // Gather this pass's enabled, bounded, visible metrics — unbounded rows and charts have no pace

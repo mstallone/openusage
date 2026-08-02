@@ -20,6 +20,14 @@ final class QuotaNotificationEvaluator {
 
     private var notificationState: [String: NotificationState] = [:]
 
+    /// Drop state for metrics no longer in `keys`, touching nothing else. The all-triggers-off
+    /// refresh path uses this instead of `evaluate`: metrics still present keep their state (so an
+    /// unconsumed worsening fires when a trigger comes back on — the kept-behind `previousBucket`),
+    /// while metrics removed from the layout still start fresh when re-added.
+    func prune(keeping keys: Set<String>) {
+        notificationState = notificationState.filter { keys.contains($0.key) }
+    }
+
     /// Evaluate every metric for a quota pace milestone and deliver a notification for any that just
     /// crossed one, via `post` (id-prefix, title, subtitle, body → delivered?). `providerName` maps a
     /// provider id to its display name for the subtitle.
