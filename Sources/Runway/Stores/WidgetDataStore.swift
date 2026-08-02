@@ -32,11 +32,18 @@ final class WidgetDataStore {
     /// refresh indicator forever (the in-flight guard also blocked every later attempt for that
     /// provider). Injectable for tests; see `defaultProviderRefreshTimeout`.
     private let providerRefreshTimeout: TimeInterval
-    /// 60s: above the slowest legitimate provider path (Codex's claim probe budgets usage fetch +
-    /// token refresh + retry + reset-credit fetch ≈ 45s — see `AppContainer`'s `refreshAfterClaim`),
-    /// so the ceiling only ever cuts genuinely dead work, while a dead connection still surfaces as
-    /// a provider error card instead of an infinite spinner.
-    static let defaultProviderRefreshTimeout: TimeInterval = 60
+    /// 90s: above the slowest legitimate provider path — Cursor's probe sequentially budgets
+    /// usage + plan + credits + Stripe + CSV export at 10+10+10+10+30 ≈ 70s, and Codex's claim
+    /// probe ≈ 45s — so the ceiling only ever cuts genuinely dead work, while a dead connection
+    /// still surfaces as a provider error card instead of an infinite spinner.
+    static let defaultProviderRefreshTimeout: TimeInterval = 90
+    /// Providers whose timed-out refresh is still running detached (the deadline race resumed
+    /// without awaiting it). Blocks new attempts for that provider so network/auth work never
+    /// overlaps on one runtime — cleared the moment the straggler actually exits, with
+    /// `hungRefreshSafetyValve` as the ceiling so a permanently-wedged provider still becomes
+    /// refreshable again instead of being locked out until relaunch.
+    private var hungRefreshUntil: [String: Date] = [:]
+    private static let hungRefreshSafetyValve: TimeInterval = 300
     /// Quota-notification preferences (three independent triggers). Injected; `nil` disables
     /// notifications entirely (tests and previews that don't wire it).
     private let notificationSettings: (@MainActor () -> NotificationSettingsStore)?
@@ -347,6 +354,15 @@ final class WidgetDataStore {
             AppLog.debug(.refresh, "cache skip \(providerID) (already in flight)")
             return .skipped
         }
+        // A timed-out attempt's straggler may still be running detached; don't stack a second
+        // network/auth pass on the same runtime while it lives (see `hungRefreshUntil`).
+        if let hungUntil = hungRefreshUntil[providerID] {
+            if now() < hungUntil {
+                AppLog.debug(.refresh, "hung-refresh skip \(providerID) (straggler still running)")
+                return .skipped
+            }
+            hungRefreshUntil[providerID] = nil
+        }
         refreshingProviderIDs.insert(providerID)
         defer { refreshingProviderIDs.remove(providerID) }
         let start = monotonicNow()
@@ -364,7 +380,12 @@ final class WidgetDataStore {
                 let snapshot = await ProviderRefreshContext.$isManual.withValue(force) {
                     await provider.refresh()
                 }
-                guard !state.resumed else { return }
+                guard !state.resumed else {
+                    // Lost the race: this straggler just exited, so the runtime is idle again —
+                    // lift the overlap guard early instead of waiting out the safety valve.
+                    self.hungRefreshUntil[providerID] = nil
+                    return
+                }
                 state.resumed = true
                 state.watchdog?.cancel()
                 continuation.resume(returning: snapshot)
@@ -374,6 +395,12 @@ final class WidgetDataStore {
                 guard !state.resumed, !Task.isCancelled else { return }
                 state.resumed = true
                 refreshTask.cancel()
+                // The provider's work may still be running detached (cancellation is cooperative,
+                // and e.g. Kimi's token refresh awaits a detached task that ignores it). The outer
+                // `defer` is about to release `refreshingProviderIDs`, so hold a separate overlap
+                // guard until the straggler exits — overlapping auth/network attempts on one
+                // runtime is worse than waiting.
+                self.hungRefreshUntil[providerID] = self.now().addingTimeInterval(Self.hungRefreshSafetyValve)
                 continuation.resume(returning: nil)
             }
         }

@@ -187,8 +187,13 @@ final class StatusItemController: NSObject {
         // see docs/debugging.md).
         if ProcessInfo.processInfo.environment["RUNWAY_UI_PROFILE_COLD"] != "1" {
             Task { @MainActor [weak self] in
-                for delay in [2.0, 12.0] {
-                    try? await Task.sleep(for: .seconds(delay))
+                // Absolute offsets from launch, not sequential sleeps: the second pass must land
+                // AT +12s (right after the first refresh batch), not at 12s-plus-however-long the
+                // first pass took — users opening in that drift window would still pay the
+                // refreshed-content layout this pass exists to absorb.
+                let launch = ContinuousClock.now
+                for offset in [Duration.seconds(2), .seconds(12)] {
+                    try? await Task.sleep(until: launch + offset, clock: .continuous)
                     // A real open (even one already closed again) warmed everything a warm-up pass
                     // would — rendering the same content again on the main actor is pure waste.
                     guard let self, !self.hasOpenedPanel, !self.panel.isVisible else { return }

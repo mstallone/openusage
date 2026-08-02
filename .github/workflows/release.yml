@@ -417,11 +417,11 @@ jobs:
     name: TestFlight External
     runs-on: ubuntu-latest
     needs: testflight
-    # Record each release as a "TestFlight" deployment so the repository homepage lists the public
-    # join link next to the Update Feed deployment. The URL is the External group's public
+    # Record each release as an "iOS TestFlight" deployment so the repository homepage lists the
+    # public join link next to the Update Feed deployment. The URL is the External group's public
     # TestFlight invite; it is stable across releases.
     environment:
-      name: TestFlight
+      name: iOS TestFlight
       url: https://testflight.apple.com/join/uA4aHUEx
     env:
       # Comma-separated external TestFlight group names every release ships to. The groups must
