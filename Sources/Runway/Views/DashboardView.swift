@@ -312,10 +312,17 @@ struct DashboardView: View {
                 // the entering destination — and stays mounted for a mount-free switch back.
                 // Under Reduce Motion the switch plays as a fade in place; a second mounted tree
                 // would be pure cost, so the active page stands alone.
-                pages = reduceMotion || animatedHeight <= 0
+                // Freeze at the PRESENTED height, not the state-level `animatedHeight`: mid-way
+                // through a reversal the state already holds the interrupted push's destination,
+                // and freezing there would snap the newly parked page's footer to a height it
+                // never visibly reached. `openingHeight` reads the height controller's live
+                // `visualHeight`, which the per-frame bridge keeps at the rendered value (they're
+                // identical when the previous push had settled).
+                let presentedHeight = MenuBarPopover.openingHeight?() ?? animatedHeight
+                pages = reduceMotion || presentedHeight <= 0
                     ? [PagerPage(screen: layout.screen, frozenHeight: nil)]
                     : [
-                        PagerPage(screen: layout.screenSlideFrom, frozenHeight: animatedHeight),
+                        PagerPage(screen: layout.screenSlideFrom, frozenHeight: presentedHeight),
                         PagerPage(screen: layout.screen, frozenHeight: nil),
                     ]
                 let destination = layout.screen
