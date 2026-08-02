@@ -150,6 +150,11 @@ final class WidgetDataStoreTimeoutTests: XCTestCase {
         XCTAssertEqual(outcome, .failed)
         XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
         XCTAssertEqual(store.providerErrors[provider.id], "Refresh timed out after 0s")
+
+        // The straggler is still running detached (~2s); even a forced attempt must not stack a
+        // second network/auth pass on the same runtime while it lives.
+        let overlapping = await store.refresh(providerID: provider.id, force: true)
+        XCTAssertEqual(overlapping, .skipped)
     }
 
     private func makeUserDefaults(_ name: String) -> UserDefaults {
