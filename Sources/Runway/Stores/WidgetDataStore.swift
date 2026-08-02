@@ -32,10 +32,11 @@ final class WidgetDataStore {
     /// refresh indicator forever (the in-flight guard also blocked every later attempt for that
     /// provider). Injectable for tests; see `defaultProviderRefreshTimeout`.
     private let providerRefreshTimeout: TimeInterval
-    /// 30s: generous against slow first-time JSONL scans and cold networks (the slow-refresh warning
-    /// threshold logs well before this), but bounded so a dead connection surfaces as a provider
-    /// error card instead of an infinite spinner.
-    static let defaultProviderRefreshTimeout: TimeInterval = 30
+    /// 60s: above the slowest legitimate provider path (Codex's claim probe budgets usage fetch +
+    /// token refresh + retry + reset-credit fetch ≈ 45s — see `AppContainer`'s `refreshAfterClaim`),
+    /// so the ceiling only ever cuts genuinely dead work, while a dead connection still surfaces as
+    /// a provider error card instead of an infinite spinner.
+    static let defaultProviderRefreshTimeout: TimeInterval = 60
     /// Quota-notification preferences (three independent triggers). Injected; `nil` disables
     /// notifications entirely (tests and previews that don't wire it).
     private let notificationSettings: (@MainActor () -> NotificationSettingsStore)?
@@ -349,25 +350,36 @@ final class WidgetDataStore {
         refreshingProviderIDs.insert(providerID)
         defer { refreshingProviderIDs.remove(providerID) }
         let start = monotonicNow()
-        // Bound the refresh with a watchdog. `provider` is not Sendable, so the refresh runs in an
-        // isolation-inheriting `Task` (not a task group) and the watchdog cancels it at the ceiling —
-        // URLSession-backed work exits promptly on cancellation. Whatever a cancelled provider still
-        // returns is discarded below, never published.
-        let refreshTask = Task { [force] in
-            await ProviderRefreshContext.$isManual.withValue(force) {
-                await provider.refresh()
+        // Bound the refresh with a true deadline race. `provider` is not Sendable, so both racers
+        // are isolation-inheriting `Task`s (not a task group) and the continuation is resumed by
+        // whichever finishes first — the deadline never `await`s the provider, so even a provider
+        // suspended in a non-cancellable operation cannot hold the spinner and in-flight guard
+        // hostage (merely cancelling and then awaiting would). The loser's result is discarded via
+        // the MainActor-confined `resumed` flag; a cancelled provider (URLSession-backed work exits
+        // promptly on cancellation) finishes into the void and is never published.
+        let timedOutSnapshot: ProviderSnapshot? = await withCheckedContinuation { continuation in
+            final class RaceState { var resumed = false; var watchdog: Task<Void, Never>? }
+            let state = RaceState()
+            let refreshTask = Task { [force] in
+                let snapshot = await ProviderRefreshContext.$isManual.withValue(force) {
+                    await provider.refresh()
+                }
+                guard !state.resumed else { return }
+                state.resumed = true
+                state.watchdog?.cancel()
+                continuation.resume(returning: snapshot)
+            }
+            state.watchdog = Task { [providerRefreshTimeout] in
+                try? await Task.sleep(for: .seconds(providerRefreshTimeout))
+                guard !state.resumed, !Task.isCancelled else { return }
+                state.resumed = true
+                refreshTask.cancel()
+                continuation.resume(returning: nil)
             }
         }
-        let watchdog = Task { [providerRefreshTimeout] in
-            try? await Task.sleep(for: .seconds(providerRefreshTimeout))
-            guard !Task.isCancelled else { return }
-            refreshTask.cancel()
-        }
-        var snapshot = await refreshTask.value
-        watchdog.cancel()
-        // Timed out: the watchdog cancelled the provider. Surface it like any failed refresh — error
-        // card + backoff — and keep the last-good snapshot on screen.
-        if refreshTask.isCancelled {
+        // Timed out: the deadline won the race. Surface it like any failed refresh — error card +
+        // backoff — and keep the last-good snapshot on screen.
+        guard var snapshot = timedOutSnapshot else {
             let message = "Refresh timed out after \(Int(providerRefreshTimeout))s"
             providerErrors[providerID] = message
             failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)

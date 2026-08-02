@@ -38,7 +38,7 @@ are debounced until after refresh; the one-shot CLI drains pending writes before
 
 A failed refresh **never wipes your data**: the last good values stay on screen, and a small warning triangle appears at the right edge of the provider's header — hover it for the error message (e.g. "Not logged in"). The error clears on the next successful refresh.
 
-A provider that stops responding is cut off after 30 seconds. The attempt counts as a failed refresh — same warning triangle, message "Refresh timed out after 30s" — instead of leaving the refresh spinner running forever. Like any failure, the provider backs off briefly before the next attempt.
+A provider that stops responding is cut off after 60 seconds — above the slowest legitimate provider flow, so only genuinely dead work gets cut. The attempt counts as a failed refresh — same warning triangle, message "Refresh timed out after 60s" — instead of leaving the refresh spinner running forever. Like any failure, the provider backs off briefly before the next attempt.
 
 The last good normalized history is preserved too, so a temporary provider failure—or a successful
 limit refresh whose local log scan is temporarily unavailable—does not remove this Mac's previous
