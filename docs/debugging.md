@@ -18,6 +18,11 @@ The script builds a signed app bundle under `dist/` and launches it in place —
 own settings and keychain and never disturbs a released Runway. It ships no update feed, so it never
 checks for updates — test updates with a real signed, notarized release build.
 
+The script launches the app without any `CLAUDE_CONFIG_DIR` / `CODEX_HOME` values inherited from the
+shell, and clears the dev app's persisted shell-environment snapshot first. This keeps an agent
+session's sandboxed homes (Claude Code and Codex export those variables) from leaking into the dev
+app's Claude and Codex data. To test a custom home on purpose, launch with `KEEP_PROVIDER_HOMES=1`.
+
 ## Stream logs
 
 To watch the app's logs live while you reproduce an issue:
