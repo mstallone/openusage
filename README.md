@@ -10,15 +10,15 @@ Runway brings multiple accounts across Claude, Codex, Cursor, Grok, Devin, and m
 
 ## Installation
 
-**Direct download:** grab the latest universal DMG from the [releases page](https://github.com/mstallone/runway/releases/latest), open it, and drag Runway to your Applications folder.
+**Direct download:** download the latest universal DMG from the [releases page](https://github.com/mstallone/runway/releases/latest). Open it. Drag Runway to your Applications folder.
 
 The app updates itself in place via signed, notarized [Sparkle](docs/updates.md) updates. Requires macOS 15 (Sequoia) or later.
 
 ## Performance
 
-Runway is a rebuilt-for-speed fork: measured against upstream OpenUsage on the same machine, same
-providers, and the same session-log corpus, it is faster on every axis we track — details and
-methodology in [docs/performance.md](docs/performance.md).
+Runway is a rebuilt-for-speed fork. We measured it against upstream OpenUsage on the same machine,
+with the same providers and the same session-log corpus. It is faster on every axis we track — see
+the details and methodology in [docs/performance.md](docs/performance.md).
 
 | | OpenUsage | Runway |
 |---|---|---|
@@ -44,7 +44,7 @@ methodology in [docs/performance.md](docs/performance.md).
 - **[Sakana Fugu](docs/providers/sakana.md)** — subscription quota plus local Fugu Ultra usage trend and estimated API-rate value
 - **[Z.ai](docs/providers/zai.md)** — session, weekly, web-search quotas (GLM Coding Plan, API key)
 
-Most providers read the credentials already on your machine (keychain, auth files, app state) — no extra login. OpenRouter and Z.ai are the exceptions: they have no local credential to reuse, so you supply an API key (see [OpenRouter setup](docs/providers/openrouter.md) or [Z.ai setup](docs/providers/zai.md)). Credentials are used only for the corresponding provider requests. Runway collects no product analytics or usage statistics; public pricing downloads and optional iCloud sync are documented under [Privacy](docs/privacy.md).
+Most providers read the credentials already on your machine (keychain, auth files, app state) — no extra login. OpenRouter and Z.ai are the exceptions: they have no local credential to reuse, so you supply an API key (see [OpenRouter setup](docs/providers/openrouter.md) or [Z.ai setup](docs/providers/zai.md)). Runway uses credentials only for the corresponding provider requests. Runway collects no product analytics or usage statistics. The [Privacy](docs/privacy.md) page documents public pricing downloads and optional iCloud sync.
 
 ## Features
 
@@ -62,8 +62,9 @@ Most providers read the credentials already on your machine (keychain, auth file
 ## iPhone Companion
 
 Runway for iOS mirrors combined usage from every Mac you run — spend today, yesterday, and over the
-last 30 days — synced privately over iCloud, with lock screen and home screen widgets. Each widget
-can show cost or tokens; see the [iOS app](docs/ios-app.md) for what it shows and how syncing works.
+last 30 days. The data syncs privately over iCloud. The app adds lock screen and home screen
+widgets. Each widget can show cost or tokens; see the [iOS app](docs/ios-app.md) for what it shows
+and how syncing works.
 
 <p align="center">
   <img src="assets/ios-lockscreen.png" width="270" alt="Runway lock screen widgets showing today's AI spend synced from your Macs">
@@ -82,9 +83,9 @@ For working on the code, see the developer docs: [architecture](docs/architectur
 - macOS 15 (Sequoia) or later
 - Universal binary — runs natively on both Apple Silicon and Intel Macs
 
-The Today / Yesterday / Last 30 Days spend tiles are computed natively from local CLI logs (Claude,
-Codex, Grok, and Sakana Fugu) or Cursor's usage export — no Node.js or other runtime needed. Dollars
-are estimated with [model pricing](docs/pricing.md).
+Runway computes the Today / Yesterday / Last 30 Days spend tiles natively from local CLI logs
+(Claude, Codex, Grok, and Sakana Fugu) or Cursor's usage export — no Node.js or other runtime
+needed. It estimates dollars with [model pricing](docs/pricing.md).
 
 
 
@@ -96,9 +97,9 @@ swift test             # run the test suite
 ./script/build_and_run.sh   # build and launch the dev app from dist/ (no install)
 ```
 
-SwiftPM package, SwiftUI content hosted in an AppKit-owned `NSStatusItem` + custom key-capable `NSPanel`, Swift 6 strict concurrency. The app and CLI share one module: providers implement a small `ProviderRuntime` protocol (auth store → usage client → mapper → `ProviderSnapshot`), and both surfaces read the same normalized data — see the [architecture overview](docs/architecture.md) for how the pieces fit together and [AGENTS.md](AGENTS.md) for engineering conventions.
+SwiftPM package, SwiftUI content hosted in an AppKit-owned `NSStatusItem` + custom key-capable `NSPanel`, Swift 6 strict concurrency. The app and CLI share one module: providers implement a small `ProviderRuntime` protocol (auth store → usage client → mapper → `ProviderSnapshot`), and both surfaces read the same normalized data. See the [architecture overview](docs/architecture.md) for how the pieces fit together, and [AGENTS.md](AGENTS.md) for the engineering conventions.
 
-Releases are automated: pushing a stable tag on `main` tests, builds, signs, notarizes, and publishes. The pipeline and its one-time setup are documented in [Releasing](docs/releasing.md).
+Releases are automated: when you push a stable tag on `main`, the pipeline tests, builds, signs, notarizes, and publishes the release. The pipeline and its one-time setup are documented in [Releasing](docs/releasing.md).
 
 ## Contributing
 

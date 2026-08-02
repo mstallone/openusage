@@ -3,7 +3,7 @@
 Tracks Fugu subscription quota from Sakana AI Console, plus local Fugu Ultra token history and
 estimated API-rate value from Codex rollouts.
 
-## What It Tracks
+## What it tracks
 
 | Metric | Meaning |
 | --- | --- |
@@ -26,7 +26,7 @@ The graph and spend rows are different: they come from local Codex logs and incl
 on this Mac. If private iCloud sync is enabled, Runway can combine that machine-local history with
 history from your other Macs without double-counting the account-wide subscription meters.
 
-## Local Fugu History
+## Local Fugu history
 
 Runway finds Sakana-configured Codex homes from `CODEX_HOME`, `~/.codex*`, and direct directories
 under `~/.config`. This includes launcher-specific homes such as `~/.codex-fugu`. It parses the same
@@ -49,16 +49,16 @@ saves input, cached-input, output, and total counts, but not Sakana's separate o
 fields. The graph and estimate can therefore undercount orchestration tokens. Runway never invents
 the missing fields or adds reasoning tokens a second time.
 
-## Where Credentials Come From
+## Where credentials come from
 
 Runway looks for a signed-in `console.sakana.ai` session in Chrome, Arc, Brave, and Microsoft Edge
 profiles. It reads the browser's cookie database in read-only mode, decrypts the Sakana session in
 memory with that browser's Safe Storage key, and sends the cookie only to Sakana Console. Runway
 does not copy the cookie into its own configuration, refresh it, or change the browser database.
 
-The first manual refresh may show a macOS Keychain prompt for the browser's Safe Storage item. Choose
-**Always Allow** if you want scheduled refreshes to work without prompting. Denying the request leaves
-the browser session untouched and makes the provider report a credential-access error.
+The first manual refresh can show a macOS Keychain prompt for the browser's Safe Storage item. If
+you want scheduled refreshes to work without a prompt, choose **Always Allow**. If you deny the
+request, the browser session stays untouched and the provider reports a credential-access error.
 
 Safari is not currently supported because it uses a different cookie store and security model.
 
@@ -66,25 +66,25 @@ Safari is not currently supported because it uses a different cookie store and s
 
 1. Open [Sakana AI Console](https://console.sakana.ai/) in Chrome, Arc, Brave, or Microsoft Edge.
 2. Sign in to the Sakana account that owns the Fugu subscription.
-3. Use Fugu through a Sakana-configured Codex home, such as the official `codex-fugu` launcher, if you
-   want local spend estimates and the usage graph.
+3. If you want local spend estimates and the usage graph, use Fugu through a Sakana-configured
+   Codex home, such as the official `codex-fugu` launcher.
 4. Refresh Runway and approve the browser Safe Storage Keychain request if macOS shows one.
 
 Runway detects either the local Sakana cookie or a Sakana Codex home without contacting the
 network during first-run and new-provider detection.
 
-## Why the API Key Is Not Used
+## Why the API key is not used
 
 `SAKANA_API_KEY` authenticates model requests at `api.sakana.ai`, but Sakana does not expose the
 five-hour or weekly subscription pools, or account-wide request history, through a documented API-key
 endpoint. A model response contains only that request's token counts, not the remaining account quota.
-Using responses directly would also require Runway to proxy every future request.
+Direct use of responses also requires Runway to proxy every future request.
 
 The provider uses the signed-in console session for subscription usage and reads the resulting local
 Codex records for history. Your `SAKANA_API_KEY` remains available to Codex and other tools that make
 model calls; Runway neither reads nor sends it.
 
-## Network Requests
+## Under the hood
 
 - `GET https://console.sakana.ai/api/auth/session` verifies that the borrowed browser session is
   current.
@@ -102,7 +102,7 @@ changes it, instead of silently displaying zero. Local history scanning makes no
   macOS Keychain prompt. Choose **Always Allow** for automatic refreshes.
 - **"The Sakana browser session expired"** — sign out and back in at Sakana AI Console, then refresh.
 - **"The Sakana browser session couldn't be decoded"** — update or restart the browser, sign in again,
-  and retry. The browser may have changed its cookie encryption.
+  and retry. A change to the browser's cookie encryption can cause this.
 - **"Unsupported billing response"** — Sakana changed its private console page format. Update
   Runway; your browser login and API key are not modified.
 - **Graph or spend rows show "No data"** — use Fugu through a detected Codex home. Plain `fugu` cannot

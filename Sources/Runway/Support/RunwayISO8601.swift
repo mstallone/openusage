@@ -14,7 +14,6 @@ enum RunwayISO8601 {
         formatter(fractionalSeconds: false).date(from: normalized)
     }
 
-    /// Aligns with the JavaScript plugin `ctx.util.toIso` string normalization (Claude `resets_at`, etc.).
     private static func normalizeTimestamp(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return s }

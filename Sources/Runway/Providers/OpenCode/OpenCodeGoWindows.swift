@@ -13,10 +13,10 @@ struct OpenCodeGoWindows: Sendable, Equatable {
     var monthlyPeriodMs: Int?
 }
 
-/// Window math ported faithfully from the legacy `opencode-go` plugin (and matching CodexBar): a rolling
-/// 5-hour session, a UTC-ISO week (Monday start), and a month anchored to the day-of-month of the
-/// earliest-ever local Go usage (calendar-month fallback when there is none). Pure and UTC-based so it is
-/// deterministic and unit-testable; `now`/anchor come from the caller.
+/// Window math for the Go plan caps: a rolling 5-hour session, a UTC-ISO week (Monday start), and a
+/// month anchored to the day-of-month of the earliest-ever local Go usage (calendar-month fallback
+/// when there is none). Pure and UTC-based so it is deterministic and unit-testable; `now`/anchor
+/// come from the caller.
 enum OpenCodeGoWindowMath {
     static let fiveHoursMs = Double(MetricPeriod.sessionMs)
     static let weekMs = Double(MetricPeriod.weekMs)

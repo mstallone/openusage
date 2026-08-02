@@ -327,8 +327,8 @@ final class StatusItemController: NSObject {
 
     // MARK: - Transparency
 
-    /// True once the launch application has run, so subsequent style changes animate (the first one
-    /// shouldn't fade in from nothing).
+    /// True once `applyTransparency()` has run at launch, so later style changes animate (the first
+    /// apply must not fade in from nothing).
     private var hasAppliedTransparency = false
 
     /// Applies the resolved transparency style to the panel and re-arms on the next change. Mirrors

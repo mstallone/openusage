@@ -1,8 +1,6 @@
 import Foundation
 
 /// Provider output normalized into a small app-owned vocabulary.
-///
-/// This mirrors the old JavaScript plugin contract while keeping rendering decisions in Swift.
 enum ProgressFormat: Hashable, Sendable, Codable {
     case percent
     case dollars

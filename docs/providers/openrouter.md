@@ -56,4 +56,4 @@ Two REST calls with a `Bearer` token against `https://openrouter.ai/api/v1`:
   call fails, the balance still renders from `/credits`.
 
 A period spend of `$0.00` is shown as a real, measured zero (the API reports it directly) rather than
-"No data". Credit values may be up to ~60 seconds stale on OpenRouter's side.
+"No data". Credit values can be up to ~60 seconds stale on OpenRouter's side.

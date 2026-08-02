@@ -17,10 +17,10 @@ Runway reads those existing credentials.
 
 Besides `refresh()`, every provider implements `hasLocalCredentials()` — a cheap, local-only check
 (files, keychain; never the network) for whether those credentials exist at all. A fresh install probes
-it once to turn on exactly the providers the user actually has (see `FirstRunSeeder`), and existing
-installs probe it once on the first launch after your provider ships (see `NewProviderSeeder`) — so
-implementing it correctly is what gets the new provider auto-enabled for the users who actually have
-the tool (see [Which Providers Are On](provider-enablement.md)). Mirror the same credential sources
+it once to turn on exactly the providers the user actually has (see `FirstRunSeeder`). Existing
+installs probe it once on the first launch after your provider ships (see `NewProviderSeeder`). A
+correct implementation is what gets the new provider auto-enabled for the users who actually have the
+tool (see [Which Providers Are On](provider-enablement.md)). Mirror the same credential sources
 `refresh()` reads, and run blocking loads via `loadOffMainActor`.
 
 ## The metric contract
@@ -60,7 +60,7 @@ return stale or empty data silently.
    credential-reading path. Reuse the shared helpers in `Support/` (`ProviderParse` for
    JSON/number/percent parsing, `RunwayISO8601` for timestamps) instead of copying them.
 3. **Declare its widgets.** Expose the provider's metrics as `WidgetDescriptor`s using the factories in
-   `WidgetDescriptor+Factories.swift` (`percent`, `boundedDollars`, `spend`, `tokenSpend`, `combined`, `values`, `badge`, and so on).
+   `WidgetDescriptor+Factories.swift` (`percent`, `boundedDollars`, `boundedCount`, `spendTiles`, `dollarBalance`, `combined`, `values`, `badge`, and so on).
 4. **Register it.** Add the provider to the list in `AppContainer`.
 5. **Test it.** Add focused tests under `Tests/RunwayTests/`, including a mapper test that feeds a
    sample API response and checks the resulting metric lines.

@@ -6,8 +6,8 @@ struct Provider: Identifiable, Hashable {
     let displayName: String
     let icon: IconSource
     /// Per-provider quick links (e.g. "Status", "Console") shown as buttons in the card's expanded area.
-    /// Declared inline by each provider; mirrors the legacy Tauri `PluginMeta.links`. Empty by default so
-    /// providers without links and the existing `Provider(id:displayName:icon:)` call sites need no change.
+    /// Declared inline by each provider. Empty by default so providers without links and the existing
+    /// `Provider(id:displayName:icon:)` call sites need no change.
     let links: [ProviderLink]
 
     init(id: String, displayName: String, icon: IconSource, links: [ProviderLink] = []) {
@@ -17,8 +17,8 @@ struct Provider: Identifiable, Hashable {
         self.links = links
     }
 
-    /// Links safe to render: trimmed, non-empty label and URL, and an `http(s)` scheme only. Mirrors the
-    /// legacy `visibleLinks` filter so a malformed entry never ships a dead or no-op button.
+    /// Links safe to render: trimmed, non-empty label and URL, and an `http(s)` scheme only, so a
+    /// malformed entry never ships a dead or no-op button.
     var visibleLinks: [ProviderLink] {
         links.compactMap { link in
             let label = link.label.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -228,7 +228,7 @@ final class ICloudUsageSyncStore {
                 dataStore.setPeerHistoryDocuments(result.documents, ownDeviceID: deviceID)
                 readError = result.invalidRecordMessages.isEmpty
                     ? nil
-                    : "Some synced usage data couldn’t be read. Check the log for details."
+                    : "Runway couldn’t read some synced usage data. Check the log for details."
                 AppLog.info(
                     .config,
                     "iCloud history loaded \(documents.count) device record(s), \(invalidRecordMessages.count) invalid"
@@ -277,7 +277,7 @@ final class ICloudUsageSyncStore {
             let id = saved ?? UUID().uuidString.lowercased()
             defaults.set(id, forKey: deviceIDKey)
             let message = "Runway couldn’t save this Mac’s sync identity in Keychain. "
-                + "Sync may create a duplicate device if app preferences are reset."
+                + "Sync can create a duplicate device if you reset app preferences."
             AppLog.warn(.keychain, "iCloud device identity failed: \(error.localizedDescription)")
             return (id, message)
         }

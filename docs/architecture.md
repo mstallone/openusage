@@ -1,6 +1,6 @@
 # Architecture
 
-A high-level map of how Runway is put together, for people working on the code. For what the app
+A high-level map of Runway's structure, for people who work on the code. For what the app
 *does*, start with the [behavior docs](README.md).
 
 ## The shape of the app
@@ -45,15 +45,15 @@ Because every provider produces the same normalized `MetricLine` shapes, the UI 
 way and doesn't need to know provider-specific details. To add one, see
 [Adding a provider](adding-a-provider.md).
 
-Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. Its per-file parsed events
-are cached by path, size, and modification time in a versioned Application Support store, partitioned by
-provider/home identity. Provider instances reading the same home share one scanner actor, which avoids
-duplicate parsing across cards; the disk store provides the reuse across process launches. A session log
-that only grew since its last parse re-reads just the appended bytes and resumes from the recorded parser
-state. Scans drop source-file records as their modification dates leave the requested history window.
-Aggregation and pricing are memoized per scanner: when a refresh finds no log changes (and the pricing
-snapshot, history window, and calendar configuration are unchanged), the previous aggregation is reused
-instead of re-pricing every cached event.
+Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
+per-file parsed events by path, size, and modification time in a versioned Application Support store,
+partitioned by provider/home identity. Provider instances that read the same home share one scanner
+actor, which avoids duplicate parsing across cards; the disk store provides the reuse across process
+launches. A session log that only grew since its last parse re-reads just the appended bytes and resumes
+from the recorded parser state. Scans drop source-file records as their modification dates leave the
+requested history window. The scanner also memoizes aggregation and pricing: when a refresh finds no log
+changes (and the pricing snapshot, history window, and calendar configuration are unchanged), it reuses
+the previous aggregation instead of pricing every cached event again.
 
 ## Stores
 
@@ -69,8 +69,8 @@ The UI reads from a few observable stores:
   live snapshot for companion apps), a five-minute peer poll, and the visible device/error state. Cloud
   access is injected for lifecycle and failure tests.
 
-Refresh runs on a timer in `AppContainer`; each pass respects the cache, so the network is only hit once a
-snapshot has actually expired.
+Refresh runs on a timer in `AppContainer`; each pass respects the cache, so the app only hits the
+network once a snapshot has actually expired.
 
 Providers with spend tiles carry an explicit history scope beside their export descriptors. Machine-local
 sources can be summed across device records; account-wide sources such as Cursor cannot. `WidgetDataStore`
@@ -79,16 +79,17 @@ re-renders only the spend rows from the union, leaving quota and error state loc
 ## The AppKit bridge
 
 macOS menu-bar apps live in an `NSStatusItem`. Runway shows its content in a custom, key-capable
-`NSPanel` rather than an `NSPopover`: a popover's window is only key while the whole app is active, and
-activating a menu-bar (accessory) app is asynchronous and unreliable on recent macOS, so a popover
-ends up unable to receive keystrokes until a second click. A non-activating `NSPanel` whose
+`NSPanel` rather than an `NSPopover`. A popover's window is only key while the whole app is active,
+and activation of a menu-bar (accessory) app is asynchronous and unreliable on recent macOS — so a
+popover cannot receive keystrokes until a second click. A non-activating `NSPanel` whose
 `canBecomeKey` is `true` takes key focus the instant it opens, so keyboard navigation just works.
 `App/` owns that AppKit layer and hosts the SwiftUI views inside it, so the bulk of the UI can stay
 plain SwiftUI.
 
 Settings is a separate, ordinary window (`App/SettingsWindowController.swift`) rather than a popover
-screen: a preferences-style toolbar window that is created lazily on first open, mounts only the
-active tab's SwiftUI pane, and is torn down entirely on close so it costs nothing while hidden.
+screen: a preferences-style toolbar window. The controller creates it lazily on first open, mounts
+only the active tab's SwiftUI pane, and tears it down entirely on close, so it costs nothing while
+hidden.
 
 ## Platform support
 

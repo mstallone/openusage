@@ -1,7 +1,7 @@
 import XCTest
 @testable import Runway
 
-/// Covers the `~/.runway/config.json` proxy contract (ported from the original's docs/proxy.md):
+/// Covers the `~/.runway/config.json` proxy contract (documented in docs/proxy.md):
 /// enabled + valid URL parses; everything else silently disables.
 final class ProxyConfigTests: XCTestCase {
     func testParsesEnabledSocks5Proxy() {

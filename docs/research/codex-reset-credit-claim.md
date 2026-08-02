@@ -1,9 +1,8 @@
 # Codex Rate-Limit Reset Credits: How Claiming Works
 
 Research + live verification of the Codex "reset credit" claim flow, done 2026-07-12.
-Runway already lists these credits (the "Resets" surface on the Codex provider); this
-documents what it would take to *claim* one from the app. No implementation yet — this is
-the protocol reference.
+This file is the protocol reference for the shipped claim flow in
+`Sources/Runway/Providers/Codex/CodexResetClaimService.swift`.
 
 Sources: the open-source Codex CLI (`openai/codex`, `codex-rs/backend-client/src/client/rate_limit_resets.rs`,
 `codex-rs/tui/src/chatwidget/reset_credits.rs`, `codex-rs/tui/src/chatwidget/usage.rs`,

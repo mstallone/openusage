@@ -31,13 +31,13 @@ enum LogTag: String, Sendable {
 ///      of defense, then fans out to a per-category `os.Logger` and a grep-friendly `LogFile` line
 ///      (`ISO8601 [LEVEL] [tag] msg`).
 ///
-/// `redactLogMessage` is URL/body-unaware (matching the Tauri `redact_log_message`): any call site that
-/// logs a URL or response body MUST pre-redact it via `LogRedaction.redactURL` / `bodyPreview`.
+/// `redactLogMessage` is URL/body-unaware: any call site that logs a URL or response body MUST
+/// pre-redact it via `LogRedaction.redactURL` / `bodyPreview`.
 ///
 /// `os.Logger` has no runtime level gate of its own, so the floor is enforced here for both sinks.
 /// Errors (severity 0) always clear any floor, so they are never suppressed. Raising the level to
 /// Debug in Settings is what surfaces debug lines in both the file and `log stream` (see
-/// `docs/debugging.md`) — matching #604's "Debug only when the user opts in".
+/// `docs/debugging.md`).
 ///
 /// The level is cached (not re-read from `UserDefaults` on every call, which would be wasteful on the
 /// hot `[http]`/`[cache]` paths) and refreshed by `reloadLevel()` from the Settings `.onChange` and at
@@ -103,7 +103,7 @@ enum AppLog {
     }
 
     /// Re-read the persisted level into the cache. Invoked from the Settings picker `.onChange` so a
-    /// level change applies live with no restart (mirrors Tauri's `log::set_max_level`).
+    /// level change applies live with no restart.
     static func reloadLevel() {
         apply(LogLevelSetting.current.severity)
     }

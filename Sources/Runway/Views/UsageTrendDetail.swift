@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The detail-on-demand popover for a Usage Trend row: a larger, readable bar chart with the peak (or
 /// the hovered day) called out, the window's date range, and the source note. Hovering a bar highlights
-/// it and swaps the readout to that exact day — the same detail-on-demand the original app shows.
+/// it and swaps the readout to that exact day.
 struct UsageTrendDetail: View {
     let title: String
     let points: [MetricChartPoint]

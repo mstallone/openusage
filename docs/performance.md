@@ -51,10 +51,10 @@ macOS 26.5), against the same local data, minutes apart:
 Caveats, so the numbers stay honest:
 
 - Figures are machine- and corpus-specific; ratios travel better than absolute numbers.
-- The forced-refresh phase was excluded from the refresh row for both apps: the dev build's
-  keychain ACL turns a forced Claude refresh into an interactive prompt no headless run can
-  answer (Runway's refresh deadline cut it off exactly as designed; the scheduled batches above
-  are the non-interactive path both apps take in normal use).
+- The refresh row excludes the forced-refresh phase for both apps. The dev build's keychain ACL
+  turns a forced Claude refresh into an interactive prompt that no headless run can answer.
+  Runway's refresh deadline cut it off exactly as designed; the scheduled batches above are the
+  non-interactive path both apps take in normal use.
 - Stall-time totals for the expand phase vary meaningfully between runs on both apps; the table
   reports the same single steady-state run for each side, and Runway was lower in every paired run.
 
@@ -83,7 +83,7 @@ only the current Runway tree:
    "batch end" log lines.
 4. Run each app twice: the first run measures the cold caches ("first launch" table), the second
    the steady state. For the first run to actually be cold, delete each app's persisted scan cache
-   beforehand — `~/Library/Application Support/Runway/log-scan-cache/` (upstream:
-   `OpenUsage/log-scan-cache/`) — while leaving the matched provider/account defaults in place; a
-   revision that has ever been profiled on the machine otherwise starts warm and silently reports
-   another steady-state run.
+   beforehand: `~/Library/Application Support/Runway/log-scan-cache/` (upstream:
+   `OpenUsage/log-scan-cache/`). Leave the matched provider/account defaults in place. A revision
+   that has ever been profiled on the machine otherwise starts warm and silently reports another
+   steady-state run.

@@ -93,8 +93,8 @@ forced refresh with the panel open, and an idle soak. The script then prints per
 the log: open latency broken into layout and order-front, close cost, and main-queue stalls.
 
 Run it before and after any change that touches the popover render path, and compare. Reference
-numbers from this machine class (Apple Silicon, August 2026): warm open should stay in the low tens
-of milliseconds to first frame, and the warm-cycles phase should report few or no stalls.
+numbers from this machine class (Apple Silicon, August 2026): warm open stays in the low tens of
+milliseconds to first frame, and the warm-cycles phase reports few or no stalls.
 
 The `RUNWAY_UI_PROFILE` gate is inert in normal use — no timing code runs without it. The stall
 watchdog measures how long async main-actor work waits (main-queue latency), which is a proxy for

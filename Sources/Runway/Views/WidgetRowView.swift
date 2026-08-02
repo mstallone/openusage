@@ -6,7 +6,6 @@ import SwiftUI
 ///   projected to run out before reset, or "~3% spare" when cutting it close), then a full-width
 ///   capsule meter (color = pace verdict; in the amber state a tick splits the projected spare
 ///   cushion off the bar; hovering shows the verdict), then a primary text row ("50% left" ⟷ "Resets in 4d 17h").
-///   Mirrors the original OpenUsage card.
 /// - **Unbounded** (`limit == nil`, text-only row): **no bar**. Label on the left, a single right-aligned
 ///   descriptive line ("1,503 left") and an optional secondary line ("on-device estimate").
 /// Rows size to their own content (variable height). Same `WidgetData` the menu bar uses — only layout differs.
@@ -55,14 +54,14 @@ struct WidgetRowView: View {
 
     var body: some View {
         // A row with a concrete reset date derives time-sensitive state (reset countdown, pace marker,
-        // "Runs out in …") from the current clock, so it re-renders on a 30s tick — the cadence the
-        // original app uses — instead of waiting for the next data refresh. The tick mounts only
-        // while the popover is visible (the same structural gate `PopoverFooter` and
-        // `VisibilityGatedTimeline` use): the panel is hidden with `orderOut`, which keeps this tree
-        // alive, and every reset-bearing row would otherwise hold a scattered-phase 30s timer
-        // forever. Reopening remounts the timeline, so the first render carries a fresh clock.
-        // Rows without a reset date are static: they never read the clock, so they never subscribe
-        // to its ticks. Dated rows subscribe via this read and re-render every half minute.
+        // "Runs out in …") from the current clock, so it re-renders on a 30s tick instead of waiting
+        // for the next data refresh. The tick mounts only while the popover is visible (the same
+        // structural gate `PopoverFooter` and `VisibilityGatedTimeline` use): the panel is hidden
+        // with `orderOut`, which keeps this tree alive, and every reset-bearing row would otherwise
+        // hold a scattered-phase 30s timer forever. Reopening remounts the timeline, so the first
+        // render carries a fresh clock. Rows without a reset date are static: they never read the
+        // clock, so they never subscribe to its ticks. Dated rows subscribe via this read and
+        // re-render every half minute.
         let _ = (data.resetsAt != nil || !data.expiriesAt.isEmpty) ? clock?.halfMinute : nil
         rowContent
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -118,7 +117,7 @@ struct WidgetRowView: View {
     /// countdown/exact mode) — clicking the time flips the global mode like the reset label. Close
     /// to limit: a quiet "~3% spare" — the cushion projected at reset. Healthy / level / no-data:
     /// nothing unless "always show pacing" surfaces projection on blue. Only the flame carries
-    /// flame carries the severity color — tint on glass is reserved for the symbol while copy
+    /// the severity color — tint on glass is reserved for the symbol while copy
     /// stays secondary like the row's other supporting text; the bar below carries the color.
     /// Hovering shows the pace projection at reset. The warning gets the space; the title truncates.
     private func boundedLabelRow(_ state: WidgetData.MeterState) -> some View {
@@ -246,7 +245,7 @@ struct WidgetRowView: View {
 
     /// Reset/limit context on the trailing edge. When it's a concrete reset countdown it becomes a
     /// click target that flips the global relative/absolute mode (with the opposite format in its
-    /// tooltip), mirroring the original. Otherwise it's plain text.
+    /// tooltip). Otherwise it's plain text.
     @ViewBuilder
     private var trailingContext: some View {
         if let text = data.boundedTrailingText() {
