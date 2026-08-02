@@ -28,6 +28,14 @@ final class WidgetDataStore {
     /// produce a negative or wildly inflated provider timing. Tests inject exact ticks.
     private let monotonicNow: () -> TimeInterval
     private let slowProviderRefreshThreshold: TimeInterval
+    /// Hard ceiling on one provider's `refresh()`. A hung network call used to spin the footer's
+    /// refresh indicator forever (the in-flight guard also blocked every later attempt for that
+    /// provider). Injectable for tests; see `defaultProviderRefreshTimeout`.
+    private let providerRefreshTimeout: TimeInterval
+    /// 30s: generous against slow first-time JSONL scans and cold networks (the slow-refresh warning
+    /// threshold logs well before this), but bounded so a dead connection surfaces as a provider
+    /// error card instead of an infinite spinner.
+    static let defaultProviderRefreshTimeout: TimeInterval = 30
     /// Quota-notification preferences (three independent triggers). Injected; `nil` disables
     /// notifications entirely (tests and previews that don't wire it).
     private let notificationSettings: (@MainActor () -> NotificationSettingsStore)?
@@ -133,6 +141,7 @@ final class WidgetDataStore {
         now: @escaping () -> Date = Date.init,
         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         slowProviderRefreshThreshold: TimeInterval = WidgetDataStore.defaultSlowProviderRefreshThreshold,
+        providerRefreshTimeout: TimeInterval = WidgetDataStore.defaultProviderRefreshTimeout,
         notificationSettings: (@MainActor () -> NotificationSettingsStore)? = nil,
         postNotification: (@MainActor (String, String, String, String) async -> Bool)? = nil,
         providerIdentityKeys: [String: String] = [:],
@@ -140,6 +149,8 @@ final class WidgetDataStore {
         resolveDisplayName: (@MainActor (String) -> String?)? = nil
     ) {
         precondition(slowProviderRefreshThreshold >= 0)
+        precondition(providerRefreshTimeout > 0)
+        self.providerRefreshTimeout = providerRefreshTimeout
         self.registry = registry
         self.providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.provider.id, $0) })
         self.cache = cache
@@ -338,8 +349,31 @@ final class WidgetDataStore {
         refreshingProviderIDs.insert(providerID)
         defer { refreshingProviderIDs.remove(providerID) }
         let start = monotonicNow()
-        var snapshot = await ProviderRefreshContext.$isManual.withValue(force) {
-            await provider.refresh()
+        // Bound the refresh with a watchdog. `provider` is not Sendable, so the refresh runs in an
+        // isolation-inheriting `Task` (not a task group) and the watchdog cancels it at the ceiling —
+        // URLSession-backed work exits promptly on cancellation. Whatever a cancelled provider still
+        // returns is discarded below, never published.
+        let refreshTask = Task { [force] in
+            await ProviderRefreshContext.$isManual.withValue(force) {
+                await provider.refresh()
+            }
+        }
+        let watchdog = Task { [providerRefreshTimeout] in
+            try? await Task.sleep(for: .seconds(providerRefreshTimeout))
+            guard !Task.isCancelled else { return }
+            refreshTask.cancel()
+        }
+        var snapshot = await refreshTask.value
+        watchdog.cancel()
+        // Timed out: the watchdog cancelled the provider. Surface it like any failed refresh — error
+        // card + backoff — and keep the last-good snapshot on screen.
+        if refreshTask.isCancelled {
+            let message = "Refresh timed out after \(Int(providerRefreshTimeout))s"
+            providerErrors[providerID] = message
+            failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
+            AppLog.warn(.refresh, "\(providerID) timed out after \(Int(providerRefreshTimeout * 1000))ms; keeping last-good snapshot")
+            if notifyStateChange { onLocalStateChanged?() }
+            return .failed
         }
         // A canceled refresh may still return if a provider's underlying work is non-throwing. Never
         // publish that potentially partial snapshot; keep the last-good state exactly as it was.

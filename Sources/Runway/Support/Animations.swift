@@ -1,9 +1,29 @@
+import AppKit
 import SwiftUI
 
 /// Shared motion vocabulary so every transition feels consistent and "Apple-native".
+///
+/// Honors the system Reduce Motion accessibility setting: when it's on, the bouncy spring and the
+/// mode-switch ease both collapse to one short, travel-free ease so state changes read as quick
+/// fades rather than movement. Computed per animation start (never per frame), so flipping the
+/// setting applies to the next interaction with no restart. Views that add their own translation
+/// (the screen-switch entrance slide) separately zero their travel via
+/// `\.accessibilityReduceMotion`.
 enum Motion {
-    static let spring = Animation.spring(response: 0.42, dampingFraction: 0.80)
-    static let modeSwitch = Animation.easeInOut(duration: 0.18)
+    static var spring: Animation {
+        reduceMotion ? reducedMotionFallback : .spring(response: 0.42, dampingFraction: 0.80)
+    }
+
+    static var modeSwitch: Animation {
+        reduceMotion ? reducedMotionFallback : .easeInOut(duration: 0.18)
+    }
+
+    /// Short enough to read as a crossfade, long enough that value changes don't visibly snap.
+    private static var reducedMotionFallback: Animation { .easeInOut(duration: 0.12) }
+
+    private static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
 }
 
 extension View {
