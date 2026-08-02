@@ -54,8 +54,8 @@ grep -a -A100000 "$START_MARKER" "$LOG" | grep -a uiprofile > "$RUN_LOG"
 echo
 echo "== Open path (ms) =="
 grep -a -E "open\.(layoutSubtree|orderFront|syncTotal|toFirstFrame)" "$RUN_LOG" \
-    | sed -E 's/.*uiprofile\] //' \
-    | awk -F'[:m]' '{sum[$1]+=$2; n[$1]++; if($2>max[$1])max[$1]=$2}
+    | sed -E 's/.*uiprofile\] //; s/ms$//' \
+    | awk -F': ' '{sum[$1]+=$2; n[$1]++; if($2+0>max[$1])max[$1]=$2}
         END {for(k in sum) printf "%-24s avg %6.1f  max %6.1f  n=%d\n", k, sum[k]/n[k], max[k], n[k]}' \
     | sort
 echo
