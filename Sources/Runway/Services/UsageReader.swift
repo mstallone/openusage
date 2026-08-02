@@ -56,7 +56,7 @@ public struct UsageReader {
         }
         let accountsStore = ProviderAccountsStore(defaults: defaults)
         let accountAssembly = providersOverride == nil
-            ? ProviderAccountAssembly.make(
+            ? await ProviderAccountAssembly.make(
                 defaults: defaults,
                 accountsStore: accountsStore,
                 waitsForLoginShell: false
