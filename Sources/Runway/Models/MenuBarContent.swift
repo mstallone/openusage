@@ -34,6 +34,36 @@ struct MenuBarContent: Equatable {
     /// menu bar falls back to the app icon.
     var isEmpty: Bool { groups.isEmpty }
 
+    /// Whether two contents render identically under `style` — the strip cache's memo predicate.
+    /// The Text style draws each metric's `value`/`label` but never its `fraction`. Comparing only
+    /// what the style draws (plus the group text `accessibilityText` bakes into the cached image)
+    /// keeps a refresh that nudged an underlying fraction behind an unchanged rounded value (still
+    /// "41%") from paying a full re-render: N+1 `ImageRenderer` passes plus a per-pixel bounds scan.
+    func isRenderEquivalent(to other: MenuBarContent, style: MenuBarStyle) -> Bool {
+        // Both styles bake `accessibilityText` — group names, labels, values — into the image.
+        guard groups.count == other.groups.count else { return false }
+        let groupTextMatches = zip(groups, other.groups).allSatisfy { mine, theirs in
+            mine.providerID == theirs.providerID
+                && mine.displayName == theirs.displayName
+                && mine.icon == theirs.icon
+                && mine.metrics.count == theirs.metrics.count
+                && zip(mine.metrics, theirs.metrics).allSatisfy { lhs, rhs in
+                    lhs.id == rhs.id && lhs.label == rhs.label && lhs.value == rhs.value
+                        && lhs.hasData == rhs.hasData
+                }
+        }
+        guard groupTextMatches else { return false }
+        switch style {
+        case .text:
+            return true
+        case .bars:
+            guard bars.count == other.bars.count else { return false }
+            return zip(bars, other.bars).allSatisfy { lhs, rhs in
+                lhs.id == rhs.id && lhs.fraction == rhs.fraction && lhs.hasData == rhs.hasData
+            }
+        }
+    }
+
     /// VoiceOver summary for the rendered strip image, e.g.
     /// "Claude Session 41%, Weekly 12%; Cursor Credits $12".
     var accessibilityText: String {

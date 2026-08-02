@@ -25,15 +25,52 @@ final class MenuBarStripMemoTests: XCTestCase {
         XCTAssertNotIdentical(text, bars)
     }
 
-    private func makeContent(value: String) -> MenuBarContent {
+    func testTextStyleIgnoresFractionOnlyChanges() throws {
+        // A refresh that moved the underlying fraction behind an unchanged rounded value ("42%")
+        // must hit the memo under Text — the fraction is never drawn there.
+        let first = try XCTUnwrap(
+            MenuBarStripRenderer.image(for: makeContent(value: "42%", fraction: 0.4211), style: .text)
+        )
+        let nudged = try XCTUnwrap(
+            MenuBarStripRenderer.image(for: makeContent(value: "42%", fraction: 0.4218), style: .text)
+        )
+        XCTAssertIdentical(first, nudged)
+    }
+
+    func testBarsStyleRerendersOnFractionChange() throws {
+        // Bars draw the fraction, so the same nudge must render fresh there.
+        let first = try XCTUnwrap(
+            MenuBarStripRenderer.image(for: makeContent(value: "42%", fraction: 0.4211), style: .bars)
+        )
+        let nudged = try XCTUnwrap(
+            MenuBarStripRenderer.image(for: makeContent(value: "42%", fraction: 0.4218), style: .bars)
+        )
+        XCTAssertNotIdentical(first, nudged)
+    }
+
+    func testChangedDisplayNameRendersFreshImage() throws {
+        // The cached image bakes in the accessibility text (names, labels, values), so a rename
+        // must miss the memo even when nothing drawn in Bars changed.
+        let first = try XCTUnwrap(
+            MenuBarStripRenderer.image(for: makeContent(value: "42%"), style: .bars)
+        )
+        let renamed = try XCTUnwrap(
+            MenuBarStripRenderer.image(for: makeContent(value: "42%", displayName: "Work"), style: .bars)
+        )
+        XCTAssertNotIdentical(first, renamed)
+    }
+
+    private func makeContent(
+        value: String, fraction: Double = 0.42, displayName: String = "Claude"
+    ) -> MenuBarContent {
         let metric = MenuBarContent.Metric(
             id: "claude.session", label: "Session", value: value,
-            fraction: 0.42, isBounded: true, hasData: true
+            fraction: fraction, isBounded: true, hasData: true
         )
         return MenuBarContent(
             groups: [MenuBarContent.Group(
                 providerID: "claude",
-                displayName: "Claude",
+                displayName: displayName,
                 icon: .providerMark("claude"),
                 metrics: [metric]
             )],

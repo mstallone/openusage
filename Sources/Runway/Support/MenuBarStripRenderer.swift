@@ -42,7 +42,9 @@ enum MenuBarStripRenderer {
     /// no regions: they flatten metrics across providers and therefore have no segment-to-account
     /// geometry to label.
     static func presentation(for content: MenuBarContent, style: MenuBarStyle) -> MenuBarStripPresentation? {
-        if let lastRender, lastRender.content == content, lastRender.style == style {
+        if let lastRender, lastRender.style == style,
+           lastRender.content.isRenderEquivalent(to: content, style: style)
+        {
             AppLog.debug(.menubar, "strip cache hit")
             return lastRender.presentation
         }

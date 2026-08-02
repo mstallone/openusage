@@ -32,6 +32,9 @@ struct WidgetRowView: View {
     /// Party easter egg: fill meter bars with the party gradient instead of the severity color. Off by
     /// default everywhere else.
     @Environment(\.popoverPartyMode) private var partyMode
+    /// Gates the 30s clock tick below. `NSPanel.orderOut` keeps this tree mounted, so an ungated
+    /// `TimelineView` would tick behind a closed popover forever.
+    @Environment(\.popoverIsVisible) private var popoverIsVisible
 
     /// Both row fonts come from the compact layout definition. The sizes are explicit because semantic
     /// `.headline.weight(.regular)` does not match `.headline` on macOS, and `minimumScaleFactor`
@@ -47,10 +50,14 @@ struct WidgetRowView: View {
     var body: some View {
         // A row with a concrete reset date derives time-sensitive state (reset countdown, pace marker,
         // "Runs out in …") from the current clock, so it re-renders on a 30s tick — the cadence the
-        // original app uses — instead of waiting for the next data refresh. TimelineView only schedules
-        // ticks while the popover is actually visible. Rows without a reset date are static.
+        // original app uses — instead of waiting for the next data refresh. The tick mounts only
+        // while the popover is visible (the same structural gate `PopoverFooter` and
+        // `VisibilityGatedTimeline` use): the panel is hidden with `orderOut`, which keeps this tree
+        // alive, and every reset-bearing row would otherwise hold a scattered-phase 30s timer
+        // forever. Reopening remounts the timeline, so the first render carries a fresh clock.
+        // Rows without a reset date are static.
         Group {
-            if data.resetsAt != nil || !data.expiriesAt.isEmpty {
+            if data.resetsAt != nil || !data.expiriesAt.isEmpty, popoverIsVisible {
                 TimelineView(.periodic(from: .now, by: 30)) { _ in
                     rowContent
                 }
