@@ -63,6 +63,7 @@ final class MemoryStoreTests: XCTestCase {
         files: RecordingFiles,
         sqlite: ScriptedSQLite = ScriptedSQLite(),
         subdirectories: [String],
+        timeBudget: TimeInterval = 1.0,
         modificationDates: @escaping @Sendable (String) -> Date? = { _ in nil }
     ) -> MemoryStore {
         let homeURL = URL(fileURLWithPath: home)
@@ -81,7 +82,8 @@ final class MemoryStoreTests: XCTestCase {
                     .sorted()
                     .map { URL(fileURLWithPath: $0) }
             },
-            slugDecoder: ProjectSlugDecoder(directoryExists: { _ in false })
+            slugDecoder: ProjectSlugDecoder(directoryExists: { _ in false }),
+            timeBudget: timeBudget
         )
         return MemoryStore(
             files: files,
@@ -114,6 +116,16 @@ final class MemoryStoreTests: XCTestCase {
         "/Users/dev/.claude",
         "/Users/dev/.claude/projects/-Users-dev-proj",
     ]
+
+    func testBudgetTruncatedScanSetsAVisibleWarning() async throws {
+        let files = claudeProjectFixture()
+        // A negative budget expires immediately: every home is skipped with a budget note.
+        let store = makeStore(files: files, subdirectories: claudeSubdirectories, timeBudget: -1)
+
+        await store.reload()
+
+        XCTAssertNotNil(store.scanWarning, "a truncated scan must not present itself as complete")
+    }
 
     func testCreateInstructionFileDoesNotClobberAFileThatAppearedSinceTheScan() async throws {
         let files = RecordingFiles([:])

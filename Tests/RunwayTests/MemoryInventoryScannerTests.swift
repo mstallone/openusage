@@ -194,6 +194,48 @@ final class MemoryInventoryScannerTests: XCTestCase {
         XCTAssertTrue(notes.contains { $0.contains("could not read") })
     }
 
+    func testGrokMemoryHeaderToleratesTrailingComment() throws {
+        let scanner = makeScanner(
+            files: [
+                "/Users/dev/.grok/config.toml": "[memory] # enabled last week\n",
+                "/Users/dev/.grok/memory/MEMORY.md": "notes",
+            ],
+            subdirectories: ["/Users/dev/.grok", "/Users/dev/.grok/memory"]
+        )
+
+        let (sources, _) = scanner.scan()
+
+        XCTAssertEqual(try XCTUnwrap(sources.first).status, .ready,
+                       "a TOML comment after the [memory] header must not read as feature-off")
+    }
+
+    func testGrokUnreadableConfigIsUnknownNotDisabled() throws {
+        let scanner = makeScanner(
+            unreadablePaths: ["/Users/dev/.grok/config.toml"],
+            subdirectories: ["/Users/dev/.grok"]
+        )
+
+        let (sources, _) = scanner.scan()
+
+        let source = try XCTUnwrap(sources.first)
+        XCTAssertEqual(source.status, .missingFile,
+                       "an unreadable config must not be claimed as memory-off")
+        XCTAssertNotNil(source.footnote, "the unknown state carries an explanation")
+    }
+
+    func testClaudeConfigDirPointingAtProjectsIsNormalizedToItsHome() throws {
+        let scanner = makeScanner(
+            environment: ["CLAUDE_CONFIG_DIR": "/Users/dev/custom-claude/projects"],
+            files: ["/Users/dev/custom-claude/CLAUDE.md": "instructions"],
+            subdirectories: ["/Users/dev/custom-claude"]
+        )
+
+        let (sources, _) = scanner.scan()
+
+        XCTAssertTrue(sources.contains { $0.homePath == "/Users/dev/custom-claude" },
+                      "the projects/ spelling ClaudeLogUsageScanner accepts must resolve to its home")
+    }
+
     func testCodexHistoricalConfigHomeIsScanned() throws {
         let scanner = makeScanner(
             files: ["/Users/dev/.config/codex/AGENTS.md": "historical-home instructions"],

@@ -33,6 +33,21 @@ final class MemorySystemClientsTests: XCTestCase {
         XCTAssertEqual(try posixMode(of: path), 0o644)
     }
 
+    func testExclusiveCreateWritesWhenAbsentAndYieldsWhenPresent() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("AGENTS.md").path
+        let accessor = LocalTextFileAccessor()
+
+        XCTAssertTrue(try accessor.createTextFileExclusively(path, ""))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "")
+
+        // A second writer's content must stand — the exclusive rename reports EEXIST, no clobber.
+        try "the agent's content".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertFalse(try accessor.createTextFileExclusively(path, ""))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "the agent's content")
+    }
+
     func testNewFileHonorsARestrictiveUmask() throws {
         // A 077 umask (a hardened multi-user Mac) must strip group/other bits from brand-new
         // memory files; only *preserving* an existing file's mode may ignore the umask.

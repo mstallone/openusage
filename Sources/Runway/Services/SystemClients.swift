@@ -63,6 +63,11 @@ protocol TextFileAccessing: Sendable {
     /// file beside the destination, so a first-ever file in a not-yet-existing folder (Grok's
     /// `memory/MEMORY.md`) needs this before the write. No-op default for in-memory test doubles.
     func ensureParentDirectory(for path: String) throws
+    /// Atomically create `path` with `text` only when nothing exists there yet; returns false when
+    /// the destination already exists (that content stands — creating means "make the file
+    /// exist"). The local accessor publishes with an exclusive rename, so a file another process
+    /// creates between any pre-check and the publish is never clobbered.
+    func createTextFileExclusively(_ path: String, _ text: String) throws -> Bool
 }
 
 extension TextFileAccessing {
@@ -80,6 +85,14 @@ extension TextFileAccessing {
 
     /// No-op for in-memory test doubles; the local accessor creates real directories.
     func ensureParentDirectory(for path: String) throws {}
+
+    /// Check-then-write for in-memory test doubles, which have no concurrent writers.
+    func createTextFileExclusively(_ path: String, _ text: String) throws -> Bool {
+        guard !exists(path) else { return false }
+        try ensureParentDirectory(for: path)
+        try writeTextPreservingMode(path, text)
+        return true
+    }
 }
 
 struct LocalTextFileAccessor: TextFileAccessing {
@@ -193,6 +206,51 @@ struct LocalTextFileAccessor: TextFileAccessing {
             atPath: (expandHome(path) as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
         )
+    }
+
+    func createTextFileExclusively(_ path: String, _ text: String) throws -> Bool {
+        let expanded = URL(fileURLWithPath: expandHome(path)).resolvingSymlinksInPath().path
+        try ensureParentDirectory(for: expanded)
+        let destination = URL(fileURLWithPath: expanded)
+        let parent = destination.deletingLastPathComponent()
+        let temporary = parent.appendingPathComponent(
+            ".\(destination.lastPathComponent).\(UUID().uuidString).tmp"
+        )
+        // The kernel applies the umask at open(2), like every brand-new file this accessor makes.
+        let descriptor = temporary.path.withCString {
+            Darwin.open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, Self.sharedFileMode)
+        }
+        guard descriptor >= 0 else { throw Self.currentPOSIXError() }
+
+        var descriptorIsOpen = true
+        var temporaryExists = true
+        defer {
+            if descriptorIsOpen { _ = Darwin.close(descriptor) }
+            if temporaryExists {
+                temporary.path.withCString { _ = Darwin.unlink($0) }
+            }
+        }
+        try Self.writeAll(Data(text.utf8), to: descriptor)
+        guard Darwin.fsync(descriptor) == 0 else { throw Self.currentPOSIXError() }
+        descriptorIsOpen = false
+        guard Darwin.close(descriptor) == 0 else { throw Self.currentPOSIXError() }
+
+        // RENAME_EXCL makes the publish itself the existence check: whoever renames first wins,
+        // and a destination that appeared since any earlier probe surfaces as EEXIST, not a
+        // clobber.
+        let renameResult = temporary.path.withCString { source in
+            expanded.withCString { target in
+                renamex_np(source, target, UInt32(RENAME_EXCL))
+            }
+        }
+        if renameResult == 0 {
+            temporaryExists = false
+            return true
+        }
+        if errno == EEXIST {
+            return false
+        }
+        throw Self.currentPOSIXError()
     }
 
     private static func writeAll(_ data: Data, to descriptor: Int32) throws {

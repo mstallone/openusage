@@ -22,6 +22,9 @@ final class MemoryStore {
     private(set) var sources: [MemorySource] = []
     private(set) var isLoading = false
     private(set) var loadError: String?
+    /// Non-fatal scan problems worth showing beside a non-empty inventory — a budget-truncated
+    /// scan must not present partial homes as the complete picture.
+    private(set) var scanWarning: String?
     var selectedDocumentID: String?
 
     @ObservationIgnored private let files: any TextFileAccessing
@@ -110,6 +113,11 @@ final class MemoryStore {
         if scanned.isEmpty, !notes.isEmpty {
             loadError = "The memory scan ran into problems and may have missed files. Check the log for details."
         }
+        // A truncated scan beside a non-empty inventory gets its own visible warning — the sidebar
+        // must not present partial homes as the complete picture.
+        scanWarning = notes.contains { $0.contains("hit its") && $0.contains("budget") }
+            ? "The scan ran out of time and this list may be incomplete. Refresh to rescan."
+            : nil
     }
 
     /// For each Codex source whose home has a `memories_1.sqlite`, fill `databaseDocuments` from the
@@ -327,6 +335,7 @@ final class MemoryStore {
         type: String
     ) async throws -> String {
         let files = files
+        let modificationDate = modificationDate
         let directory = project.directoryPath
         do {
             let path = try await loadOffMainActor {
@@ -344,13 +353,27 @@ final class MemoryStore {
                 )
                 do {
                     let indexPath = directory + "/MEMORY.md"
-                    let index = try files.readTextIfPresent(indexPath) ?? ""
                     let entry = ClaudeMemoryIndex.Entry(
                         title: name,
                         fileName: fileName,
                         hook: description.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                     )
-                    try files.writeTextPreservingMode(indexPath, ClaudeMemoryIndex.appendingEntry(entry, to: index))
+                    // Best-effort compare-and-retry against a live agent rewriting the index: stat
+                    // before the read, re-stat right before the write, and re-read when the file
+                    // moved in between. The residual stat→write window is microseconds — without
+                    // cross-process locking (which Claude Code itself does not use) that is as
+                    // narrow as this read-modify-write gets.
+                    var attempt = 0
+                    while true {
+                        attempt += 1
+                        let baseline = modificationDate(indexPath)
+                        let index = try files.readTextIfPresent(indexPath) ?? ""
+                        if attempt < 3, modificationDate(indexPath) != baseline {
+                            continue
+                        }
+                        try files.writeTextPreservingMode(indexPath, ClaudeMemoryIndex.appendingEntry(entry, to: index))
+                        break
+                    }
                 } catch {
                     // Roll the fact back: leaving it unindexed would make a retry mint a
                     // suffixed duplicate beside the orphan.
@@ -377,13 +400,10 @@ final class MemoryStore {
         let files = files
         do {
             try await loadOffMainActor {
-                // An agent may have created the file since the scan; its content wins — creating
-                // means "make the file exist", and it already does. The reload below picks it up.
-                guard !files.exists(path) else { return }
-                // Grok's memory/MEMORY.md may be the first file in a memory/ folder that does not
-                // exist yet; the atomic write needs the folder first.
-                try files.ensureParentDirectory(for: path)
-                try files.writeTextPreservingMode(path, "")
+                // Exclusive publish: an agent may create the file at any point up to the rename —
+                // its content wins (creating means "make the file exist", and it does). The
+                // reload below picks up whichever content landed.
+                _ = try files.createTextFileExclusively(path, "")
             }
         } catch {
             AppLog.error(.memory, "creating \(path) failed: \(error.localizedDescription)")
