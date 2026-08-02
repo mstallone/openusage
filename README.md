@@ -44,6 +44,21 @@ Most providers read the credentials already on your machine (keychain, auth file
 - **Native settings.** Launch at login, global shortcut, icon style, theme, 12/24-hour time — see [Settings](docs/settings.md).
 - **[Automatic updates](docs/updates.md).** Signed, notarized stable updates via Sparkle.
 
+## Performance
+
+Runway is a rebuilt-for-speed fork: measured against upstream OpenUsage on the same machine, same
+providers, and the same session-log corpus, it is faster on every axis we track — details and
+methodology in [docs/performance.md](docs/performance.md).
+
+| | OpenUsage | Runway |
+|---|---|---|
+| Launch → menu bar icon | 5.4 s | **0.29 s** |
+| Popup open → first frame | 61 ms | **23 ms** |
+| First open after launch | 2.59 s | **44 ms** |
+| One refresh pass | 8.6 s | **2.3 s** |
+| Memory (steady / peak) | 1.09 GB / 2.6 GB | **238 MB / 322 MB** |
+| First-launch scan | 165 s CPU, 12.9 GB peak | **12.7 s CPU, 1.7 GB peak** |
+
 ## iPhone Companion
 
 Runway for iOS mirrors combined usage from every Mac you run — spend today, yesterday, and over the
