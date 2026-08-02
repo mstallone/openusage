@@ -32,9 +32,15 @@ struct WidgetRowView: View {
     /// Party easter egg: fill meter bars with the party gradient instead of the severity color. Off by
     /// default everywhere else.
     @Environment(\.popoverPartyMode) private var partyMode
-    /// Gates the 30s clock tick below. `NSPanel.orderOut` keeps this tree mounted, so an ungated
-    /// `TimelineView` would tick behind a closed popover forever.
-    @Environment(\.popoverIsVisible) private var popoverIsVisible
+    /// The popover's shared 30s clock for relative reset/expiry text. Reading `halfMinute` in `body`
+    /// (only for rows that show a date) re-renders the row when it ticks; the clock itself stops
+    /// while the popover is closed, so the retained hidden tree never ticks. Deliberately NOT a
+    /// per-row `TimelineView` gated on `\.popoverIsVisible`: that gate was a structural branch swap,
+    /// so every open/close tore down and rebuilt each dated row's subtree (measured as the largest
+    /// single cost on the popup-open path). Optional because rows also render inside
+    /// `ImageRenderer` for share cards, where no clock exists — nil simply means static text,
+    /// which is what a one-shot render wants.
+    @Environment(DashboardClock.self) private var clock: DashboardClock?
 
     /// Both row fonts come from the compact layout definition. The sizes are explicit because semantic
     /// `.headline.weight(.regular)` does not match `.headline` on macOS, and `minimumScaleFactor`
@@ -55,16 +61,10 @@ struct WidgetRowView: View {
         // `VisibilityGatedTimeline` use): the panel is hidden with `orderOut`, which keeps this tree
         // alive, and every reset-bearing row would otherwise hold a scattered-phase 30s timer
         // forever. Reopening remounts the timeline, so the first render carries a fresh clock.
-        // Rows without a reset date are static.
-        Group {
-            if data.resetsAt != nil || !data.expiriesAt.isEmpty, popoverIsVisible {
-                TimelineView(.periodic(from: .now, by: 30)) { _ in
-                    rowContent
-                }
-            } else {
-                rowContent
-            }
-        }
+        // Rows without a reset date are static: they never read the clock, so they never subscribe
+        // to its ticks. Dated rows subscribe via this read and re-render every half minute.
+        let _ = (data.resetsAt != nil || !data.expiriesAt.isEmpty) ? clock?.halfMinute : nil
+        rowContent
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         // Bar rows are multi-line and earn breathing room; single-line text rows (Today / Yesterday /

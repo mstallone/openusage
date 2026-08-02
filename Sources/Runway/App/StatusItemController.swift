@@ -81,6 +81,7 @@ final class StatusItemController: NSObject {
                     .environment(container.layout)
                     .environment(container.dataStore)
                     .environment(container.transparency)
+                    .environment(container.clock)
                     .environment(updater)
             )
         )
@@ -360,6 +361,9 @@ final class StatusItemController: NSObject {
         UIProfiler.measure("open.setPopoverShown") {
             container.transparency.setPopoverShown(true)
         }
+        // Start the shared clock before layout so the pre-show pass renders fresh countdown/reset
+        // text (the stamp in `start()` is what re-renders any row whose time went stale while closed).
+        container.clock.start()
 
         // Lay the content out first so the panel opens at the right size (no first-frame flash).
         UIProfiler.measure("open.layoutSubtree") {
@@ -414,10 +418,20 @@ final class StatusItemController: NSObject {
         // clocks and stop ticking — the whole point of the gate (no CPU while the egg is left on but the
         // popover is hidden). This is the authoritative hide signal, flipped synchronously with `orderOut`.
         container.transparency.setPopoverShown(false)
+        container.clock.stop()
         panel.orderOut(nil)
         outsideClickMonitor.stop()
         statusItem.button?.highlight(false)
         heightController.finishClosing()
+        // Settle the hidden tree NOW, while nothing is on screen. Every close queues SwiftUI work —
+        // the card collapse above, plus the scroll-to-top/height/screen resets DashboardView runs off
+        // the `popoverShown` flip — and without this flush that work sat in pending transactions
+        // until the NEXT open's pre-show `layoutSubtreeIfNeeded`, which is why a warm open cost
+        // ~85ms to first frame (~60% of its layout was replaying this close's cleanup). The same
+        // work ran a beat after close anyway as a ~70–100ms main-thread stall on the display cycle;
+        // doing it synchronously here moves it where it's invisible and leaves the open path a
+        // clean tree (measured: warm open drops to roughly a third).
+        hostingController.view.layoutSubtreeIfNeeded()
     }
 
     /// Drops keyboard focus inside the panel so a clicked plain-styled control (a metric row's

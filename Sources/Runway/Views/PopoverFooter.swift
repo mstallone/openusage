@@ -21,6 +21,10 @@ struct PopoverFooter: View {
     let height: CGFloat
 
     @Environment(\.popoverIsVisible) private var popoverIsVisible
+    /// Shared 1s clock for the countdown text. Not a gated `TimelineView` — the structural swap on
+    /// open/close rebuilt the button subtree every time (see `DashboardClock`). Optional to match
+    /// `WidgetRowView`'s defensive read; the footer only ever mounts in the popover, where it exists.
+    @Environment(DashboardClock.self) private var clock: DashboardClock?
 
     @State private var isRefreshHovered = false
 
@@ -81,16 +85,8 @@ struct PopoverFooter: View {
         Button {
             refreshNow()
         } label: {
-            Group {
-                if popoverIsVisible {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        updateStatusLabel(now: context.date)
-                    }
-                } else {
-                    updateStatusLabel(now: Date())
-                }
-            }
-            .contentShape(Rectangle())
+            updateStatusLabel(now: clock?.perSecond ?? Date())
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .keyboardShortcut("r", modifiers: .command)
