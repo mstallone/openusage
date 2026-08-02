@@ -2,8 +2,9 @@ import SwiftUI
 
 /// Fixed popover footer chrome, shown on the dashboard only: a single compact line with the app
 /// identity, the next-update countdown, and the gear options menu (plus the transient copy
-/// confirmation and pin-limit notice). It uses the destination screen so both pages mounted during a
-/// slide draw the same footer.
+/// confirmation and pin-limit notice). Keyed on the screen of the page it sits on (never the
+/// destination) — during the screen-switch push both pages are briefly mounted, and each keeps its
+/// own footer as it travels (see `DashboardView.screenView`).
 ///
 /// The footer is a **fixed-height safe-area bar** (`pinnedFooter` in `DashboardView.screenView`):
 /// the bar's position is re-derived from the per-frame layout of the animated panel frame, which is

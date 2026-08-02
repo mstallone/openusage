@@ -5,10 +5,17 @@ import SwiftUI
 /// dashboard. (Settings is not a popover screen; it lives in its own window, see
 /// `SettingsWindowController`.)
 ///
-/// The chrome is fixed: it's keyed off `layout.screen` and applied uniformly in `screenView`. A screen
-/// switch mounts only its destination and gives it a short directional entrance; keeping the outgoing
-/// tree alive for a full-width pager doubled the expensive dashboard/Settings layouts during every
-/// transition. Each screen's scroll
+/// A screen switch plays as one connected push: the outgoing screen stays mounted — frozen at its
+/// pre-switch panel size (`pages`) so the per-frame height morph can't re-layout it — and slides
+/// out while the destination slides in from the opposite edge, the two tiling edge-to-edge like the
+/// L1↔L2 push inside Customize, on one critically damped `Motion.push` (bounce at full-width travel
+/// exposes bare tray at the panel edges). After the push the outgoing page stays PARKED offscreen,
+/// so switching back needs no mount — profiling showed the destination mount was the switch's
+/// dominant stall. This is not the old two-page pager (which doubled the expensive dashboard
+/// layouts on every frame of every transition): the parked tree's constant size proposal keeps its
+/// layout cached, and the popover-close reset unmounts it. (A `cacheDisplay` raster of the outgoing
+/// screen was tried instead and reverted: rasterizing the hosting view cost 85–330ms of main-thread
+/// stall on the very frame the switch started.) Each screen's scroll
 /// content underlaps the footer with the native soft scroll-edge fade (`softBottomScrollEdge` →
 /// `.scrollEdgeEffectStyle(.soft)`, macOS 26+) — Apple's blurred boundary, not a custom gradient or a
 /// material bar. On macOS 15 the footer/top bar still pin via `safeAreaInset`, just without the blur
@@ -53,6 +60,35 @@ struct DashboardView: View {
     /// id, a freshly-started transition pins to the outgoing screen so the first frame never flashes
     /// the destination.
     @State private var animatedSlideID = 0
+    /// The `layout.screenSlideID` whose push has finished (its `withAnimation` completion fired).
+    /// The parked page's `.disabled` keys off this, NOT off `isSliding`: state-level progress hits
+    /// its target the instant the animation commits, so `isSliding` reads false while the exit
+    /// slide is still visibly running — disabling on it dimmed the outgoing page's controls
+    /// mid-flight.
+    @State private var settledSlideID = 0
+    /// The pager's mounted pages, parked-outgoing (if any) first. THE single source of truth for
+    /// what `modeBody` mounts, written atomically in the slide `onChange` — deriving the list from
+    /// `layout.screen` plus separate outgoing state instead let the body evaluation between a
+    /// mid-flight reversal's screen change and its `onChange` see a contradictory pair (the same
+    /// screen on both sides: duplicate `ForEach` IDs, and a transient unmount/remount of a page
+    /// that was supposed to stay warm). Empty until the first switch of a popover session (and
+    /// reset to empty on close); `pagerPages` then falls back to just the active screen.
+    ///
+    /// After a push settles the outgoing page is deliberately KEPT, parked fully offscreen at its
+    /// frozen size: profiling showed the destination tree's mount is the switch's dominant
+    /// main-thread stall (~90ms baseline), so the parked page makes every switch after a screen's
+    /// first one mount-free — the pager just swaps the two pages' roles. The parked tree costs
+    /// nothing per frame (constant size proposal + clipped offscreen) and unmounts with the
+    /// popover-close reset.
+    @State private var pages: [PagerPage] = []
+
+    private struct PagerPage: Identifiable {
+        let screen: PopoverScreen
+        /// The pre-switch panel height the page froze at when it left. Set only on the parked
+        /// outgoing page — doubles as its role marker in `modeBody`; nil marks the active page.
+        let frozenHeight: CGFloat?
+        var id: PopoverScreen { screen }
+    }
     /// Reset to the top whenever the popover closes, so it never reopens mid-scroll.
     @State private var dashboardScrollPosition = ScrollPosition(edge: .top)
     /// Measured expanded-section height per provider, learned from the first expand's measurement.
@@ -95,8 +131,10 @@ struct DashboardView: View {
     /// footer is fixed-height chrome: the height coordinator sums this constant into each screen's
     /// morph target, the scroll spacer reserves it, and the overlay bar fills it.
     private static let footerHeight: CGFloat = 40
-    /// A compact directional entrance communicates hierarchy without keeping a second full screen tree
-    /// alive. The opaque popover surface fills the small uncovered strip while the page settles.
+    /// Fallback entrance travel for the rare switch with no outgoing page to slide out beside the
+    /// destination (no established height yet): a compact directional entrance still communicates
+    /// hierarchy, and the popover surface fills the small uncovered strip while the page settles.
+    /// With an outgoing page mounted the travel is the full panel width — see `screenEntranceOffset`.
     private static let screenEntranceDistance: CGFloat = 36
 
     var body: some View {
@@ -136,6 +174,10 @@ struct DashboardView: View {
             // Drive the backdrop's height on SwiftUI's clock. At the body root, outside `modeBody`'s
             // structural-animation suppression, so it can ride the active transition spring.
             .drivesPanelHeight(animatedHeight)
+            // Record the slide progress each rendered frame (identity effect, no visual change):
+            // a mid-flight reversal reads it to continue the push from where the pages visibly
+            // are — see the slide `onChange` and `SlideProgressEffect`.
+            .modifier(SlideProgressEffect(progress: slideProgress))
             .coordinateSpace(name: Self.reorderSpace)
             .background(
                 // Esc backs out of Customize first; only from the dashboard does it close the
@@ -211,6 +253,12 @@ struct DashboardView: View {
             .onChange(of: layout.screen) {
                 reorderLift = nil
                 layout.cancelDrag()
+                // The switched-away screen used to unmount here, and hover UI dismissal rode its
+                // rows' `onDisappear`. A parked page never disappears, so dismiss explicitly — a
+                // Usage Trend hover detail (or a tooltip) left open at switch time would otherwise
+                // keep floating over the destination screen.
+                HoverTooltips.dismissAll()
+                HoverPopoverState.dismissAll()
                 // A caret morph can't outlive its screen: leaving the dashboard mid-settle must
                 // not let Customize measurements learn a delta or take the caret debounce path.
                 measurementSettleTask?.cancel()
@@ -239,33 +287,69 @@ struct DashboardView: View {
                 // deferred cleanup the close-time settle exists to remove.
                 guard transparency.popoverShown else {
                     animatedSlideID = id
+                    settledSlideID = id
                     slideProgress = 1
+                    // The hidden walk is not a push: drop any parked page so the close-time settle
+                    // (not a later open) pays its unmount.
+                    pages = [PagerPage(screen: layout.screen, frozenHeight: nil)]
                     if let target = heightCoordinator.target(for: layout.screen) {
                         didEstablishHeight = true
                         if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
                     }
                     return
                 }
-                slideProgress = 0
+                // A switch during a still-running push is always a direction flip (there are only
+                // two screens), and it must continue from the pages' RENDERED positions — the
+                // state-level progress hit 1 the instant the previous push committed, so only the
+                // bridge knows how far it visibly got. The travel is symmetric, so seeding
+                // `1 - rendered` puts both pages exactly where they are and the new push carries
+                // on seamlessly instead of snapping to the edges. A settled push has rendered = 1,
+                // which seeds the usual 0.
+                slideProgress = 1 - min(max(SlideProgressBridge.renderedProgress(), 0), 1)
                 animatedSlideID = id
+                // Park the screen being left, frozen at the panel height it holds this instant
+                // (`animatedHeight` is still the pre-switch value here), so it slides out beside
+                // the entering destination — and stays mounted for a mount-free switch back.
+                // Under Reduce Motion the switch plays as a fade in place; a second mounted tree
+                // would be pure cost, so the active page stands alone.
+                // Freeze at the PRESENTED height, not the state-level `animatedHeight`: mid-way
+                // through a reversal the state already holds the interrupted push's destination,
+                // and freezing there would snap the newly parked page's footer to a height it
+                // never visibly reached. `openingHeight` reads the height controller's live
+                // `visualHeight`, which the per-frame bridge keeps at the rendered value (they're
+                // identical when the previous push had settled).
+                let presentedHeight = MenuBarPopover.openingHeight?() ?? animatedHeight
+                pages = reduceMotion || presentedHeight <= 0
+                    ? [PagerPage(screen: layout.screen, frozenHeight: nil)]
+                    : [
+                        PagerPage(screen: layout.screenSlideFrom, frozenHeight: presentedHeight),
+                        PagerPage(screen: layout.screen, frozenHeight: nil),
+                    ]
                 let destination = layout.screen
                 Task { @MainActor in
-                    // Co-animate the entrance and height on one spring. The destination is usually
+                    // Co-animate the entrance and height on one clock. The destination is usually
                     // mounted and measured by now; if it is not, keep the current opening height and
                     // establish the real target once its measurement lands.
                     let coTarget: CGFloat? = heightCoordinator.target(for: destination)
                         ?? (animatedHeight > 0 ? animatedHeight : nil)
                     if coTarget != nil { didEstablishHeight = true }
-                    withAnimation(Motion.spring, completionCriteria: .logicallyComplete) {
+                    withAnimation(Motion.push, completionCriteria: .logicallyComplete) {
                         slideProgress = 1
                         if let coTarget { animatedHeight = coTarget }
                     } completion: {
+                        // The parked outgoing page deliberately stays mounted (see `pages`) — the
+                        // settle leaves it exactly one panel-width offscreen, clipped away — but
+                        // only NOW does it leave the interactive path (see the `.disabled` in
+                        // `modeBody`). Recording a stale id when a newer push superseded this one
+                        // is harmless: it simply doesn't match, so the newer push's pages stay
+                        // fully interactive until their own completion.
+                        settledSlideID = id
                         guard let target = heightCoordinator.target(for: layout.screen) else { return }
                         if !didEstablishHeight {
                             didEstablishHeight = true
                             animatedHeight = target
                         } else if abs(target - animatedHeight) > 1 {
-                            withAnimation(Motion.spring) { animatedHeight = target }
+                            withAnimation(Motion.push) { animatedHeight = target }
                         }
                     }
                 }
@@ -369,29 +453,49 @@ struct DashboardView: View {
             .environment(\.popoverIsVisible, transparency.popoverShown)
     }
 
-    /// Ties a learned delta to the provider's current expanded-section composition: the ordered On
-    /// Demand metric IDs (order matters — adjacent text rows condense) plus quick-links presence.
-    /// Customizing what sits behind the caret changes the key, so a stale height can't retarget the
-    /// first post-customization toggle; the estimate covers that toggle and the measurement re-learns.
+    /// Resolves a provider's saved widgets against the live account and hands the deterministic
+    /// math to `ExpansionHeightEstimator` (where it is unit-tested): the view only supplies layout
+    /// descriptors, live row data, and plan applicability.
+    private func revealedExpansionRows(for group: ProviderGroup) -> [ExpansionHeightEstimator.Row] {
+        func rows(_ widgets: [PlacedWidget]) -> [ExpansionHeightEstimator.Row] {
+            widgets.compactMap { widget in
+                guard let descriptor = layout.descriptor(for: widget) else { return nil }
+                return ExpansionHeightEstimator.Row(
+                    id: descriptor.id,
+                    data: dataStore.data(for: descriptor),
+                    isApplicable: dataStore.isMetricApplicable(descriptor)
+                )
+            }
+        }
+        return ExpansionHeightEstimator.expandedSectionRows(
+            alwaysShown: rows(group.alwaysShownWidgets),
+            expanded: rows(group.expandedWidgets)
+        )
+    }
+
+    /// The learned-delta cache key for a provider's current revealed composition — see
+    /// `ExpansionHeightEstimator.deltaKey`.
     private func expansionDeltaKey(for providerID: String) -> String {
         guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
             return providerID
         }
-        let metricIDs = group.expandedWidgets.compactMap { layout.descriptor(for: $0)?.id }
-        let links = group.provider.visibleLinks.isEmpty ? "" : "|links"
-        return "\(providerID)|\(metricIDs.joined(separator: ","))\(links)"
+        return ExpansionHeightEstimator.deltaKey(
+            providerID: providerID,
+            revealedRows: revealedExpansionRows(for: group),
+            hasLinks: !group.provider.visibleLinks.isEmpty
+        )
     }
 
-    /// First-toggle guess for a provider's expanded-section height: its On Demand rows at the compact
-    /// row estimate, plus a quick-links row when present. The real measurement replaces this within a
-    /// couple of frames (with a small same-spring correction) and is remembered exactly afterwards.
+    /// First-toggle guess for a provider's expanded-section height — see
+    /// `ExpansionHeightEstimator.estimatedDelta`.
     private func estimatedExpansionDelta(for providerID: String) -> CGFloat {
         guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
             return 0
         }
-        let rows = CGFloat(group.expandedWidgets.count) * DensitySetting.compact.estimatedMetricRowHeight
-        let links: CGFloat = group.provider.visibleLinks.isEmpty ? 0 : 40
-        return rows + links
+        return ExpansionHeightEstimator.estimatedDelta(
+            revealedRows: revealedExpansionRows(for: group),
+            linkCount: group.provider.visibleLinks.count
+        )
     }
 
     /// The debounced tail of the measurement `onChange`: runs once the screen's content measurement
@@ -437,6 +541,11 @@ struct DashboardView: View {
         HoverPopoverState.dismissAll()
         if layout.screen != .dashboard { layout.screen = .dashboard }
         reorderLift = nil
+        // Unmount the parked page here, in the close-time hidden settle, so an open never pays it:
+        // a page parked across the close would sit hidden measuring and re-laying-out for nothing.
+        // (When the screen assignment above changed anything, the slide onChange's hidden walk has
+        // already done this; this covers closing from the dashboard with a parked Customize.)
+        pages = []
         layout.cancelDrag()
         // A "Copied to clipboard" pill mid-countdown would otherwise reappear stale on the next open,
         // since the layout store survives the popover and only the timer clears it.
@@ -466,24 +575,68 @@ struct DashboardView: View {
         dashboardScrollPosition.scrollTo(edge: .top)
     }
 
-    /// The popover keeps exactly one live screen tree. On a switch the destination's scrolling body
-    /// enters from the direction implied by `slideRank`, but the fixed chrome stays in place and the
-    /// outgoing screen is removed immediately instead of remaining mounted beside it. Customize and
-    /// the dashboard are both substantial trees; the former two-page pager made SwiftUI update,
-    /// measure, and draw both throughout the window morph.
+    /// The transition-scoped pager. Steady state keeps exactly one live screen tree; during a push
+    /// the screen being left stays mounted (`outgoing`) and slides out while the destination (page
+    /// plus its chrome) enters from the direction implied by `slideRank`, the two tiling
+    /// edge-to-edge so the switch reads as one connected push. Two guards keep this cheaper than
+    /// the old permanently-mounted two-page pager (which doubled the expensive dashboard layouts on
+    /// every frame of the height morph): the outgoing tree is wrapped in a CONSTANT size frame —
+    /// its pre-switch panel size — so the per-frame animated height never re-proposes (and so never
+    /// re-lays-out) that subtree, and it unmounts in the push's completion.
     ///
-    /// Why an offset and not a SwiftUI `.transition`: the cards' fill is translucent `.quaternary`
+    /// Why offsets and not a SwiftUI `.transition`: the cards' fill is translucent `.quaternary`
     /// glass. Any transition carrying `.opacity` composites a screen into a transparency layer where
     /// that material has no vibrant backdrop to sample and resolves to its opaque near-white base — a
     /// white flash across the grey cards (the regression this removes; it has no clean SwiftUI fix).
     /// A pure offset never touches opacity, so the glass keeps sampling the live popover backdrop.
-    /// `.animation(nil, value:)` stops the structural screen replacement from inheriting the caller's
-    /// mode-switch animation — only `slideProgress` animates the destination's offset.
+    /// `.animation(nil, value:)` stops the structural mount/unmount of either page from inheriting
+    /// the caller's mode-switch animation — only `slideProgress` animates the offsets.
     private var modeBody: some View {
-        screenView(layout.screen)
-            .frame(width: Self.popoverWidth)
-            .frame(maxHeight: .infinity, alignment: .top)
+        ZStack(alignment: .top) {
+            // A ForEach keyed by screen, not an `if let` beside the destination: the pager's pages
+            // must keep their STRUCTURAL IDENTITY when a screen changes roles. With positional
+            // identity, every switch would tear down the parked tree and mount a fresh copy into
+            // the outgoing slot — a full extra layout of the most expensive screen right on the
+            // interaction frame. Keyed by screen, a role flip re-uses the exact tree that was
+            // already mounted (and the parked page's frozen proposal equals the size it was last
+            // laid out at, so parking re-lays-out nothing).
+            ForEach(pagerPages) { page in
+                screenView(page.screen)
+                    // The parked page freezes at its pre-switch panel size (`frozenHeight`) — a
+                    // constant proposal, so the per-frame height morph never re-lays-out that
+                    // subtree. The active page passes nil and keeps tracking the animated frame.
+                    .frame(width: Self.popoverWidth, height: page.frozenHeight, alignment: .top)
+                    .offset(x: page.frozenHeight == nil ? screenEntranceOffset : screenExitOffset)
+                    // The parked page is decoration: mid-push, clicks belong to the destination (a
+                    // click landing on a half-departed row would act on the wrong screen), and at
+                    // rest it sits offscreen.
+                    .allowsHitTesting(page.frozenHeight == nil)
+                    // Pointer hits are only one input path. Once the exit slide settles
+                    // (`settledSlideID` — the animation completion's signal; `isSliding` reads
+                    // false the instant the push COMMITS, long before it stops moving), the parked
+                    // page must also leave the keyboard focus loop and shortcut table — deferred
+                    // to the settle so its still-visible controls don't grey out mid-flight. It
+                    // leaves the accessibility tree immediately: even mid-push it's decoration a
+                    // VoiceOver user should never land on.
+                    .disabled(page.frozenHeight != nil && settledSlideID == layout.screenSlideID)
+                    .accessibilityHidden(page.frozenHeight != nil)
+            }
+        }
+        .frame(width: Self.popoverWidth)
+        .frame(maxHeight: .infinity, alignment: .top)
         .animation(nil, value: layout.screenSlideID)
+    }
+
+    /// What `modeBody` mounts: the atomically-written `pages`, or just the active screen before
+    /// the session's first switch (and after the close-time reset).
+    private var pagerPages: [PagerPage] {
+        pages.isEmpty ? [PagerPage(screen: layout.screen, frozenHeight: nil)] : pages
+    }
+
+    /// Whether a parked outgoing page is mounted beside the active one — the full-width push plays
+    /// only then (see `screenEntranceOffset`).
+    private var hasParkedPage: Bool {
+        pages.contains { $0.frozenHeight != nil }
     }
 
     /// True from the moment `layout.screen` changes until the slide reaches the incoming screen.
@@ -492,24 +645,44 @@ struct DashboardView: View {
             && (layout.screenSlideID != animatedSlideID || slideProgress < 1)
     }
 
-    /// Starts the newly-mounted destination a short distance toward the edge it came from, then settles
-    /// it at zero. Until this transition's state has committed, progress remains zero so the first frame
-    /// cannot flash at its final position.
+    /// Starts the entering destination toward the edge it came from, then settles it at zero. With
+    /// a parked page sliding out beside it the destination travels the full panel width, its
+    /// leading edge glued to the parked page's trailing edge for the whole push; without one
+    /// (Reduce Motion off but no height established yet) it keeps the compact directional entrance.
+    /// Until this transition's state has committed, progress remains zero so the first frame cannot
+    /// flash at its final position.
     private var screenEntranceOffset: CGFloat {
         guard isSliding, !reduceMotion else { return 0 }
-        let direction: CGFloat = layout.screenSlideFrom.slideRank < layout.screen.slideRank ? 1 : -1
-        let progress = animatedSlideID == layout.screenSlideID ? slideProgress : 0
-        return direction * Self.screenEntranceDistance * (1 - progress)
+        let travel = hasParkedPage ? Self.popoverWidth : Self.screenEntranceDistance
+        return slideDirection * travel * (1 - slideRenderProgress)
     }
 
-    /// Builds the one mounted screen: its entering scroll body wrapped in stationary pinned chrome.
-    /// Applying the offset before the pinned modifiers keeps the top bar and footer fixed while the
-    /// destination content moves. The soft scroll-edge styles and bars still attach to the screen's
-    /// `PopoverScrollView`, the documented place for them.
+    /// The outgoing page's travel: the full panel width opposite the entrance, so the two screens
+    /// tile edge-to-edge and the switch reads as one connected push.
+    private var screenExitOffset: CGFloat {
+        -slideDirection * Self.popoverWidth * slideRenderProgress
+    }
+
+    /// +1 when the destination sits to the right of the screen being left (it enters from the
+    /// trailing edge), -1 on the way back.
+    private var slideDirection: CGFloat {
+        layout.screenSlideFrom.slideRank < layout.screen.slideRank ? 1 : -1
+    }
+
+    /// The slide progress this transition renders at: pinned to zero until the freshly-started
+    /// transition's state has committed (see `animatedSlideID`).
+    private var slideRenderProgress: CGFloat {
+        animatedSlideID == layout.screenSlideID ? slideProgress : 0
+    }
+
+    /// Builds one full page for the pager: the screen's scroll body wrapped in ITS OWN pinned
+    /// chrome, keyed on the `screen` parameter (never `layout.screen`) so the outgoing page keeps
+    /// drawing its own bar and footer while it slides out. The caller offsets the whole page as one
+    /// unit — chrome travels with its screen. The soft scroll-edge styles and bars still attach to
+    /// the screen's `PopoverScrollView`, the documented place for them.
     @ViewBuilder
     private func screenView(_ screen: PopoverScreen) -> some View {
         scrollBody(for: screen)
-            .offset(x: screenEntranceOffset)
             // Auto-fit: the scroll content reports its intrinsic height (invariant to the viewport)
             // straight into `heightCoordinator`, which sums it with the chrome into this screen's
             // ideal window height — see `PopoverScrollView` for why it's not a preference.
@@ -517,6 +690,7 @@ struct DashboardView: View {
             .softBottomScrollEdge()
             .pinnedTopBar(spacing: 0) {
                 PopoverTopBar(
+                    screen: screen,
                     layout: layout,
                     height: Self.topBarHeight,
                     horizontalPadding: Self.footerHorizontalPadding,
@@ -537,7 +711,7 @@ struct DashboardView: View {
                 // frame growth and the footer visibly trails the edge, sliding over content to catch
                 // up (verified frame-by-frame; the safe-area bar shows no such detach).
                 PopoverFooter(
-                    screen: layout.screen,
+                    screen: screen,
                     layout: layout,
                     dataStore: dataStore,
                     horizontalPadding: Self.footerHorizontalPadding,
