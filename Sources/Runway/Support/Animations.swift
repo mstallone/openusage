@@ -18,6 +18,15 @@ enum Motion {
         reduceMotion ? reducedMotionFallback : .easeInOut(duration: 0.18)
     }
 
+    /// The dashboard↔Customize screen push (`DashboardView`): full-panel-width travel plus the
+    /// co-animated height morph. Critically damped, unlike `spring`: at 320pt of travel the default
+    /// spring's ~1–2% overshoot swings the whole page several points past its rest position —
+    /// exposing a strip of bare tray at the panel edge — and bounces the panel's bottom edge along
+    /// with it, which reads as jank rather than liveliness.
+    static var push: Animation {
+        reduceMotion ? reducedMotionFallback : .spring(response: 0.38, dampingFraction: 1.0)
+    }
+
     /// Reduced-motion-aware stand-in for ad-hoc `.snappy` animations in views.
     static var snappy: Animation {
         reduceMotion ? reducedMotionFallback : .snappy(duration: 0.25)

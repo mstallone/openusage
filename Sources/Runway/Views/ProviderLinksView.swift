@@ -16,16 +16,31 @@ struct ProviderLinksView: View {
     /// provider ships. Fewer links use fewer columns so a lone button isn't boxed into a third of the row.
     private static let maxColumns = 3
 
-    private var columns: [GridItem] {
-        let count = min(Self.maxColumns, max(1, links.count))
-        return Array(repeating: GridItem(.flexible(), spacing: density.expandedGridSpacing, alignment: .top),
-                     count: count)
-    }
-
+    /// Eager stacks, deliberately NOT a `LazyVGrid`: this row lives inside the popover's animated
+    /// scroll content, and a lazy container re-resolves its cells against the scroll viewport — when
+    /// a card above this one expands and the content shifts inside the animation, the buttons'
+    /// committed positions reset to the viewport origin, so they visibly flew in from the window top
+    /// instead of gliding down with their card like the (eager) metric rows around them. Laziness
+    /// buys nothing for a handful of buttons; plain stacks keep their positions across the morph.
     var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: density.expandedGridSpacing) {
-            ForEach(links, id: \.self) { link in
-                linkButton(link)
+        let columnCount = min(Self.maxColumns, max(1, links.count))
+        let rows = stride(from: 0, to: links.count, by: columnCount).map {
+            Array(links[$0 ..< min($0 + columnCount, links.count)])
+        }
+        VStack(alignment: .leading, spacing: density.expandedGridSpacing) {
+            ForEach(rows.indices, id: \.self) { rowIndex in
+                HStack(alignment: .top, spacing: density.expandedGridSpacing) {
+                    ForEach(rows[rowIndex], id: \.self) { link in
+                        linkButton(link)
+                    }
+                    // Invisible fillers keep a partial last row's buttons at the same column width
+                    // as the full rows above — the grid's flexible columns did this implicitly.
+                    ForEach(0 ..< (columnCount - rows[rowIndex].count), id: \.self) { _ in
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 0)
+                    }
+                }
             }
         }
         .padding(.horizontal, Self.horizontalInset)

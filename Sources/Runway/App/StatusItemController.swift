@@ -173,7 +173,6 @@ final class StatusItemController: NSObject {
         SettingsWindowLink.openHandler = { [weak self] in
             self?.openSettings()
         }
-
         heightController.installBridge()
         if NotchGeometry.fallbackIsNeeded {
             occlusionMonitor.start()
