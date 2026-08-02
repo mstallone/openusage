@@ -532,6 +532,32 @@ final class IncrementalJSONLScannerTests: XCTestCase {
         XCTAssertEqual(recorder.chunks, ["1\n2", "1\n2\n3\n"])
     }
 
+    func testTailWithTrailingFragmentStillCountsTheFragmentLater() async throws {
+        let base = try makeDirectory("TailTrailingFragment")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n2\n".utf8).write(to: url)
+        let recorder = ChunkRecorder()
+        let scanner = IncrementalJSONLScanner<Int>()
+        _ = await scanner.items(from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser)
+
+        // One complete line plus an unterminated record. The tail parses "3\n" now; the cache must
+        // record only the parsed coverage so "4" is not marked as covered.
+        try append("3\n4", to: url)
+        let second = await scanner.items(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        XCTAssertEqual(second, [1, 2, 3])
+
+        // No further writes: if the writer stopped here, the next scan must still pick "4" up
+        // (size mismatch → tail retry finds no newline → full parse counts the fragment).
+        let third = await scanner.items(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        XCTAssertEqual(third, [1, 2, 3, 4])
+        XCTAssertEqual(recorder.chunks, ["1\n2\n", "3\n", "1\n2\n3\n4"])
+    }
+
     func testAppendedFragmentWithoutNewlineFallsBackToFullParse() async throws {
         let base = try makeDirectory("TailNoNewline")
         defer { try? FileManager.default.removeItem(at: base) }
