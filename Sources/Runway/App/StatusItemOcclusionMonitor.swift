@@ -57,7 +57,14 @@ final class StatusItemOcclusionMonitor {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.recheck() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // New screen geometry invalidates any earlier pill placement (including a user
+                // drag): a display swap or resolution change can leave the old frame beside a notch
+                // that moved, or entirely offscreen. Let the next show re-derive it.
+                self.hasPositionedPill = false
+                self.recheck()
+            }
         }
         pollTask = Task { @MainActor [weak self] in
             // First check waits a beat so the menu bar finishes placing the new item.
@@ -81,6 +88,11 @@ final class StatusItemOcclusionMonitor {
     }
 
     func recheck() {
+        // Every entry point funnels here, so gate the whole fallback in one place: `start()` is
+        // already conditional, but `setSuppressed(false)` runs on every panel close regardless —
+        // without this guard, macOS 27+ (native overflow management) could still trigger a rescue
+        // or pill for an item the system is presenting behind its chevron.
+        guard NotchGeometry.fallbackIsNeeded else { return }
         guard let occlusion = measureOcclusion(), occlusion.isEffectivelyHidden else {
             if currentOcclusion != nil {
                 AppLog.info(.statusItem, "Status item is visible again")
