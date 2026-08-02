@@ -12,6 +12,11 @@ struct ProcessEnvironmentReader: EnvironmentReading {
     var processEnvironment: [String: String] = ProcessInfo.processInfo.environment
     var shellEnvironment: LoginShellEnvironment = .shared
     var launchSnapshot: @Sendable () -> ShellEnvironmentSnapshot? = { ShellEnvironmentSnapshotStore.launchSnapshot }
+    /// `false` reads the login-shell capture only when it is already warm, never spawning or waiting
+    /// for it. Launch account discovery uses this: it runs off the main thread (where a cold read
+    /// would otherwise block on the bounded 5s capture) but must keep the immediate-return semantics
+    /// it had on the main thread, so a slow shell profile can't delay the menu-bar icon.
+    var blocksOnShellCapture = true
 
     private static let identityKeys = Set(ShellEnvironmentSnapshot.capturedKeys)
 
@@ -34,7 +39,9 @@ struct ProcessEnvironmentReader: EnvironmentReading {
         if Self.identityKeys.contains(name), let snapshot = launchSnapshot() {
             return snapshot.values[name]?.nilIfEmpty
         }
-        return shellEnvironment.value(for: name)
+        return blocksOnShellCapture
+            ? shellEnvironment.value(for: name)
+            : shellEnvironment.cachedValue(for: name)
     }
 }
 

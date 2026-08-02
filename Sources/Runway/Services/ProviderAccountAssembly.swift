@@ -101,9 +101,16 @@ struct ProviderAccountAssembly {
             return ProviderAccountAssembly(identityKeysByCard: [:])
         }
         let codexIdentityCache = CodexHomeIdentityCache(defaults: defaults)
-        let observer = DefaultAccountObserver(codexIdentityCache: codexIdentityCache)
-        let claudeDiscovery = ClaudeConfigDirDiscovery()
-        let codexDiscovery = CodexHomeDiscovery(identityCache: codexIdentityCache)
+        // A non-capturing environment reader: the readout runs off the main thread, where a cold
+        // login-shell read would block on the bounded 5s capture — on the main thread it returned
+        // nil immediately, and launch discovery must keep exactly those semantics (identity keys
+        // read the persisted snapshot either way).
+        let environment = ProcessEnvironmentReader(blocksOnShellCapture: false)
+        let observer = DefaultAccountObserver(
+            environment: environment, codexIdentityCache: codexIdentityCache
+        )
+        let claudeDiscovery = ClaudeConfigDirDiscovery(environment: environment)
+        let codexDiscovery = CodexHomeDiscovery(environment: environment, identityCache: codexIdentityCache)
         // The observation + discovery half is pure filesystem/keychain IO (up to ~0.8s of directory
         // walks and non-interactive keychain probes). Run the two family chains concurrently off
         // the main actor, then assemble on it — before this split, all of that IO ran synchronously
