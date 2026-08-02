@@ -87,8 +87,8 @@ final class AntigravityProvider: ProviderRuntime {
     private var lastNoProcessProbe: Date?
 
     /// What a language-server probe learned, so `probe()` can negative-cache only the safe case:
-    /// `noProcess` (nothing to talk to) is cacheable; `unreachable` (a process exists but no
-    /// endpoint answered) must retry next pass — the server may just be starting up.
+    /// `noProcess` (ps ran and nothing matched) is cacheable; `unreachable` (a process may exist —
+    /// endpoints unanswered, still starting up, or the scan itself failed) must retry next pass.
     private enum ProbeLSOutcome {
         case found(StrategyResult)
         case noProcess
@@ -100,8 +100,11 @@ final class AntigravityProvider: ProviderRuntime {
             now().timeIntervalSince($0) < Self.noProcessProbeCooldown
         } ?? false
         if !skipProcessScan {
-            var sawProcess = false
-            probes: for attempt in 0..<2 {
+            // Both probes always run in order (app server, then agy) — an unreachable app server
+            // must not skip a healthy agy server. Only two confirmed no-process answers arm the
+            // negative cache.
+            var confirmedNoProcess = true
+            for attempt in 0..<2 {
                 let outcome = attempt == 0
                     ? await probeLS(
                         processName: "language_server",
@@ -115,13 +118,12 @@ final class AntigravityProvider: ProviderRuntime {
                     lastNoProcessProbe = nil
                     return result
                 case .unreachable:
-                    sawProcess = true
-                    break probes
+                    confirmedNoProcess = false
                 case .noProcess:
                     continue
                 }
             }
-            if !sawProcess {
+            if confirmedNoProcess {
                 lastNoProcessProbe = now()
             }
         }
@@ -138,8 +140,15 @@ final class AntigravityProvider: ProviderRuntime {
             csrfFlag: csrfFlag,
             portFlag: portFlag
         )
-        guard let discovered = await loadOffMainActor({ discovery.discover(options) }) else {
+        let discovered: LanguageServerDiscovery.Result
+        switch await loadOffMainActor({ discovery.discoverOutcome(options) }) {
+        case .noProcess:
             return .noProcess
+        case .indeterminate:
+            // ps failed, or a matching process has no extractable endpoints yet — retry next pass.
+            return .unreachable
+        case .found(let result):
+            discovered = result
         }
 
         // HTTPS first (the LS serves a self-signed cert), then HTTP, then the HTTP-only extension port.

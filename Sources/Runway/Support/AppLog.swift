@@ -174,3 +174,11 @@ enum AppLog {
         return logger
     }
 }
+
+/// The one-shot CLI target's seam to `AppLog.flushFileSink()` — `AppLog` itself is internal to
+/// this module, and the CLI must drain queued file-log appends on every termination path.
+public enum RunwayLogging {
+    public static func flushFileSink() {
+        AppLog.flushFileSink()
+    }
+}

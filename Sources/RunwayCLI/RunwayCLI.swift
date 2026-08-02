@@ -29,8 +29,12 @@ struct RunwayCLI {
             FileHandle.standardOutput.write(Data("\n".utf8))
             if !result.warnings.isEmpty {
                 result.warnings.forEach { writeError("warning: \($0)") }
+                RunwayLogging.flushFileSink()
                 exit(4)
             }
+            // File-log appends queue off-thread; drain before the one-shot process returns so a
+            // failure investigated from the log actually has its lines.
+            RunwayLogging.flushFileSink()
         } catch CLIError.usage(let message) {
             fail("\(message)\nRun 'runway --help' for usage.", code: 2)
         } catch CLIError.appDefaultsUnavailable {
@@ -48,6 +52,8 @@ struct RunwayCLI {
 
     private static func fail(_ message: String, code: Int32) -> Never {
         writeError(message)
+        // Drain queued file-log appends: every CLI error path must leave its lines in the log.
+        RunwayLogging.flushFileSink()
         exit(code)
     }
 
