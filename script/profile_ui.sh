@@ -56,6 +56,12 @@ grep -a -A100000 "$START_MARKER" "$LOG" | grep -aq "PHASE done" || { echo "error
 RUN_LOG="$(mktemp -t runway_ui_profile)"
 grep -a -A100000 "$START_MARKER" "$LOG" | grep -a uiprofile > "$RUN_LOG"
 
+# A phase that silently did no work must fail the run, not masquerade as a clean result.
+if grep -aq "ERROR expand phase skipped" "$RUN_LOG"; then
+    echo "error: the expand phase found no provider with a caret — configure at least one" >&2
+    exit 1
+fi
+
 echo
 echo "== Open path (ms), by phase =="
 # Segmented by the driver's phase markers so the cold open, the warm cycles, and the extra open at
