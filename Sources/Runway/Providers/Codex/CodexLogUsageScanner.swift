@@ -47,6 +47,20 @@ actor CodexLogUsageScanner {
     /// Scoped account cards scan only the homes verified to carry their identity. `nil` preserves
     /// the historical environment/default resolution for the unresolved fallback card.
     private let rootsOverride: [URL]?
+    /// The last scan's aggregation, reused when nothing changed: same scan revision, same
+    /// discovered files, same window start, and the same (immutable) pricing snapshot instance.
+    /// The pricing object is retained so instance identity can't be recycled to a new snapshot.
+    private var lastAggregate: (
+        revision: Int, filesDigest: Int64, since: Date, pricing: ModelPricing, scan: LogUsageScan
+    )?
+    private(set) var aggregateMemoHitsForTesting = 0
+
+    /// A scan's normalized events plus the change markers callers memoize derived aggregates on.
+    struct EventScanOutput: Sendable {
+        var events: [Event]
+        var revision: Int
+        var filesDigest: Int64
+    }
 
     /// One turn's token usage, normalized from a `token_count` line (deltas already applied).
     /// `isFast` records whether the session was on the fast/priority service tier when the turn
@@ -92,9 +106,21 @@ actor CodexLogUsageScanner {
     /// Scan the last `daysBack` days of Codex rollouts. Returns `nil` when no Codex home or no
     /// session files exist (the spend tiles then render "No data").
     func scan(daysBack: Int = 30, now: Date = Date(), pricing: ModelPricing) async -> LogUsageScan? {
-        guard let events = await scanEvents(daysBack: daysBack, now: now) else { return nil }
+        guard let output = await scanEventsOutput(daysBack: daysBack, now: now) else { return nil }
         let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
-        return Self.aggregate(events: events, since: since, pricing: pricing)
+
+        // Most 5-minute refreshes find nothing changed; skip re-running dedup + aggregation over
+        // hundreds of thousands of unchanged cached events.
+        if let memo = lastAggregate,
+           memo.revision == output.revision, memo.filesDigest == output.filesDigest,
+           memo.since == since, memo.pricing === pricing
+        {
+            aggregateMemoHitsForTesting += 1
+            return memo.scan
+        }
+        let scan = Self.aggregate(events: output.events, since: since, pricing: pricing)
+        lastAggregate = (output.revision, output.filesDigest, since, pricing, scan)
+        return scan
     }
 
     /// Parse the selected Codex homes without assigning provider pricing. Sakana reuses the exact
@@ -102,6 +128,12 @@ actor CodexLogUsageScanner {
     /// fixed-rate Fugu models. Keeping one parser prevents the two providers from disagreeing about
     /// cumulative deltas, replayed subagent history, stale snapshots, or copied-session dedup.
     func scanEvents(daysBack: Int = 30, now: Date = Date()) async -> [Event]? {
+        await scanEventsOutput(daysBack: daysBack, now: now)?.events
+    }
+
+    /// `scanEvents` plus the change markers (scan revision + discovered-file digest) that let
+    /// callers reuse their previous aggregation when nothing changed.
+    func scanEventsOutput(daysBack: Int = 30, now: Date = Date()) async -> EventScanOutput? {
         let homes = rootsOverride ?? codexHomes()
         let since = JSONLScanning.sinceDate(daysBack: daysBack, now: now)
         let identity = cacheIdentityOverride ?? {
@@ -117,13 +149,17 @@ actor CodexLogUsageScanner {
             return nil
         }
 
-        guard let events = await scanner.items(
+        guard let output = await scanner.output(
             from: files,
             since: since,
             cacheIdentity: identity,
             tailParser: Self.tailParser
         ), !Task.isCancelled else { return nil }
-        return events
+        return EventScanOutput(
+            events: output.items,
+            revision: output.revision,
+            filesDigest: JSONLScanning.digest(of: files)
+        )
     }
 
     // MARK: - Discovery

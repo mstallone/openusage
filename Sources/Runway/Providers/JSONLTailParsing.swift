@@ -15,6 +15,13 @@ struct JSONLTailParser<Item: Codable & Sendable>: Sendable {
     }
 }
 
+/// A scan's concatenated items plus the identity's change revision (see
+/// `IncrementalJSONLScanner.output(from:since:cacheIdentity:tailParser:)`).
+struct JSONLScanOutput<Item: Codable & Sendable>: Sendable {
+    var items: [Item]
+    var revision: Int
+}
+
 /// How the scanner turns one changed file into items: parse the whole file with a stateless
 /// closure (the historical behavior), or resume from the previous parse's byte offset when the
 /// file only grew.

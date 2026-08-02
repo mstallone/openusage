@@ -865,6 +865,41 @@ final class CodexLogUsageScannerTests: XCTestCase {
         XCTAssertEqual(scan?.series.daily.reduce(0) { $0 + $1.totalTokens }, 200)
     }
 
+    func testScanReusesAggregationWhenNothingChanged() async throws {
+        let day = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600))
+        let home = try CodexLogFixture.makeHome(files: [
+            "sessions/rollout-a.jsonl": [
+                CodexLogFixture.turnContext(timestamp: day, model: "gpt-5.2"),
+                CodexLogFixture.tokenCount(timestamp: day, last: CodexLogFixture.usage(input: 100, output: 50))
+            ].joined(separator: "\n")
+        ])
+        let scanner = CodexLogFixture.scanner(home: home)
+        let pricing = fixedRates()
+
+        let firstScan = await scanner.scan(pricing: pricing)
+        let first = try XCTUnwrap(firstScan)
+        let secondScan = await scanner.scan(pricing: pricing)
+        let second = try XCTUnwrap(secondScan)
+        let hitsAfterUnchanged = await scanner.aggregateMemoHitsForTesting
+        XCTAssertEqual(hitsAfterUnchanged, 1, "an unchanged rescan must reuse the previous aggregation")
+        XCTAssertEqual(second.series.daily, first.series.daily)
+
+        // A fresh pricing snapshot (hourly catalog refresh) must invalidate the memo.
+        let repriced = await scanner.scan(pricing: fixedRates())
+        XCTAssertNotNil(repriced)
+        let hitsAfterNewPricing = await scanner.aggregateMemoHitsForTesting
+        XCTAssertEqual(hitsAfterNewPricing, 1)
+
+        // New usage must invalidate the memo and show up in the totals.
+        let newFile = home.appendingPathComponent("sessions/rollout-b.jsonl")
+        try CodexLogFixture.tokenCount(
+            timestamp: day, last: CodexLogFixture.usage(input: 30, output: 20), model: "gpt-5.2"
+        ).write(to: newFile, atomically: true, encoding: .utf8)
+        let thirdScan = await scanner.scan(pricing: pricing)
+        let third = try XCTUnwrap(thirdScan)
+        XCTAssertEqual(third.series.daily.reduce(0) { $0 + $1.totalTokens }, 200)
+    }
+
     func testScanPrefersActiveSessionsCopyOverArchivedDuplicate() async throws {
         let day = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3600))
         let content = CodexLogFixture.tokenCount(

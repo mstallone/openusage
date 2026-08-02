@@ -18,6 +18,43 @@ final class DailyUsageAccumulatorTests: XCTestCase {
         XCTAssertEqual(DailyUsageAccumulator.dayKey(from: date, calendar: tokyo), "2024-03-08")
     }
 
+    func testDayKeyMatchesLegacyStringFormat() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        // Sweep component shapes the manual zero-padding must reproduce byte-for-byte, including a
+        // pre-1000 year (4-digit pad) — the exact output `String(format: "%04d-%02d-%02d")` gave.
+        let cases: [(Int, Int, Int)] = [(2024, 3, 7), (2026, 12, 31), (2025, 1, 1), (987, 10, 9)]
+        for (year, month, day) in cases {
+            let date = calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
+            XCTAssertEqual(
+                DailyUsageAccumulator.dayKey(from: date, calendar: calendar),
+                String(format: "%04d-%02d-%02d", year, month, day)
+            )
+        }
+    }
+
+    func testDayKeyCacheMatchesDayKeyAcrossDayBoundaries() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        var cache = DailyUsageAccumulator.DayKeyCache(calendar: calendar)
+        let base = calendar.date(from: DateComponents(year: 2026, month: 2, day: 27))!
+
+        // Hourly steps across three days (spanning a month boundary), then jumps backwards — the
+        // cache must agree with the uncached key in and out of order.
+        var dates: [Date] = (0..<72).map { base.addingTimeInterval(Double($0) * 3600) }
+        dates.append(base)
+        dates.append(base.addingTimeInterval(-1))
+        dates.append(calendar.date(from: DateComponents(year: 2026, month: 3, day: 1))!)
+
+        for date in dates {
+            XCTAssertEqual(
+                cache.key(for: date),
+                DailyUsageAccumulator.dayKey(from: date, calendar: calendar),
+                "cache disagreed for \(date)"
+            )
+        }
+    }
+
     func testBuildSortsDaysNewestFirstAndSumsPerModel() {
         var accumulator = DailyUsageAccumulator()
         accumulator.add(day: "2024-06-01", tokens: 100, cost: 1.0, model: "sonnet")

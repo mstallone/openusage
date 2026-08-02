@@ -42,6 +42,26 @@ enum JSONLScanning {
         }
         return files.sorted { $0.path < $1.path }
     }
+
+    /// Order-sensitive FNV-1a digest of a discovered-file list (path + size + mtime). Callers pair
+    /// it with the scan revision to memoize aggregates: same digest + same revision means the scan
+    /// would return the same items.
+    static func digest(of files: [DiscoveredFile]) -> Int64 {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        func combine(_ byte: UInt8) {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        for file in files {
+            for byte in file.path.utf8 { combine(byte) }
+            combine(0)
+            withUnsafeBytes(of: Int64(file.size)) { for byte in $0 { combine(byte) } }
+            withUnsafeBytes(of: file.mtime.timeIntervalSinceReferenceDate.bitPattern) {
+                for byte in $0 { combine(byte) }
+            }
+        }
+        return Int64(bitPattern: hash)
+    }
 }
 
 /// The incremental, off-main-actor scan machinery shared by the Claude, Codex, and pi log scanners: discover
@@ -65,6 +85,9 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
     /// so same-home multi-account cards reuse both memory and disk without letting disjoint homes prune
     /// one another's files.
     private var caches: [String: [String: CachedFile]] = [:]
+    /// Per-identity change counter — bumped whenever a scan parses or drops any cached file, so
+    /// callers can tell "the concatenated items are the same as last scan" without hashing them.
+    private var revisions: [String: Int] = [:]
     private var persistedMetadata: [String: [String: JSONLScanCacheFileMetadata]] = [:]
     private var dirtyUpsertPaths: [String: Set<String>] = [:]
     private var dirtyRemovals: [String: [String: JSONLScanCacheFileMetadata]] = [:]
@@ -113,7 +136,7 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
         cacheIdentity: String = "default",
         parse: @Sendable @escaping (Data) -> [Item]?
     ) async -> [Item]? {
-        await items(from: files, since: since, cacheIdentity: cacheIdentity, strategy: .wholeFile(parse))
+        await items(from: files, since: since, cacheIdentity: cacheIdentity, strategy: .wholeFile(parse))?.items
     }
 
     /// Like `items(from:since:cacheIdentity:parse:)`, but a file that only grew since its cached
@@ -126,6 +149,19 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
         cacheIdentity: String = "default",
         tailParser: JSONLTailParser<Item>
     ) async -> [Item]? {
+        await items(from: files, since: since, cacheIdentity: cacheIdentity, strategy: .tail(tailParser))?.items
+    }
+
+    /// Like the tail-parsing `items`, but also returns the identity's change revision so callers
+    /// can memoize the dedup/aggregate work they run over the returned items. The revision bumps
+    /// whenever a scan parses or drops any cached file; combined with a digest of the discovered
+    /// file list it identifies "same inputs as last time" without hashing the items themselves.
+    func output(
+        from files: [JSONLScanning.DiscoveredFile],
+        since: Date,
+        cacheIdentity: String = "default",
+        tailParser: JSONLTailParser<Item>
+    ) async -> JSONLScanOutput<Item>? {
         await items(from: files, since: since, cacheIdentity: cacheIdentity, strategy: .tail(tailParser))
     }
 
@@ -134,7 +170,7 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
         since: Date,
         cacheIdentity: String,
         strategy: JSONLParseStrategy<Item>
-    ) async -> [Item]? {
+    ) async -> JSONLScanOutput<Item>? {
         precondition(!cacheIdentity.isEmpty)
         guard await acquire(cacheIdentity) else { return nil }
         defer { release(cacheIdentity) }
@@ -209,7 +245,9 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
                 break
             }
         }
+        var droppedPaths = 0
         for (path, cached) in currentCache where nextCache[path] == nil {
+            droppedPaths += 1
             dirtyRemovals[cacheIdentity, default: [:]][path] = JSONLScanCacheFileMetadata(
                 size: cached.size,
                 mtime: cached.mtime,
@@ -217,6 +255,9 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
             )
         }
         caches[cacheIdentity] = nextCache
+        if !parsedPaths.isEmpty || droppedPaths > 0 {
+            revisions[cacheIdentity, default: 0] += 1
+        }
         dirtyUpsertPaths[cacheIdentity, default: []].formUnion(parsedPaths)
         if !dirtyUpsertPaths[cacheIdentity, default: []].isEmpty
             || !dirtyRemovals[cacheIdentity, default: [:]].isEmpty
@@ -230,7 +271,9 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
             guard let cached = nextCache[file.path] else { continue }
             items.append(contentsOf: cached.items)
         }
-        return Task.isCancelled ? nil : items
+        return Task.isCancelled
+            ? nil
+            : JSONLScanOutput(items: items, revision: revisions[cacheIdentity, default: 0])
     }
 
     /// Wait for the real debounced tasks rather than bypassing them. Tests configure a tiny debounce,

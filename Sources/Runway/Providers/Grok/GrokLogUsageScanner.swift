@@ -68,6 +68,7 @@ struct GrokLogUsageScanner: Sendable {
     static func parse(_ text: String, since: Date, pricing: ModelPricing) -> LogUsageScan {
         var modelByPID: [Int: String] = [:]
         var accumulator = DailyUsageAccumulator()
+        var dayKeys = DailyUsageAccumulator.DayKeyCache()
 
         text.enumerateLines { line, _ in
             // Cheap pre-filter before JSON parsing: only model-carrying events and token rows matter
@@ -100,7 +101,7 @@ struct GrokLogUsageScanner: Sendable {
             let inputNoCache = Int(max(0, promptTokens - cached))
             let output = completion + reasoning
 
-            let day = DailyUsageAccumulator.dayKey(from: timestamp)
+            let day = dayKeys.key(for: timestamp)
             let totalTokens = Int(promptTokens) + output
 
             // Grok's token rows lack a model id; attribute via the row's process. Rows that can't be

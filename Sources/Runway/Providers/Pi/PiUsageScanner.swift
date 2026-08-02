@@ -146,8 +146,9 @@ actor PiUsageScanner {
     /// scanners.
     static func aggregate(entries: [Entry], cardID: String, since: Date, pricing: ModelPricing) -> LogUsageScan {
         var accumulator = DailyUsageAccumulator()
+        var dayKeys = DailyUsageAccumulator.DayKeyCache()
         for entry in entries where entry.cardID == cardID && entry.timestamp >= since {
-            let day = DailyUsageAccumulator.dayKey(from: entry.timestamp)
+            let day = dayKeys.key(for: entry.timestamp)
             let trimmedModel = entry.model.nilIfEmpty
             let modelName = trimmedModel ?? ModelUsageEntry.unattributedModelName
 
