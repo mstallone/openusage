@@ -20,18 +20,23 @@ final class PanelPrewarmer {
     private let heightController: PanelHeightController
     /// The status button's screen rect at warm-up time, or nil when the button is unavailable.
     private let anchorRect: () -> NSRect?
+    /// Whether any provider refresh is still in flight — the second pass waits these out (bounded)
+    /// so it warms the content the launch batch actually delivered.
+    private let isRefreshInFlight: () -> Bool
     private var hasOpened = false
 
     init(
         panel: NSPanel,
         hostView: NSView,
         heightController: PanelHeightController,
-        anchorRect: @escaping () -> NSRect?
+        anchorRect: @escaping () -> NSRect?,
+        isRefreshInFlight: @escaping () -> Bool
     ) {
         self.panel = panel
         self.hostView = hostView
         self.heightController = heightController
         self.anchorRect = anchorRect
+        self.isRefreshInFlight = isRefreshInFlight
     }
 
     /// Called from the real open path: any later warm-up pass would render content the open
@@ -46,16 +51,24 @@ final class PanelPrewarmer {
     func scheduleWarmups() {
         guard ProcessInfo.processInfo.environment["RUNWAY_UI_PROFILE_COLD"] != "1" else { return }
         Task { @MainActor [weak self] in
-            // Absolute offsets from launch, not sequential sleeps: the second pass must land AT
-            // +12s (right after the first refresh batch), not at 12s-plus-however-long the first
-            // pass took — users opening in that drift window would still pay the refreshed-content
-            // layout this pass exists to absorb.
+            // Absolute offsets from launch, not sequential sleeps: the follow-up must key off
+            // launch time, not off however long the first pass took.
             let launch = ContinuousClock.now
-            for offset in [Duration.seconds(2), .seconds(12)] {
-                try? await Task.sleep(until: launch + offset, clock: .continuous)
-                guard let self, !self.hasOpened, !self.panel.isVisible else { return }
-                self.prewarm()
+            try? await Task.sleep(until: launch + .seconds(2), clock: .continuous)
+            guard let self, !self.hasOpened, !self.panel.isVisible else { return }
+            self.prewarm()
+
+            // Second pass: after the launch refresh batch actually completes, so it warms the
+            // content that batch delivered. A fixed +12s assumed the batch was done by then, but a
+            // slow provider (Cursor's CSV export alone budgets 30s) can land later and re-dirty
+            // the tree AFTER the warm-up. Wait out in-flight refreshes, bounded at +60s so a hung
+            // provider can't postpone the pass forever (its snapshot wouldn't change content anyway).
+            try? await Task.sleep(until: launch + .seconds(12), clock: .continuous)
+            while self.isRefreshInFlight(), ContinuousClock.now < launch + .seconds(60) {
+                try? await Task.sleep(for: .milliseconds(500))
             }
+            guard !self.hasOpened, !self.panel.isVisible else { return }
+            self.prewarm()
         }
     }
 
