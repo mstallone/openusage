@@ -101,6 +101,42 @@ final class MemoryWindowController: NSObject, NSWindowDelegate {
     /// The live store while the window is up — the profiling driver selects documents through it.
     var currentStore: MemoryStore? { store }
 
+    /// Quit (Dock, status menu, ⌘Q) never routes through `windowShouldClose`, so the app delegate
+    /// asks here: a dirty memory buffer gets the same Save / Discard / Cancel say before the
+    /// process exits. Save is async, so it answers `.terminateLater` and replies when the write
+    /// lands — or fails, which cancels the quit (the editor still holds the buffer).
+    static func terminationReplyForDirtyEditor() -> NSApplication.TerminateReply {
+        guard MemoryEditorState.shared.isDirty else { return .terminateNow }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Save Changes?"
+        alert.informativeText = "A memory has unsaved changes. Quitting without saving discards them."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Discard")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            guard let save = MemoryEditorState.shared.saveDirtyDocument else {
+                AppLog.error(.memory, "quit prompt chose Save but no editor save hook is installed; nothing to write")
+                return .terminateNow
+            }
+            Task { @MainActor in
+                do {
+                    try await save()
+                    NSApplication.shared.reply(toApplicationShouldTerminate: true)
+                } catch {
+                    AppLog.error(.memory, "saving before quit failed: \(error.localizedDescription)")
+                    NSApplication.shared.reply(toApplicationShouldTerminate: false)
+                }
+            }
+            return .terminateLater
+        case .alertSecondButtonReturn:
+            return .terminateNow
+        default:
+            return .terminateCancel
+        }
+    }
+
     // MARK: - Window construction
 
     private func buildWindow() {
@@ -197,8 +233,18 @@ final class MemoryWindowController: NSObject, NSWindowDelegate {
                     try await save()
                     self.closeIsApproved = true
                     self.window?.close()
+                } catch MemoryEditorError.conflictDetected {
+                    // The editor is showing Reload / Overwrite; the window stays open for the
+                    // user to answer, and closing retries after that.
+                    AppLog.info(.memory, "close-prompt save hit a disk conflict; leaving the window open")
                 } catch {
+                    // The window silently staying open would read as a broken close button.
                     AppLog.error(.memory, "saving before close failed: \(error.localizedDescription)")
+                    let failureAlert = NSAlert()
+                    failureAlert.alertStyle = .warning
+                    failureAlert.messageText = "Could Not Save"
+                    failureAlert.informativeText = error.localizedDescription
+                    failureAlert.runModal()
                 }
             }
             return false

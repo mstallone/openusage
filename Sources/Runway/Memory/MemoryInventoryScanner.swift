@@ -66,7 +66,10 @@ struct MemoryInventoryScanner: Sendable {
                 }
                 guard seen.insert(canonical(home)).inserted else { continue }
                 guard directoryPresent(home) else { continue }
-                sources.append(source(for: harness, home: home, notes: &notes))
+                // The builders also honor the deadline inside their own traversals — one Claude
+                // home with thousands of projects must not blow through the advertised budget.
+                let expired = { now().timeIntervalSince(started) > timeBudget }
+                sources.append(source(for: harness, home: home, notes: &notes, expired: expired))
             }
             if budgetExhausted { break }
         }
@@ -109,12 +112,17 @@ struct MemoryInventoryScanner: Sendable {
         }
     }
 
-    private func source(for harness: Harness, home: String, notes: inout [String]) -> MemorySource {
+    private func source(
+        for harness: Harness,
+        home: String,
+        notes: inout [String],
+        expired: () -> Bool
+    ) -> MemorySource {
         switch harness {
-        case .claude: return claudeSource(home: home, notes: &notes)
+        case .claude: return claudeSource(home: home, notes: &notes, expired: expired)
         case .codex: return codexSource(home: home, notes: &notes)
         case .gemini: return geminiSource(home: home, notes: &notes)
-        case .grok: return grokSource(home: home, notes: &notes)
+        case .grok: return grokSource(home: home, notes: &notes, expired: expired)
         }
     }
 
@@ -158,13 +166,20 @@ struct MemoryInventoryScanner: Sendable {
 
     // MARK: - Claude
 
-    private func claudeSource(home: String, notes: inout [String]) -> MemorySource {
+    private func claudeSource(home: String, notes: inout [String], expired: () -> Bool) -> MemorySource {
         let instructionsPath = home + "/CLAUDE.md"
-        let instructionsText = readIfPresent(instructionsPath, notes: &notes)
+        let (instructionsText, unreadable) = readInstruction(instructionsPath, notes: &notes)
         let projectsDir = URL(fileURLWithPath: home).appendingPathComponent("projects")
-        let projects = listSubdirectories(projectsDir)
-            .sorted { $0.path < $1.path }
-            .compactMap { claudeProjectGroup(projectDir: $0, notes: &notes) }
+        var projects: [MemoryProjectGroup] = []
+        for projectDir in listSubdirectories(projectsDir).sorted(by: { $0.path < $1.path }) {
+            if expired() {
+                notes.append("memory scan hit its budget inside \(logPath(home)); the project list is partial")
+                break
+            }
+            if let group = claudeProjectGroup(projectDir: projectDir, notes: &notes) {
+                projects.append(group)
+            }
+        }
         return MemorySource(
             id: sourceID(.claude, home: home),
             harness: Harness.claude.displayName,
@@ -174,7 +189,8 @@ struct MemoryInventoryScanner: Sendable {
             projects: projects,
             legacyDocuments: [],
             databaseDocuments: [],
-            footnote: nil
+            footnote: nil,
+            instructionsUnreadable: unreadable
         )
     }
 
@@ -224,7 +240,7 @@ struct MemoryInventoryScanner: Sendable {
 
     private func codexSource(home: String, notes: inout [String]) -> MemorySource {
         let instructionsPath = home + "/AGENTS.md"
-        let instructionsText = readIfPresent(instructionsPath, notes: &notes)
+        let (instructionsText, unreadable) = readInstruction(instructionsPath, notes: &notes)
 
         var legacy: [MemoryDocument] = []
         let legacyURLs = listFiles(URL(fileURLWithPath: home).appendingPathComponent("memories"))
@@ -271,7 +287,8 @@ struct MemoryInventoryScanner: Sendable {
             projects: [],
             legacyDocuments: legacy,
             databaseDocuments: [],
-            footnote: nil
+            footnote: nil,
+            instructionsUnreadable: unreadable
         )
     }
 
@@ -294,7 +311,7 @@ struct MemoryInventoryScanner: Sendable {
 
     private func geminiSource(home: String, notes: inout [String]) -> MemorySource {
         let instructionsPath = home + "/GEMINI.md"
-        let instructionsText = readIfPresent(instructionsPath, notes: &notes)
+        let (instructionsText, unreadable) = readInstruction(instructionsPath, notes: &notes)
         return MemorySource(
             id: sourceID(.gemini, home: home),
             harness: Harness.gemini.displayName,
@@ -304,31 +321,35 @@ struct MemoryInventoryScanner: Sendable {
             projects: [],
             legacyDocuments: [],
             databaseDocuments: [],
-            footnote: nil
+            footnote: nil,
+            instructionsUnreadable: unreadable
         )
     }
 
     // MARK: - Grok
 
     /// `~/.grok/memory/MEMORY.md` global plus `memory/<slug>-<hash8>/MEMORY.md` per project. The
-    /// feature gate is a `[memory]` section in Grok's config.toml: without one the source is
-    /// Memory Disabled; with one but no `memory/` directory yet, the files just don't exist —
-    /// the ordinary No File state, where creating MEMORY.md is real (Grok will read it).
-    private func grokSource(home: String, notes: inout [String]) -> MemorySource {
+    /// feature gate is a `[memory]` section in Grok's config.toml, evaluated FIRST: without one
+    /// the source is Memory Disabled even when stale memory files remain on disk (they still
+    /// list — readable is readable — but Grok is not using them). With the gate on and no
+    /// `memory/` directory yet, the files just don't exist — the ordinary No File state, where
+    /// creating MEMORY.md is real (Grok will read it).
+    private func grokSource(home: String, notes: inout [String], expired: () -> Bool) -> MemorySource {
+        let memoryConfigured = readIfPresent(home + "/config.toml", notes: &notes)
+            .map { text in
+                text.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == "[memory]" }
+            } ?? false
+        let disabledStatus = MemorySourceStatus.memoryDisabled(
+            note: "Memory is turned off in Grok (no [memory] section in its config.toml)."
+        )
         let memoryDir = home + "/memory"
         guard directoryPresent(memoryDir) else {
-            let memoryConfigured = readIfPresent(home + "/config.toml", notes: &notes)
-                .map { text in
-                    text.split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == "[memory]" }
-                } ?? false
             notes.append("grok home \(logPath(home)): no memory directory → \(memoryConfigured ? "no files yet" : "memory disabled")")
             return MemorySource(
                 id: sourceID(.grok, home: home),
                 harness: Harness.grok.displayName,
                 homePath: home,
-                status: memoryConfigured
-                    ? .missingFile
-                    : .memoryDisabled(note: "Memory is turned off in Grok (no [memory] section in its config.toml)."),
+                status: memoryConfigured ? .missingFile : disabledStatus,
                 instructions: nil,
                 projects: [],
                 legacyDocuments: [],
@@ -338,9 +359,13 @@ struct MemoryInventoryScanner: Sendable {
         }
 
         let globalPath = memoryDir + "/MEMORY.md"
-        let globalText = readIfPresent(globalPath, notes: &notes)
+        let (globalText, unreadable) = readInstruction(globalPath, notes: &notes)
         var projects: [MemoryProjectGroup] = []
         for projectDir in listSubdirectories(URL(fileURLWithPath: memoryDir)).sorted(by: { $0.path < $1.path }) {
+            if expired() {
+                notes.append("memory scan hit its budget inside \(logPath(home)); the project list is partial")
+                break
+            }
             let indexPath = projectDir.path + "/MEMORY.md"
             guard readIfPresent(indexPath, notes: &notes) != nil else { continue }
             let slug = projectDir.lastPathComponent
@@ -353,16 +378,22 @@ struct MemoryInventoryScanner: Sendable {
                 facts: []
             ))
         }
+        if !memoryConfigured {
+            notes.append("grok home \(logPath(home)): memory files present but no [memory] section → memory disabled")
+        }
         return MemorySource(
             id: sourceID(.grok, home: home),
             harness: Harness.grok.displayName,
             homePath: home,
-            status: fileBackedStatus(instructionsText: globalText, hasOtherArtifacts: !projects.isEmpty),
+            status: memoryConfigured
+                ? fileBackedStatus(instructionsText: globalText, hasOtherArtifacts: !projects.isEmpty)
+                : disabledStatus,
             instructions: globalText.map { _ in fileDocument(path: globalPath, kind: .instructions) },
             projects: projects,
             legacyDocuments: [],
             databaseDocuments: [],
-            footnote: nil
+            footnote: nil,
+            instructionsUnreadable: unreadable
         )
     }
 
@@ -402,6 +433,18 @@ struct MemoryInventoryScanner: Sendable {
 
     private func sourceID(_ harness: Harness, home: String) -> String {
         "\(harness.key):\(canonical(home))"
+    }
+
+    /// `readIfPresent` for instruction files, which must distinguish absence from unreadability:
+    /// offering Create Instruction File over an unreadable-but-existing file would destroy it, so
+    /// the source records the failure and the sidebar explains instead.
+    private func readInstruction(_ path: String, notes: inout [String]) -> (text: String?, unreadable: Bool) {
+        do {
+            return (try files.readTextIfPresent(path), false)
+        } catch {
+            notes.append("memory scan could not read \(logPath(path)): \(error.localizedDescription)")
+            return (nil, true)
+        }
     }
 
     /// A read failure that is not plain absence goes into the notes trail — the scan keeps going,

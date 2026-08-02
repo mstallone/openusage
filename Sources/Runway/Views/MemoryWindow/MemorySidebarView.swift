@@ -60,6 +60,12 @@ struct MemorySidebarView: View {
     private func sourceRows(for source: MemorySource) -> some View {
         if let instructions = source.instructions {
             MemoryDocumentRow(document: instructions, systemImage: "doc.text")
+        } else if source.instructionsUnreadable {
+            // The file exists but could not be read — creating over it would destroy it.
+            captionRow(
+                "The instruction file exists but could not be read. Check the log for details.",
+                style: Theme.notice
+            )
         } else if canCreateInstructionFile(for: source) {
             // The store knows where the harness expects its instruction file; one click creates it
             // empty so the editor can go straight from "no file yet" to editing. Shown whenever the

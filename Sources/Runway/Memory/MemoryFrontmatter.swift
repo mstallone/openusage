@@ -47,18 +47,49 @@ struct MemoryFrontmatter: Equatable, Sendable {
     }
 
     /// The full text of a brand-new fact file, matching the on-disk shape Claude Code writes:
-    /// frontmatter with `name`, `description`, and `metadata.type`, then an empty body.
+    /// frontmatter with `name`, `description`, and `metadata.type`, then an empty body. Name and
+    /// description are raw user input and get quoted when a plain scalar would misparse.
     static func template(name: String, description: String, type: String) -> String {
         """
         ---
-        name: \(name)
-        description: \(description)
+        name: \(yamlScalar(name))
+        description: \(yamlScalar(description))
         metadata:
           type: \(type)
         ---
 
 
         """
+    }
+
+    /// A frontmatter value as a safe YAML scalar: `Deploy: Production` or `beta #2` must survive
+    /// as one value — in this parser and in Claude Code's. Newlines collapse to spaces (these are
+    /// single-line fields; a stray paste must not break the block open), and values containing
+    /// YAML-significant characters are double-quoted with `\` and `"` escaped.
+    private static func yamlScalar(_ value: String) -> String {
+        let flattened = value
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        let startsWithIndicator = flattened.first.map { "-?[]{}&*!|>%@`'\"".contains($0) } ?? false
+        // Bare `true`, `null`, `123`, or a date would reach a real YAML parser as a non-string;
+        // these fields must always be strings, so implicit scalars get quoted too.
+        let readsAsNonString = ["true", "false", "null", "~", "yes", "no", "on", "off"]
+            .contains(flattened.lowercased())
+            || Double(flattened) != nil
+            || flattened.wholeMatch(of: /\d{4}-\d{2}-\d{2}.*/) != nil
+        let needsQuoting = flattened.isEmpty
+            || flattened.contains(":")
+            || flattened.contains("#")
+            || flattened.contains("\"")
+            || startsWithIndicator
+            || readsAsNonString
+            || flattened != flattened.trimmingCharacters(in: .whitespaces)
+        guard needsQuoting else { return flattened }
+        let escaped = flattened
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
     }
 
     /// Returns the line starting at `cursor` (without its newline) and moves `cursor` past it,
@@ -83,7 +114,10 @@ struct MemoryFrontmatter: Equatable, Sendable {
         guard !key.isEmpty else { return nil }
         var value = trimmed(line[line.index(after: colon)...])
         if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
+            // Undo `yamlScalar`'s quoting so a created fact's name round-trips exactly.
             value = String(value.dropFirst().dropLast())
+                .replacingOccurrences(of: "\\\"", with: "\"")
+                .replacingOccurrences(of: "\\\\", with: "\\")
         }
         return (key, value.isEmpty ? nil : value)
     }

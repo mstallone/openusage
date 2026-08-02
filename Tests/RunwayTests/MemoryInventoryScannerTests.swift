@@ -19,18 +19,40 @@ final class MemoryInventoryScannerTests: XCTestCase {
         }
     }
 
+    /// A files double whose reads throw for chosen paths — the "exists but unreadable" case.
+    private struct UnreadableFiles: TextFileAccessing {
+        let backing: FakeFiles
+        let unreadablePaths: Set<String>
+
+        func exists(_ path: String) -> Bool { backing.exists(path) || unreadablePaths.contains(path) }
+        func readText(_ path: String) throws -> String {
+            guard !unreadablePaths.contains(path) else { throw POSIXError(.EACCES) }
+            return try backing.readText(path)
+        }
+        func readTextIfPresent(_ path: String) throws -> String? {
+            guard !unreadablePaths.contains(path) else { throw POSIXError(.EACCES) }
+            return try backing.readTextIfPresent(path)
+        }
+        func writeText(_ path: String, _ text: String) throws { try backing.writeText(path, text) }
+        func remove(_ path: String) throws { try backing.remove(path) }
+    }
+
     private func makeScanner(
         environment: [String: String] = [:],
         files: [String: String] = [:],
+        unreadablePaths: Set<String> = [],
         subdirectories: [String] = [],
         realDirectories: Set<String> = [],
         timeBudget: TimeInterval = 1.0,
         now: (@Sendable () -> Date)? = nil
     ) -> MemoryInventoryScanner {
         let fileMap = files
+        let accessor: any TextFileAccessing = unreadablePaths.isEmpty
+            ? FakeFiles(files)
+            : UnreadableFiles(backing: FakeFiles(files), unreadablePaths: unreadablePaths)
         return MemoryInventoryScanner(
             environment: FakeEnvironment(environment),
-            files: FakeFiles(files),
+            files: accessor,
             homeDirectory: { [home] in home },
             listSubdirectories: { url in
                 subdirectories
@@ -157,6 +179,41 @@ final class MemoryInventoryScannerTests: XCTestCase {
         XCTAssertTrue(notes.contains { $0.contains("no memory directory") })
     }
 
+    func testUnreadableInstructionFileIsFlaggedNotTreatedAsMissing() throws {
+        let scanner = makeScanner(
+            unreadablePaths: ["/Users/dev/.claude/CLAUDE.md"],
+            subdirectories: ["/Users/dev/.claude"]
+        )
+
+        let (sources, notes) = scanner.scan()
+
+        let source = try XCTUnwrap(sources.first)
+        XCTAssertTrue(source.instructionsUnreadable,
+                      "an existing-but-unreadable file must not be classified as absent")
+        XCTAssertNil(source.instructions)
+        XCTAssertTrue(notes.contains { $0.contains("could not read") })
+    }
+
+    func testGrokStaleFilesWithFeatureOffAreDisabledButStillListed() throws {
+        // The [memory] section was removed while memory/ files remain: the gate wins over the
+        // directory, but readable files still list.
+        let scanner = makeScanner(
+            files: [
+                "/Users/dev/.grok/config.toml": "model = \"grok-4\"",
+                "/Users/dev/.grok/memory/MEMORY.md": "stale global memory",
+            ],
+            subdirectories: ["/Users/dev/.grok", "/Users/dev/.grok/memory"]
+        )
+
+        let (sources, _) = scanner.scan()
+
+        let source = try XCTUnwrap(sources.first)
+        guard case .memoryDisabled = source.status else {
+            return XCTFail("stale files must not make a feature-off Grok read as Ready")
+        }
+        XCTAssertEqual(source.instructions?.title, "MEMORY.md", "the stale file still lists — readable is readable")
+    }
+
     func testGrokWithMemoryConfiguredButNoDirectoryYetIsNoFileNotDisabled() throws {
         // The feature gate is the [memory] section, not the folder: memory turned on in Grok's
         // config with no files yet must offer creation, exactly like a Codex home with no
@@ -237,6 +294,7 @@ final class MemoryInventoryScannerTests: XCTestCase {
                 "/Users/dev/.claude/CLAUDE.md": "claude",
                 "/Users/dev/.codex/AGENTS.md": "codex",
                 "/Users/dev/.gemini/GEMINI.md": "gemini",
+                "/Users/dev/.grok/config.toml": "[memory]\nenabled = true",
                 "/Users/dev/.grok/memory/MEMORY.md": "grok memory",
             ],
             subdirectories: [

@@ -45,13 +45,20 @@ struct MemoryRootView: View {
                     do {
                         try await MemoryEditorState.shared.saveDirtyDocument?()
                         await store.reload()
+                    } catch MemoryEditorError.conflictDetected {
+                        // The editor's Reload / Overwrite banner is up; refresh once it's answered.
                     } catch {
                         refreshError = error.localizedDescription
                     }
                 }
             }
             Button("Discard Changes", role: .destructive) {
-                Task { await store.reload() }
+                Task {
+                    await store.reload()
+                    // The re-scan alone leaves a still-existing selection's dirty buffer mounted;
+                    // discarding means the disk copy replaces it.
+                    MemoryEditorState.shared.discardBufferAndReload?()
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {

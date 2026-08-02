@@ -36,8 +36,12 @@ final class MemoryStore {
     /// keeps a stale entry from ever being served.
     private static var databaseListingCache: [String: CachedDatabaseListing] = [:]
 
+    /// WAL-mode commits land in the `-wal` sidecar without touching the main file's modification
+    /// date, so the fingerprint covers both — otherwise a listing would stay stale until the next
+    /// checkpoint rewrites the main database.
     private struct CachedDatabaseListing: Sendable {
         var modified: Date
+        var walModified: Date?
         var documents: [MemoryDocument]
     }
 
@@ -122,48 +126,59 @@ final class MemoryStore {
         modificationDate: @escaping @Sendable (String) -> Date?,
         cache: [String: CachedDatabaseListing]
     ) async -> ([MemorySource], [String: CachedDatabaseListing]) {
+        struct Job: Sendable {
+            var index: Int
+            var dbPath: String
+            var modified: Date?
+            var walModified: Date?
+        }
         var result = sources
         var refreshedCache: [String: CachedDatabaseListing] = [:]
-        var jobs: [(index: Int, dbPath: String, modified: Date?)] = []
+        var jobs: [Job] = []
         for (index, source) in sources.enumerated() {
             guard source.id.hasPrefix("codex:") else { continue }
             let dbPath = source.homePath + "/memories_1.sqlite"
             guard files.exists(dbPath) else { continue }
             let modified = modificationDate(dbPath)
-            if let modified, let cached = cache[dbPath], cached.modified == modified {
+            let walModified = modificationDate(dbPath + "-wal")
+            if let modified, let cached = cache[dbPath],
+               cached.modified == modified, cached.walModified == walModified {
                 result[index].databaseDocuments = cached.documents
                 refreshedCache[dbPath] = cached
                 continue
             }
-            jobs.append((index, dbPath, modified))
+            jobs.append(Job(index: index, dbPath: dbPath, modified: modified, walModified: walModified))
         }
         guard !jobs.isEmpty else { return (result, refreshedCache) }
 
         let outcomes = await withTaskGroup(
-            of: (Int, String, Date?, Result<[MemoryDocument], any Error>).self
+            of: (Job, Result<[MemoryDocument], any Error>).self
         ) { group in
             for job in jobs {
                 group.addTask {
-                    (job.index, job.dbPath, job.modified,
-                     Result { try database.listDocuments(dbPath: job.dbPath) })
+                    (job, Result { try database.listDocuments(dbPath: job.dbPath) })
                 }
             }
-            var collected: [(Int, String, Date?, Result<[MemoryDocument], any Error>)] = []
+            var collected: [(Job, Result<[MemoryDocument], any Error>)] = []
             for await outcome in group {
                 collected.append(outcome)
             }
             return collected
         }
-        for (index, dbPath, modified, outcome) in outcomes {
+        for (job, outcome) in outcomes {
             switch outcome {
             case .success(let documents):
-                result[index].databaseDocuments = documents
-                if let modified {
-                    refreshedCache[dbPath] = CachedDatabaseListing(modified: modified, documents: documents)
+                result[job.index].databaseDocuments = documents
+                if let modified = job.modified {
+                    refreshedCache[job.dbPath] = CachedDatabaseListing(
+                        modified: modified,
+                        walModified: job.walModified,
+                        documents: documents
+                    )
                 }
             case .failure(let error):
-                AppLog.error(.memory, "listing \(dbPath) failed: \(error.localizedDescription)")
-                result[index].footnote = "The memory database could not be read: \(error.localizedDescription)"
+                AppLog.error(.memory, "listing \(job.dbPath) failed: \(error.localizedDescription)")
+                result[job.index].footnote = "The memory database could not be read: \(error.localizedDescription)"
             }
         }
         return (result, refreshedCache)
@@ -327,14 +342,21 @@ final class MemoryStore {
                     path,
                     MemoryFrontmatter.template(name: name, description: description, type: type)
                 )
-                let indexPath = directory + "/MEMORY.md"
-                let index = try files.readTextIfPresent(indexPath) ?? ""
-                let entry = ClaudeMemoryIndex.Entry(
-                    title: name,
-                    fileName: fileName,
-                    hook: description.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-                )
-                try files.writeTextPreservingMode(indexPath, ClaudeMemoryIndex.appendingEntry(entry, to: index))
+                do {
+                    let indexPath = directory + "/MEMORY.md"
+                    let index = try files.readTextIfPresent(indexPath) ?? ""
+                    let entry = ClaudeMemoryIndex.Entry(
+                        title: name,
+                        fileName: fileName,
+                        hook: description.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                    )
+                    try files.writeTextPreservingMode(indexPath, ClaudeMemoryIndex.appendingEntry(entry, to: index))
+                } catch {
+                    // Roll the fact back: leaving it unindexed would make a retry mint a
+                    // suffixed duplicate beside the orphan.
+                    try? files.remove(path)
+                    throw error
+                }
                 return path
             }
             await reload()
@@ -355,6 +377,9 @@ final class MemoryStore {
         let files = files
         do {
             try await loadOffMainActor {
+                // An agent may have created the file since the scan; its content wins — creating
+                // means "make the file exist", and it already does. The reload below picks it up.
+                guard !files.exists(path) else { return }
                 // Grok's memory/MEMORY.md may be the first file in a memory/ folder that does not
                 // exist yet; the atomic write needs the folder first.
                 try files.ensureParentDirectory(for: path)

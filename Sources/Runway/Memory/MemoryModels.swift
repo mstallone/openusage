@@ -66,6 +66,9 @@ struct MemorySource: Identifiable, Hashable, Sendable {
     var legacyDocuments: [MemoryDocument]
     var databaseDocuments: [MemoryDocument]
     var footnote: String?
+    /// The instruction file exists but could not be read (permissions, encoding). Distinct from
+    /// absence: the sidebar must explain instead of offering a create that would destroy the file.
+    var instructionsUnreadable: Bool = false
 
     var allDocuments: [MemoryDocument] {
         var docs: [MemoryDocument] = []

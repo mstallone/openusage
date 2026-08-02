@@ -5,9 +5,18 @@ import SwiftUI
 /// nothing can never quietly approve a close or a refresh.
 enum MemoryEditorError: Error, LocalizedError {
     case noSavableDocument
+    /// The disk copy moved (or vanished) since the buffer loaded; nothing was written and the
+    /// editor is showing the Reload / Overwrite banner. Callers driving a transition (close,
+    /// switch, refresh) must abort it and leave the banner up — not report failure.
+    case conflictDetected
 
     var errorDescription: String? {
-        "The memory to save is no longer available, so nothing was written."
+        switch self {
+        case .noSavableDocument:
+            return "The memory to save is no longer available, so nothing was written."
+        case .conflictDetected:
+            return "This file changed on disk; choose Reload or Overwrite in the editor."
+        }
     }
 }
 
@@ -29,11 +38,16 @@ final class MemoryEditorState {
     /// Re-stats the loaded file against the buffer; the controller calls it from
     /// `windowDidBecomeKey` so edits made in another app surface as soon as the window returns.
     var recheckExternalChange: (@MainActor () async -> Void)?
+    /// Drops the buffer and re-reads the loaded document from disk. The refresh prompt's
+    /// "Discard Changes" needs it: a re-scan alone leaves a still-existing selection's dirty
+    /// buffer (and dirty flag) mounted, showing text the user just chose to throw away.
+    var discardBufferAndReload: (@MainActor () -> Void)?
 
     func reset() {
         isDirty = false
         saveDirtyDocument = nil
         recheckExternalChange = nil
+        discardBufferAndReload = nil
     }
 }
 
@@ -80,8 +94,9 @@ struct MemoryEditorView: View {
         content
             .background(Theme.traySurface)
             .onAppear {
-                MemoryEditorState.shared.saveDirtyDocument = { try await performSave(bypassingConflictCheck: true) }
+                MemoryEditorState.shared.saveDirtyDocument = { try await performSave(bypassingConflictCheck: false) }
                 MemoryEditorState.shared.recheckExternalChange = { await recheckExternalChange() }
+                MemoryEditorState.shared.discardBufferAndReload = { loadDocument(id: loadedDocumentID) }
                 syncSelection(store.selectedDocumentID)
             }
             .onDisappear { MemoryEditorState.shared.reset() }
@@ -91,8 +106,12 @@ struct MemoryEditorView: View {
                 Button("Save") {
                     Task {
                         do {
-                            try await performSave(bypassingConflictCheck: true)
+                            try await performSave(bypassingConflictCheck: false)
                             switchToPendingSelection()
+                        } catch MemoryEditorError.conflictDetected {
+                            // Stay on this document with the Reload / Overwrite banner up; the
+                            // switch is off until the conflict is answered.
+                            pendingSelection = nil
                         } catch {
                             actionError = error.localizedDescription
                             pendingSelection = nil
@@ -226,6 +245,8 @@ struct MemoryEditorView: View {
                     Task {
                         do {
                             try await performSave(bypassingConflictCheck: false)
+                        } catch MemoryEditorError.conflictDetected {
+                            // The banner is the message; an alert on top would say it twice.
                         } catch {
                             actionError = error.localizedDescription
                         }
@@ -370,9 +391,10 @@ struct MemoryEditorView: View {
 
     // MARK: - Save / delete / external changes
 
-    /// The one save path. The plain ⌘S/save-button call re-stats first and diverts to the conflict
-    /// banner if the disk copy moved; the banner's Overwrite, the dirty prompts' Save, and the
-    /// controller's close-prompt Save bypass that check — the user just chose explicitly.
+    /// The one save path. Every entry re-stats first and diverts to the conflict banner if the
+    /// disk copy moved (or was deleted) — including the dirty prompts' Save, which then aborts
+    /// its close/switch/refresh so the user sees Reload / Overwrite. Only the banner's own
+    /// Overwrite bypasses the check: it IS the answer to the conflict.
     ///
     /// No savable document (it vanished from the store, or the initial read hasn't landed) throws
     /// instead of returning: a caller that chose Save must never be told it succeeded when nothing
@@ -383,10 +405,12 @@ struct MemoryEditorView: View {
             throw MemoryEditorError.noSavableDocument
         }
         if !bypassingConflictCheck, let loaded = loadedModificationDate {
+            // Compared as optionals: a deleted file stats nil, which is just as much a conflict
+            // as a rewrite — recreating it silently would bury the agent's deletion.
             let current = await store.currentModificationDate(of: document)
-            if let current, current != loaded {
+            if current != loaded {
                 hasConflict = true
-                return
+                throw MemoryEditorError.conflictDetected
             }
         }
         try await store.save(document, text: text)
@@ -399,12 +423,17 @@ struct MemoryEditorView: View {
     private func deleteFact() async {
         guard let document, document.kind == .fact else { return }
         // Deleting IS the user's decision about the buffer — mark it clean so the store's
-        // selection-clear can't re-trigger the dirty prompt mid-delete.
+        // selection-clear can't re-trigger the dirty prompt mid-delete. Keep the old baseline
+        // though: a FAILED delete leaves the fact on disk, and clearing the flag for good would
+        // let a later close silently drop the still-unsaved buffer.
+        let previousBaseline = savedText
         savedText = text
         syncDirtyFlag()
         do {
             try await store.deleteFact(document)
         } catch {
+            savedText = previousBaseline
+            syncDirtyFlag()
             actionError = error.localizedDescription
         }
     }

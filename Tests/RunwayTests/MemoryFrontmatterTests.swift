@@ -94,6 +94,39 @@ final class MemoryFrontmatterTests: XCTestCase {
         XCTAssertEqual(String(body), bodyText)
     }
 
+    func testTemplateQuotesYAMLSignificantUserInputAndRoundTrips() {
+        let text = MemoryFrontmatter.template(
+            name: "Deploy: Production",
+            description: "watch #2 says \"hi\" \\ done",
+            type: "project"
+        )
+
+        XCTAssertTrue(text.contains(#"name: "Deploy: Production""#))
+        let (frontmatter, _) = MemoryFrontmatter.parse(text)
+        XCTAssertEqual(frontmatter?.name, "Deploy: Production")
+        XCTAssertEqual(frontmatter?.description, "watch #2 says \"hi\" \\ done")
+        XCTAssertEqual(frontmatter?.type, "project")
+    }
+
+    func testTemplateQuotesImplicitScalarsSoTheyStayStrings() {
+        for value in ["true", "null", "123", "3.14", "2026-08-02", "no"] {
+            let text = MemoryFrontmatter.template(name: value, description: "plain", type: "user")
+            XCTAssertTrue(
+                text.contains("name: \"\(value)\""),
+                "'\(value)' must be quoted or a YAML parser hands Claude a non-string"
+            )
+            XCTAssertEqual(MemoryFrontmatter.parse(text).frontmatter?.name, value)
+        }
+    }
+
+    func testTemplateFlattensNewlinesInUserInput() {
+        let text = MemoryFrontmatter.template(name: "line\nbreak", description: "plain", type: "user")
+
+        let (frontmatter, _) = MemoryFrontmatter.parse(text)
+        XCTAssertEqual(frontmatter?.name, "line break", "a pasted newline must not break the block open")
+        XCTAssertEqual(frontmatter?.description, "plain")
+    }
+
     func testTemplateEmitsTheObservedShapeWithAnEmptyBody() {
         let text = MemoryFrontmatter.template(
             name: "new-fact", description: "What this fact captures", type: "reference"

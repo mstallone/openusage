@@ -32,7 +32,7 @@ An expected instruction file that doesn't exist yet can be created in place from
 
 ## Editing and saving
 
-Nothing saves automatically. These files are shared with live agent processes, so changes only land when you press **Save** (⌘S) — the button lights up when you have unsaved edits, and closing the window, switching documents, or pressing **Refresh** with unsaved edits asks first (Save / Discard / Cancel).
+Nothing saves automatically. These files are shared with live agent processes, so changes only land when you press **Save** (⌘S) — the button lights up when you have unsaved edits, and closing the window, switching documents, pressing **Refresh**, or quitting Runway with unsaved edits asks first (Save / Discard / Cancel). Every save — including one chosen from those prompts — first checks whether the file changed (or disappeared) on disk; if it did, the editor shows the Reload / Overwrite banner instead of writing, and only the banner's **Overwrite** writes over a moved file.
 
 Because an agent can write the same file while you have it open, Runway checks the file on disk before saving and whenever the window comes back to the front:
 

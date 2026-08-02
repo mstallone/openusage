@@ -24,7 +24,11 @@ final class MemoryStoreTests: XCTestCase {
         func writeText(_ path: String, _ text: String) throws { files[path] = text }
         func remove(_ path: String) throws { files.removeValue(forKey: path) }
 
+        /// Paths whose mode-preserving writes fail — the index-write-failure rollback case.
+        var failingWritePaths: Set<String> = []
+
         func writeTextPreservingMode(_ path: String, _ text: String) throws {
+            if failingWritePaths.contains(path) { throw POSIXError(.EACCES) }
             preservingModeWrites.append(path)
             files[path] = text
         }
@@ -111,6 +115,36 @@ final class MemoryStoreTests: XCTestCase {
         "/Users/dev/.claude/projects/-Users-dev-proj",
     ]
 
+    func testCreateInstructionFileDoesNotClobberAFileThatAppearedSinceTheScan() async throws {
+        let files = RecordingFiles([:])
+        let store = makeStore(files: files, subdirectories: ["\(home)/.gemini"])
+        await store.reload()
+        let source = try XCTUnwrap(store.sources.first { $0.id.hasPrefix("gemini:") })
+
+        // An agent wrote the file between the scan and the click.
+        files.files["\(home)/.gemini/GEMINI.md"] = "the agent's fresh instructions"
+        try await store.createInstructionFile(for: source)
+
+        XCTAssertEqual(files.files["\(home)/.gemini/GEMINI.md"], "the agent's fresh instructions",
+                       "creating means \"make the file exist\" — a late writer's content wins")
+    }
+
+    func testCreateFactRollsBackTheFileWhenTheIndexWriteFails() async throws {
+        let files = claudeProjectFixture()
+        files.failingWritePaths = ["\(claudeMemoryDir)/MEMORY.md"]
+        let store = makeStore(files: files, subdirectories: claudeSubdirectories)
+        await store.reload()
+        let project = try XCTUnwrap(store.sources.first?.projects.first)
+
+        do {
+            _ = try await store.createFact(in: project, name: "New Fact", description: "hook", type: "project")
+            XCTFail("the failing index write must throw")
+        } catch {}
+
+        XCTAssertNil(files.files["\(claudeMemoryDir)/new-fact.md"],
+                     "a fact whose index line could not be written must not linger unindexed")
+    }
+
     // MARK: - Reload
 
     func testReloadReusesListingForUnchangedDatabaseAndRelistsWhenItMoves() async throws {
@@ -121,12 +155,15 @@ final class MemoryStoreTests: XCTestCase {
         let sqlite = ScriptedSQLite()
         sqlite.listJSON = #"[{"thread_id":"t1","rollout_slug":"slug"}]"#
         let dbDate = DateBox(Date(timeIntervalSince1970: 100))
+        let walDate = DateBox(Date(timeIntervalSince1970: 100))
         let store = makeStore(
             files: files,
             sqlite: sqlite,
             subdirectories: ["\(home)/.codex"],
             modificationDates: { path in
-                path.hasSuffix("memories_1.sqlite") ? dbDate.value : nil
+                if path.hasSuffix("memories_1.sqlite-wal") { return walDate.value }
+                if path.hasSuffix("memories_1.sqlite") { return dbDate.value }
+                return nil
             }
         )
 
@@ -137,6 +174,11 @@ final class MemoryStoreTests: XCTestCase {
         dbDate.value = Date(timeIntervalSince1970: 200)
         await store.reload()
         XCTAssertEqual(sqlite.listQueryCount, 2, "a changed modification date must re-list")
+
+        // WAL-mode commits touch only the -wal sidecar; the cache must notice that too.
+        walDate.value = Date(timeIntervalSince1970: 300)
+        await store.reload()
+        XCTAssertEqual(sqlite.listQueryCount, 3, "a changed WAL sidecar must re-list")
     }
 
     func testReloadDemotesAndReRanksAReadySourceWhoseDatabaseListsNothing() async throws {
