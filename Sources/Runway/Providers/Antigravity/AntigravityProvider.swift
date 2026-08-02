@@ -96,7 +96,9 @@ final class AntigravityProvider: ProviderRuntime {
     }
 
     private func probe() async throws -> StrategyResult {
-        let skipProcessScan = lastNoProcessProbe.map {
+        // A manual refresh (⌘R) bypasses the cooldown: the documented recovery flow is "start
+        // Antigravity, then refresh", and that must probe immediately.
+        let skipProcessScan = !ProviderRefreshContext.isManual && lastNoProcessProbe.map {
             now().timeIntervalSince($0) < Self.noProcessProbeCooldown
         } ?? false
         if !skipProcessScan {
