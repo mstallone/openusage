@@ -215,6 +215,21 @@ struct DashboardView: View {
             // collapses to a no-op (SwiftUI animates from the last *committed* value).
             .onChange(of: layout.screenSlideID) { _, id in
                 guard id != 0 else { return }
+                // Hidden — this is the close-time reset walking Customize back to the dashboard,
+                // not a user navigation. There is no entrance to play and nothing on screen: commit
+                // the slide state synchronously and walk the height directly, instead of spawning
+                // the animation task below, whose deferred spring would re-dirty the settled hidden
+                // tree AFTER `finishClosing()` cleared the display clamp — recreating exactly the
+                // deferred cleanup the close-time settle exists to remove.
+                guard transparency.popoverShown else {
+                    animatedSlideID = id
+                    slideProgress = 1
+                    if let target = heightCoordinator.target(for: layout.screen) {
+                        didEstablishHeight = true
+                        if abs(target - animatedHeight) > 0.5 { animatedHeight = target }
+                    }
+                    return
+                }
                 slideProgress = 0
                 animatedSlideID = id
                 let destination = layout.screen
