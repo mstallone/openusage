@@ -27,14 +27,14 @@ struct DashboardContentView: View {
                 if let updateVersion = updater.availableUpdateVersion {
                     UpdateBannerCard(version: updateVersion)
                         .padding(.bottom, density.sectionSpacing)
-                        .transition(.scale(scale: 0.95).combined(with: .opacity))
+                        .transition(.scaleOrInstant(scale: 0.95))
                 }
                 // The one-time first-run hint sits above the provider sections (and above the
                 // empty-state line, which a fresh install can hit while nothing has data yet).
                 if container.onboarding.isCustomizeHintPending {
                     CustomizeHintCard()
                         .padding(.bottom, density.sectionSpacing)
-                        .transition(.scale(scale: 0.95).combined(with: .opacity))
+                        .transition(.scaleOrInstant(scale: 0.95))
                 }
                 widgetContent(displayGroups)
             }

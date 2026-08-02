@@ -69,7 +69,7 @@ struct RateLimitResetsDetail: View {
             if let banner {
                 bannerView(banner)
                     // Unfold from the top edge as the claimed node collapses below — one combined motion.
-                    .transition(.scale(scale: 0.95, anchor: .top).combined(with: .opacity))
+                    .transition(.scaleOrInstant(scale: 0.95, anchor: .top))
             }
             // The claim's forced refresh can remove the in-flight credit from `expiries` a beat before
             // the outcome resolves; keep the "Resetting…" row alive across that gap so the spinner
@@ -221,7 +221,7 @@ struct RateLimitResetsDetail: View {
             confirmRow(entry)
                 // Grow out of / collapse back into the one-line node it replaces: anchored at the top so
                 // the first line (which the rail dot aligns to) stays put while the card unfolds below it.
-                .transition(.scale(scale: 0.95, anchor: .top).combined(with: .opacity))
+                .transition(.scaleOrInstant(scale: 0.95, anchor: .top))
         } else if claimingExpiry == entry.date {
             claimingRow()
                 .transition(.opacity)
@@ -357,7 +357,7 @@ struct RateLimitResetsDetail: View {
 
     /// One clock for every claim-flow layout change (card expand/collapse, node swap, banner, credit
     /// removal), so the rail, the rows, and the popover height all move together.
-    private static let flowAnimation: Animation = .snappy(duration: 0.25)
+    private static var flowAnimation: Animation { Motion.snappy }
 
     private func beginConfirm(_ date: Date) {
         if redeemRequestIDs[date] == nil {

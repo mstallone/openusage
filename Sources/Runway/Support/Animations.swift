@@ -18,11 +18,33 @@ enum Motion {
         reduceMotion ? reducedMotionFallback : .easeInOut(duration: 0.18)
     }
 
-    /// Short enough to read as a crossfade, long enough that value changes don't visibly snap.
-    private static var reducedMotionFallback: Animation { .easeInOut(duration: 0.12) }
+    /// Reduced-motion-aware stand-in for ad-hoc `.snappy` animations in views.
+    static var snappy: Animation {
+        reduceMotion ? reducedMotionFallback : .snappy(duration: 0.25)
+    }
+
+    /// For effects that can't be expressed as a shorter curve (the deny shake's travel, decorative
+    /// pulses): check this and skip the motion entirely.
+    static var reduceMotionEnabled: Bool { reduceMotion }
+
+    /// Fast enough that height/size changes read as an immediate replacement (no visible travel),
+    /// while still letting SwiftUI coalesce the frame change cleanly.
+    private static var reducedMotionFallback: Animation { .linear(duration: 0.05) }
 
     private static var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+}
+
+extension AnyTransition {
+    /// A scale+fade entrance that collapses to an instant swap under Reduce Motion — scaling is
+    /// exactly the kind of zoom the setting asks to avoid, and opacity transitions composite
+    /// translucent material cards into transparency layers where they flash opaque (see
+    /// `DashboardView.modeBody`), so the reduced form is `.identity`, not a fade.
+    static func scaleOrInstant(scale: CGFloat, anchor: UnitPoint = .center) -> AnyTransition {
+        Motion.reduceMotionEnabled
+            ? .identity
+            : .scale(scale: scale, anchor: anchor).combined(with: .opacity)
     }
 }
 
@@ -73,6 +95,9 @@ private struct DenyShakeModifier: ViewModifier {
     }
 
     private func shake() {
+        // Reduce Motion: the shake IS travel — there is no shorter-curve version of it. The denial
+        // feedback still reaches the user through the notice label the shake accompanies.
+        guard !Motion.reduceMotionEnabled else { return }
         // Restart from zero so back-to-back triggers each play a full shake.
         phase = 0
         withAnimation(.linear(duration: 0.4)) {
