@@ -98,6 +98,7 @@ When Runway ships a new default metric, existing layouts get it once. If you tur
 | ⌘Z | Undo the last customization change (app-wide; repeat to step back) |
 | ⌘R | Refresh now from the dashboard (skips the cache) |
 | ⌘, | Open the [Settings window](settings.md) (closes the popover) |
+| ⌘M | Open the [Memory Explorer](memory-explorer.md) (closes the popover) |
 
 A global shortcut (recorded in Settings) toggles the popover from anywhere.
 

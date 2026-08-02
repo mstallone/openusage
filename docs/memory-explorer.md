@@ -2,7 +2,7 @@
 
 AI coding agents keep persistent memory and instruction files on disk — Claude Code's per-project memories, Codex's `AGENTS.md`, Gemini's `GEMINI.md`, and so on — with no single place to see or change them. The Memory window is that place: it finds every memory home on your Mac, shows what's inside, and lets you read, edit, create, and delete the files directly. Everything happens on your Mac; nothing is sent anywhere.
 
-Open it from the popover footer's **gear** menu (**Memory**) or by right-clicking the menu bar icon and choosing **Memory**. It opens in its own resizable window, remembers its size and position, and closes with the red close button, Esc, ⌘W, or ⌘Q — ⌘Q closes only this window; Runway keeps running in the menu bar. Like Settings, the window only exists while it's open.
+Open it from the popover footer's **gear** menu (**Memory**), with ⌘M while the popover is showing, or by right-clicking the menu bar icon and choosing **Memory**. It opens in its own resizable window, remembers its size and position, and closes with the red close button, Esc, ⌘W, or ⌘Q — ⌘Q closes only this window; Runway keeps running in the menu bar. Like Settings, the window only exists while it's open.
 
 Discovery is not tied to which providers you have turned on in Runway — if a harness left memory files on disk, they appear, even if you're logged out of that tool. Harnesses with nothing on disk simply don't show up. The **Refresh** button re-scans at any time. If a scan runs out of time or some folders can't be read, the sidebar says so instead of presenting a partial list as complete.
 
