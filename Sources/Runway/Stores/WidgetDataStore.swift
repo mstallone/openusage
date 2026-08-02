@@ -28,16 +28,13 @@ final class WidgetDataStore {
     /// produce a negative or wildly inflated provider timing. Tests inject exact ticks.
     private let monotonicNow: () -> TimeInterval
     private let slowProviderRefreshThreshold: TimeInterval
-    /// Hard ceiling on one provider's `refresh()`. A hung network call used to spin the footer's
-    /// refresh indicator forever (the in-flight guard also blocked every later attempt for that
-    /// provider). Injectable for tests; see `defaultProviderRefreshTimeout`.
-    private let providerRefreshTimeout: TimeInterval
-    /// 150s: above every provider's complete built-in request budget — the known worst paths are
-    /// Kimi's OAuth refresh (three 30s attempts + backoffs ≈ 93s, plus credential loading and the
-    /// usage request), Cursor's sequential probe (≈ 70s), and Codex's claim probe (≈ 45s) — so the
-    /// ceiling only ever cuts genuinely dead work, while a dead connection still surfaces as a
-    /// provider error card instead of an infinite spinner. When adding a provider whose internal
-    /// budgets approach this, raise it: the ceiling exists for hangs, not latency policing.
+    /// Hard ceiling on one provider's `refresh()`, resolved per provider
+    /// (`ProviderRuntime.refreshTimeout` — a hung network call used to spin the footer's refresh
+    /// indicator forever, and the in-flight guard then blocked every later attempt). This stored
+    /// value is a test-only global override; `nil` in production.
+    private let providerRefreshTimeoutOverride: TimeInterval?
+    /// The protocol extension's default ceiling — see `ProviderRuntime.refreshTimeout` for the
+    /// budget rationale and when a provider should override it.
     static let defaultProviderRefreshTimeout: TimeInterval = 150
     /// Providers whose timed-out refresh is still running detached (the deadline race resumed
     /// without awaiting it). Blocks new attempts for that provider so network/auth work never
@@ -152,7 +149,7 @@ final class WidgetDataStore {
         now: @escaping () -> Date = Date.init,
         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         slowProviderRefreshThreshold: TimeInterval = WidgetDataStore.defaultSlowProviderRefreshThreshold,
-        providerRefreshTimeout: TimeInterval = WidgetDataStore.defaultProviderRefreshTimeout,
+        providerRefreshTimeout: TimeInterval? = nil,
         notificationSettings: (@MainActor () -> NotificationSettingsStore)? = nil,
         postNotification: (@MainActor (String, String, String, String) async -> Bool)? = nil,
         providerIdentityKeys: [String: String] = [:],
@@ -160,8 +157,8 @@ final class WidgetDataStore {
         resolveDisplayName: (@MainActor (String) -> String?)? = nil
     ) {
         precondition(slowProviderRefreshThreshold >= 0)
-        precondition(providerRefreshTimeout > 0)
-        self.providerRefreshTimeout = providerRefreshTimeout
+        if let providerRefreshTimeout { precondition(providerRefreshTimeout > 0) }
+        self.providerRefreshTimeoutOverride = providerRefreshTimeout
         self.registry = registry
         self.providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.provider.id, $0) })
         self.cache = cache
@@ -366,6 +363,9 @@ final class WidgetDataStore {
         refreshingProviderIDs.insert(providerID)
         defer { refreshingProviderIDs.remove(providerID) }
         let start = monotonicNow()
+        // Each provider owns its ceiling (`ProviderRuntime.refreshTimeout`); the injected override
+        // exists for tests.
+        let refreshTimeout = providerRefreshTimeoutOverride ?? provider.refreshTimeout
         // Bound the refresh with a true deadline race. `provider` is not Sendable, so both racers
         // are isolation-inheriting `Task`s (not a task group) and the continuation is resumed by
         // whichever finishes first — the deadline never `await`s the provider, so even a provider
@@ -390,8 +390,8 @@ final class WidgetDataStore {
                 state.watchdog?.cancel()
                 continuation.resume(returning: snapshot)
             }
-            state.watchdog = Task { [providerRefreshTimeout] in
-                try? await Task.sleep(for: .seconds(providerRefreshTimeout))
+            state.watchdog = Task { [refreshTimeout] in
+                try? await Task.sleep(for: .seconds(refreshTimeout))
                 guard !state.resumed, !Task.isCancelled else { return }
                 state.resumed = true
                 refreshTask.cancel()
@@ -407,10 +407,10 @@ final class WidgetDataStore {
         // Timed out: the deadline won the race. Surface it like any failed refresh — error card +
         // backoff — and keep the last-good snapshot on screen.
         guard var snapshot = timedOutSnapshot else {
-            let message = "Refresh timed out after \(Int(providerRefreshTimeout))s"
+            let message = "Refresh timed out after \(Int(refreshTimeout))s"
             providerErrors[providerID] = message
             failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
-            AppLog.warn(.refresh, "\(providerID) timed out after \(Int(providerRefreshTimeout * 1000))ms; keeping last-good snapshot")
+            AppLog.warn(.refresh, "\(providerID) timed out after \(Int(refreshTimeout * 1000))ms; keeping last-good snapshot")
             if notifyStateChange { onLocalStateChanged?() }
             return .failed
         }
