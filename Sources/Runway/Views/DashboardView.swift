@@ -453,95 +453,49 @@ struct DashboardView: View {
             .environment(\.popoverIsVisible, transparency.popoverShown)
     }
 
-    /// Ties a learned delta to the provider's current expanded-section composition: the ordered
-    /// metric IDs the caret actually reveals (order matters — adjacent text rows condense) plus
-    /// quick-links presence. Customizing what sits behind the caret — or an account/plan change
-    /// shifting which metrics are applicable — changes the key, so a stale height can't retarget
-    /// the first toggle after either; the estimate covers that toggle and the measurement re-learns.
+    /// Resolves a provider's saved widgets against the live account and hands the deterministic
+    /// math to `ExpansionHeightEstimator` (where it is unit-tested): the view only supplies layout
+    /// descriptors, live row data, and plan applicability.
+    private func revealedExpansionRows(for group: ProviderGroup) -> [ExpansionHeightEstimator.Row] {
+        func rows(_ widgets: [PlacedWidget]) -> [ExpansionHeightEstimator.Row] {
+            widgets.compactMap { widget in
+                guard let descriptor = layout.descriptor(for: widget) else { return nil }
+                return ExpansionHeightEstimator.Row(
+                    id: descriptor.id,
+                    data: dataStore.data(for: descriptor),
+                    isApplicable: dataStore.isMetricApplicable(descriptor)
+                )
+            }
+        }
+        return ExpansionHeightEstimator.expandedSectionRows(
+            alwaysShown: rows(group.alwaysShownWidgets),
+            expanded: rows(group.expandedWidgets)
+        )
+    }
+
+    /// The learned-delta cache key for a provider's current revealed composition — see
+    /// `ExpansionHeightEstimator.deltaKey`.
     private func expansionDeltaKey(for providerID: String) -> String {
         guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
             return providerID
         }
-        let metricIDs = expandedSectionRows(for: group).map(\.id)
-        let links = group.provider.visibleLinks.isEmpty ? "" : "|links"
-        return "\(providerID)|\(metricIDs.joined(separator: ","))\(links)"
+        return ExpansionHeightEstimator.deltaKey(
+            providerID: providerID,
+            revealedRows: revealedExpansionRows(for: group),
+            hasLinks: !group.provider.visibleLinks.isEmpty
+        )
     }
 
-    /// First-toggle guess for a provider's expanded-section height: the rows its caret actually
-    /// reveals, each estimated by its rendered anatomy (see `estimatedRowHeight`), plus the
-    /// quick-links row when present. The real measurement replaces this within a couple of frames
-    /// (with a small same-spring correction) and is remembered exactly afterwards. A flat
-    /// rows × constant guess overshot text-heavy expansions by 40–60pt — the default On Demand set
-    /// (Usage Trend plus the Today/Yesterday/30 Days cluster) is mostly condensed ~20pt text rows,
-    /// not 36pt control rows — so a provider's first toggle each session sprang the panel visibly
-    /// past the real height (into the screen clamp on tall dashboards) before settling back.
+    /// First-toggle guess for a provider's expanded-section height — see
+    /// `ExpansionHeightEstimator.estimatedDelta`.
     private func estimatedExpansionDelta(for providerID: String) -> CGFloat {
         guard let group = layout.displayGroups.first(where: { $0.provider.id == providerID }) else {
             return 0
         }
-        let rows = expandedSectionRows(for: group).map(\.data)
-        // Per-side rule, matching the card: the expanded section condenses only within itself
-        // (never across the caret), and its first row keeps the full gap.
-        let condensed = WidgetData.condensedTextRowOffsets(in: rows)
-        let rowsHeight = rows.enumerated().reduce(CGFloat(0)) { sum, row in
-            sum + estimatedRowHeight(row.element, condensedTop: condensed.contains(row.offset))
-        }
-        return rowsHeight + estimatedLinksRowHeight(for: group)
-    }
-
-    /// The rows the provider's caret ACTUALLY reveals — mirroring the card's render path
-    /// (`WidgetGroupedListView.metricContainer`), which drops rows the account's plan makes
-    /// inapplicable and, when that filtering empties the Always Visible side, PROMOTES the
-    /// applicable On Demand rows above the caret (leaving the expansion links-only). Counting the
-    /// raw saved widgets instead made a provider with saved-but-inapplicable On Demand metrics —
-    /// a Copilot seat whose other-plan rows never render — estimate a several-rows-too-large
-    /// delta: the panel sprang past the real height, the settle sprang it back, and the learn
-    /// step's sanity check discarded the wildly-off value, so EVERY toggle replayed the
-    /// overshoot-and-correct wobble instead of just the first.
-    private func expandedSectionRows(for group: ProviderGroup) -> [(id: String, data: WidgetData)] {
-        func applicable(_ widgets: [PlacedWidget]) -> [(id: String, data: WidgetData)] {
-            widgets.compactMap { widget in
-                guard let descriptor = layout.descriptor(for: widget),
-                      dataStore.isMetricApplicable(descriptor) else { return nil }
-                return (descriptor.id, dataStore.data(for: descriptor))
-            }
-        }
-        guard !applicable(group.alwaysShownWidgets).isEmpty else { return [] }
-        return applicable(group.expandedWidgets)
-    }
-
-    /// One row's estimated rendered height, mirroring `WidgetRowView`'s anatomy branch by branch
-    /// (chart → sparkline, bounded → label/meter/reading, unbounded → one line plus optional
-    /// subtitle) on the compact density constants. Line heights are rounded-up approximations of
-    /// the resolved fonts; the settled measurement still corrects and learns the exact value, this
-    /// only has to land close enough that the first toggle's correction is invisible.
-    private func estimatedRowHeight(_ data: WidgetData, condensedTop: Bool) -> CGFloat {
-        let density = DensitySetting.compact
-        let labelLine: CGFloat = 15
-        let supportingLine: CGFloat = 14
-        if data.isChart, data.hasData {
-            // The sparkline lays its label BESIDE the bars (`UsageSparkline` is an HStack), so the
-            // row's content height is the taller of the two, not their sum.
-            return density.textRowPadding * 2 + max(labelLine, density.trendChartHeight)
-        }
-        if data.isBounded {
-            return density.barRowPadding * 2 + labelLine + density.rowInnerSpacing * 2
-                + density.meterHeight + supportingLine
-        }
-        let top = condensedTop ? density.condensedTextRowTopPadding : density.textRowPadding
-        let subtitle: CGFloat = data.unboundedSubtitle == nil ? 0 : supportingLine
-        return top + density.textRowPadding + labelLine + subtitle
-    }
-
-    /// The quick-links row's estimated height: small bordered buttons (~22pt) in up-to-three-across
-    /// rows with the grid gap, inside the row's text paddings (see `ProviderLinksView`).
-    private func estimatedLinksRowHeight(for group: ProviderGroup) -> CGFloat {
-        let linkCount = group.provider.visibleLinks.count
-        guard linkCount > 0 else { return 0 }
-        let density = DensitySetting.compact
-        let buttonRows = CGFloat((linkCount + 2) / 3)
-        return density.textRowPadding * 2 + buttonRows * 22
-            + (buttonRows - 1) * density.expandedGridSpacing
+        return ExpansionHeightEstimator.estimatedDelta(
+            revealedRows: revealedExpansionRows(for: group),
+            linkCount: group.provider.visibleLinks.count
+        )
     }
 
     /// The debounced tail of the measurement `onChange`: runs once the screen's content measurement
