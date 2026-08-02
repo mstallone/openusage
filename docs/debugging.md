@@ -79,6 +79,22 @@ short trail in the log file:
   snapshot exists yet` — the bounded login-shell capture failed on a launch with no persisted
   snapshot, so the named families were safely left unread rather than assembled from the wrong home.
 
+## Profile the UI
+
+`script/profile_ui.sh` measures popover performance end to end. It builds and stages the dev app,
+relaunches it with `RUNWAY_UI_PROFILE=1`, and an in-app driver walks the popover through scripted
+phases — a cold open, twelve warm open/close cycles, ten screen switches, ten caret toggles, a
+forced refresh with the panel open, and an idle soak. The script then prints per-phase stats from
+the log: open latency broken into layout and order-front, close cost, and main-queue stalls.
+
+Run it before and after any change that touches the popover render path, and compare. Reference
+numbers from this machine class (Apple Silicon, August 2026): warm open should stay in the low tens
+of milliseconds to first frame, and the warm-cycles phase should report few or no stalls.
+
+The `RUNWAY_UI_PROFILE` gate is inert in normal use — no timing code runs without it. The stall
+watchdog measures how long async main-actor work waits (main-queue latency), which is a proxy for
+responsiveness, not a literal dropped-frame count.
+
 ## Tips
 
 - **A provider shows an error.** Reproduce with `logs` running, then check that provider's page in

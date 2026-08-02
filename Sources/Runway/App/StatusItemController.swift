@@ -154,6 +154,14 @@ final class StatusItemController: NSObject {
         }
 
         AppLog.info(.statusItem, "Status item ready (button: \(self.statusItem.button != nil), shortcut: \(KeyboardShortcuts.getShortcut(for: .togglePopover)?.description ?? "none"))")
+
+        // UI profiling driver — inert unless RUNWAY_UI_PROFILE=1 (see UIProfiler / script/profile_ui.sh).
+        UIProfiler.startDriverIfEnabled(
+            open: { [weak self] in self?.showPopover() },
+            close: { [weak self] in self?.hidePanel() },
+            layout: container.layout,
+            dataStore: container.dataStore
+        )
     }
 
     // MARK: - Panel configuration
@@ -334,6 +342,7 @@ final class StatusItemController: NSObject {
     }
 
     private func showPanel() {
+        let openStart = CFAbsoluteTimeGetCurrent()
         guard let button = statusItem.button, let buttonWindow = button.window else {
             AppLog.error(.statusItem, "Cannot show panel: status item has no button")
             return
@@ -342,18 +351,34 @@ final class StatusItemController: NSObject {
         // Record the display before changing the visibility signal. That signal makes SwiftUI
         // immediately clamp the measured height; without the display anchor the clamp falls back to
         // the fixed opening guess, making large and small displays open at the same height.
-        heightController.prepareForOpening(below: buttonRectOnScreen)
+        UIProfiler.measure("open.prepareForOpening") {
+            heightController.prepareForOpening(below: buttonRectOnScreen)
+        }
         // Mark the popover on-screen before laying out, so the egg's animation loops mount their
         // `TimelineView` clocks in time for the first displayed frame. Read by the SwiftUI egg via
         // `\.popoverIsVisible`; a closed popover keeps the loops unmounted, so a left-on egg costs no CPU.
-        container.transparency.setPopoverShown(true)
+        UIProfiler.measure("open.setPopoverShown") {
+            container.transparency.setPopoverShown(true)
+        }
 
         // Lay the content out first so the panel opens at the right size (no first-frame flash).
-        hostingController.view.layoutSubtreeIfNeeded()
+        UIProfiler.measure("open.layoutSubtree") {
+            hostingController.view.layoutSubtreeIfNeeded()
+        }
 
         // `canBecomeKey` + `.nonactivatingPanel` makes this key without activating the app — no
         // activation race, so the dashboard receives keys on the first try.
-        panel.makeKeyAndOrderFront(nil)
+        UIProfiler.measure("open.orderFront") {
+            panel.makeKeyAndOrderFront(nil)
+        }
+        if UIProfiler.enabled {
+            UIProfiler.mark("open.syncTotal: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
+            // The first display pass (CA commit) happens when this runloop turn ends; a marker queued
+            // now runs right after it, so its delta ≈ click-to-first-frame latency.
+            DispatchQueue.main.async {
+                UIProfiler.mark("open.toFirstRunloopTurn: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - openStart) * 1000))ms")
+            }
+        }
         // Becoming key, AppKit auto-focuses the first control in the key-view loop (the first row's
         // Used/Left toggle) when system Keyboard Navigation is on — so the popover would open with a
         // stray focus ring nobody asked for. Drop it; keyboard nav still works (it rides a local key
@@ -364,6 +389,12 @@ final class StatusItemController: NSObject {
     }
 
     private func hidePanel() {
+        let closeStart = CFAbsoluteTimeGetCurrent()
+        defer {
+            if UIProfiler.enabled {
+                UIProfiler.mark("close.syncTotal: \(String(format: "%.2f", (CFAbsoluteTimeGetCurrent() - closeStart) * 1000))ms")
+            }
+        }
         // The popover's SwiftUI tree survives `orderOut`, so a tooltip the cursor was resting on gets
         // no hover-exit and would orphan on screen — clear it here, the one chokepoint every close hits.
         // The Usage Trend hover popover is on the same survives-orderOut footing, so dismiss it too.
