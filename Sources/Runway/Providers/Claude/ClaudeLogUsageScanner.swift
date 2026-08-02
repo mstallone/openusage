@@ -33,6 +33,15 @@ actor ClaudeLogUsageScanner {
     /// Same-account custom config dirs appended to the DEFAULT card's standard roots, so spend the
     /// user's own login produced in a side home still counts on its card.
     private let additionalRoots: [URL]
+    /// The last scan's dedup + aggregation, reused when nothing changed: same scan revision, same
+    /// discovered files, same window start, the same calendar configuration (day keys are
+    /// local-calendar), and the same (immutable) pricing snapshot instance. The pricing object is
+    /// retained so instance identity can't be recycled to a new snapshot.
+    private var lastAggregate: (
+        revision: Int, filesDigest: Int64, since: Date, calendarKey: String,
+        pricing: ModelPricing, scan: LogUsageScan
+    )?
+    private(set) var aggregateMemoHitsForTesting = 0
 
     /// One parsed usage line. Token buckets are pre-normalized into `TokenBreakdown`; dedup fields
     /// ride along so the global dedup pass can run over cached entries.
@@ -103,13 +112,27 @@ actor ClaudeLogUsageScanner {
         }
 
         // Entries come back concatenated in path-sorted file order, so dedup's keep-first is deterministic.
-        guard let entries = await scanner.items(
+        guard let output = await scanner.output(
             from: files,
             since: since,
             cacheIdentity: cacheIdentity,
             tailParser: Self.tailParser
         ), !Task.isCancelled else { return nil }
-        return Self.aggregate(entries: Self.dedup(entries), since: since, pricing: pricing)
+
+        // Most 5-minute refreshes find nothing changed; skip re-running dedup + aggregation over
+        // tens of thousands of unchanged cached entries.
+        let filesDigest = JSONLScanning.digest(of: files)
+        let calendarKey = DailyUsageAccumulator.calendarMemoKey
+        if let memo = lastAggregate,
+           memo.revision == output.revision, memo.filesDigest == filesDigest,
+           memo.since == since, memo.calendarKey == calendarKey, memo.pricing === pricing
+        {
+            aggregateMemoHitsForTesting += 1
+            return memo.scan
+        }
+        let scan = Self.aggregate(entries: Self.dedup(output.items), since: since, pricing: pricing)
+        lastAggregate = (output.revision, filesDigest, since, calendarKey, pricing, scan)
+        return scan
     }
 
     /// Stable source configuration identity rather than the discovered root list: Cowork adds session
@@ -484,21 +507,36 @@ actor ClaudeLogUsageScanner {
     /// unpriceable usage surfaces.
     static func aggregate(entries: [Entry], since: Date, pricing: ModelPricing) -> LogUsageScan {
         var accumulator = DailyUsageAccumulator()
+        var dayKeys = DailyUsageAccumulator.DayKeyCache()
+        // Model slugs repeat across tens of thousands of entries; trim and resolve rates once per
+        // raw slug instead of per entry. One trimmed slug for pricing, the unknown-model warning,
+        // and the breakdown key alike — diverging spellings would let the warning triangle and the
+        // hover panel disagree.
+        var modelContexts: [String: (trimmed: String?, rates: ModelRates?)] = [:]
 
         for entry in entries where entry.timestamp >= since {
-            let day = DailyUsageAccumulator.dayKey(from: entry.timestamp)
-            // One trimmed slug for pricing, the unknown-model warning, and the breakdown key alike —
-            // diverging spellings would let the warning triangle and the hover panel disagree.
-            let trimmedModel = entry.model?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-            let modelName = trimmedModel ?? ModelUsageEntry.unattributedModelName
+            let day = dayKeys.key(for: entry.timestamp)
+            let context: (trimmed: String?, rates: ModelRates?)
+            if let raw = entry.model {
+                if let cached = modelContexts[raw] {
+                    context = cached
+                } else {
+                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                    context = (trimmed, trimmed.flatMap { pricing.resolve(model: $0) })
+                    modelContexts[raw] = context
+                }
+            } else {
+                context = (nil, nil)
+            }
+            let modelName = context.trimmed ?? ModelUsageEntry.unattributedModelName
 
             let cost: Double
             if let carried = entry.costUSD {
                 cost = carried
-            } else if let model = trimmedModel, let estimated = pricing.estimatedCostDollars(model: model, tokens: entry.tokens) {
-                cost = estimated
+            } else if let rates = context.rates {
+                cost = rates.costDollars(for: entry.tokens)
             } else {
-                if let model = trimmedModel, entry.tokens.totalTokens > 0 {
+                if let model = context.trimmed, entry.tokens.totalTokens > 0 {
                     accumulator.addUnknownModel(day: day, model: model)
                 }
                 continue

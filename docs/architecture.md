@@ -48,9 +48,12 @@ way and doesn't need to know provider-specific details. To add one, see
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. Its per-file parsed events
 are cached by path, size, and modification time in a versioned Application Support store, partitioned by
 provider/home identity. Provider instances reading the same home share one scanner actor, which avoids
-duplicate parsing across cards; the disk store provides the reuse across process launches. Scans drop
-source-file records as their modification dates leave the requested history window, while aggregation and
-pricing still run on every refresh from the cached events.
+duplicate parsing across cards; the disk store provides the reuse across process launches. A session log
+that only grew since its last parse re-reads just the appended bytes and resumes from the recorded parser
+state. Scans drop source-file records as their modification dates leave the requested history window.
+Aggregation and pricing are memoized per scanner: when a refresh finds no log changes (and the pricing
+snapshot, history window, and calendar configuration are unchanged), the previous aggregation is reused
+instead of re-pricing every cached event.
 
 ## Stores
 

@@ -18,10 +18,20 @@ struct DailyUsageAccumulator {
 
     /// Local calendar day as `yyyy-MM-dd`. The single day-key contract shared by the accumulator,
     /// `SpendTileMapper`, and the Cursor CSV aggregation. `calendar` is injectable for tests; production
-    /// uses `.current`.
+    /// uses `.current`. Aggregation loops that key hundreds of thousands of entries should go through
+    /// `DayKeyCache` instead of calling this per entry.
     static func dayKey(from date: Date, calendar: Calendar = .current) -> String {
         let components = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        return pad(components.year ?? 0, to: 4) + "-" + pad(components.month ?? 0, to: 2)
+            + "-" + pad(components.day ?? 0, to: 2)
+    }
+
+    /// Zero-padded decimal without `String(format:)` — the CVarArg/NSString formatting path costs
+    /// microseconds per call, which used to dominate aggregation passes.
+    private static func pad(_ value: Int, to width: Int) -> String {
+        let digits = String(value)
+        guard digits.count < width else { return digits }
+        return String(repeating: "0", count: width - digits.count) + digits
     }
 
     /// Add a priced row's tokens + cost, attributed to `model` on `day`.
@@ -81,6 +91,45 @@ struct DailyUsageAccumulator {
             modelUsage: modelUsage,
             unknownModelsByDay: unknownModelsByDay
         )
+    }
+
+    /// Identity of the calendar configuration day keys derive from. Memoized aggregates include it
+    /// in their keys: a mid-session change of the user's preferred calendar or time zone changes
+    /// the emitted day keys without changing the logs, so the memo must miss and re-aggregate.
+    static var calendarMemoKey: String {
+        let calendar = Calendar.current
+        return "\(calendar.identifier)|\(calendar.timeZone.identifier)"
+    }
+
+    /// Memoized `dayKey` for aggregation loops: log entries cluster by day, so remembering the
+    /// current day's boundaries answers almost every lookup without `Calendar.dateComponents` or a
+    /// string build. One instance per pass; not thread-safe.
+    struct DayKeyCache {
+        private let calendar: Calendar
+        private var start = Date.distantFuture
+        private var end = Date.distantPast
+        private var cachedKey = ""
+
+        init(calendar: Calendar = .current) {
+            self.calendar = calendar
+        }
+
+        mutating func key(for date: Date) -> String {
+            if date >= start, date < end { return cachedKey }
+            // The day's actual interval, not startOfDay + 24h or +1 day: a DST transition can make
+            // the day 23/25 hours long, and where DST skips midnight, adding one day to startOfDay
+            // overshoots the next day's start (e.g. Africa/Cairo) and would misattribute usage.
+            if let interval = calendar.dateInterval(of: .day, for: date) {
+                start = interval.start
+                end = interval.end
+            } else {
+                // Degenerate calendar answer: cache nothing (empty range) rather than guess.
+                start = date
+                end = date
+            }
+            cachedKey = DailyUsageAccumulator.dayKey(from: date, calendar: calendar)
+            return cachedKey
+        }
     }
 
     private struct ModelAccumulator {

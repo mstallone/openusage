@@ -623,6 +623,39 @@ final class IncrementalJSONLScannerTests: XCTestCase {
         XCTAssertEqual(recorder.chunks, ["1\n2\n", "1\n2\n3", "1\n2\n3\n4\n"])
     }
 
+    func testOutputRevisionTracksCacheChanges() async throws {
+        let base = try makeDirectory("Revisions")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let url = base.appendingPathComponent("usage.jsonl")
+        try Data("1\n".utf8).write(to: url)
+        let recorder = ChunkRecorder()
+        let scanner = IncrementalJSONLScanner<Int>()
+
+        let firstOutput = await scanner.output(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        let first = try XCTUnwrap(firstOutput)
+        let unchangedOutput = await scanner.output(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        let unchanged = try XCTUnwrap(unchangedOutput)
+        XCTAssertEqual(unchanged.revision, first.revision, "a no-op scan must not bump the revision")
+
+        try append("2\n", to: url)
+        let grownOutput = await scanner.output(
+            from: [try discovered(url)], since: .distantPast, tailParser: recorder.parser
+        )
+        let grown = try XCTUnwrap(grownOutput)
+        XCTAssertGreaterThan(grown.revision, first.revision, "parsing appended bytes must bump the revision")
+
+        // A file aging out of the window drops from the cache — that must bump the revision too.
+        let futureSince = Date().addingTimeInterval(3600)
+        let agedOutput = await scanner.output(from: [], since: futureSince, tailParser: recorder.parser)
+        let aged = try XCTUnwrap(agedOutput)
+        XCTAssertGreaterThan(aged.revision, grown.revision)
+        XCTAssertTrue(aged.items.isEmpty)
+    }
+
     private func append(_ text: String, to url: URL) throws {
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }

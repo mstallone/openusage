@@ -416,6 +416,39 @@ final class ClaudeLogUsageScannerTests: XCTestCase {
         XCTAssertEqual(second.series.daily[0].costUSD ?? 0, 0.30, accuracy: 1e-9)
     }
 
+    func testScanReusesAggregationWhenNothingChanged() async throws {
+        let now = Date()
+        let timestamp = RunwayISO8601.string(from: now)
+        let home = try ClaudeLogFixture.makeHome(files: [
+            "project-a/session-1.jsonl": ClaudeLogFixture.usageLine(
+                timestamp: timestamp, input: 100, output: 50, costUSD: 0.25,
+                messageID: "msg-1", requestID: "req-1"
+            )
+        ])
+        let scanner = ClaudeLogFixture.scanner(home: home)
+
+        let firstScan = await scanner.scan(now: now, pricing: pricing)
+        let first = try XCTUnwrap(firstScan)
+        let secondScan = await scanner.scan(now: now, pricing: pricing)
+        let second = try XCTUnwrap(secondScan)
+        let hitsAfterUnchanged = await scanner.aggregateMemoHitsForTesting
+        XCTAssertEqual(hitsAfterUnchanged, 1, "an unchanged rescan must reuse the previous aggregation")
+        XCTAssertEqual(second.series.daily, first.series.daily)
+
+        // New usage must invalidate the memo and show up in the totals.
+        let newFile = home.appendingPathComponent("projects/project-a/session-2.jsonl")
+        try ClaudeLogFixture.usageLine(
+            timestamp: timestamp, input: 10, output: 5, costUSD: 0.05,
+            messageID: "msg-2", requestID: "req-2"
+        ).write(to: newFile, atomically: true, encoding: .utf8)
+
+        let thirdScan = await scanner.scan(now: now, pricing: pricing)
+        let third = try XCTUnwrap(thirdScan)
+        let hitsAfterChange = await scanner.aggregateMemoHitsForTesting
+        XCTAssertEqual(hitsAfterChange, 1)
+        XCTAssertEqual(third.series.daily[0].totalTokens, 165)
+    }
+
     func testScanDeduplicatesReplaysAcrossFiles() async throws {
         let now = Date()
         let timestamp = RunwayISO8601.string(from: now)

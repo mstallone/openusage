@@ -50,6 +50,7 @@ extension CodexLogUsageScanner {
         var seen: Set<EventKey> = []
         var accumulator = DailyUsageAccumulator()
         var pricingContexts: [PricingContextKey: PricingResolution] = [:]
+        var dayKeys = DailyUsageAccumulator.DayKeyCache()
 
         for event in events where event.timestamp >= since {
             let key = EventKey(
@@ -58,7 +59,7 @@ extension CodexLogUsageScanner {
             )
             guard seen.insert(key).inserted else { continue }
 
-            let day = DailyUsageAccumulator.dayKey(from: event.timestamp)
+            let day = dayKeys.key(for: event.timestamp)
             let contextKey = PricingContextKey(model: event.model, isFast: event.isFast)
             let resolution: PricingResolution
             if let cached = pricingContexts[contextKey] {

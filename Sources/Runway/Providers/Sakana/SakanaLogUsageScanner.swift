@@ -123,6 +123,7 @@ struct SakanaLogUsageScanner: Sendable {
 
         var seen: Set<EventKey> = []
         var accumulator = DailyUsageAccumulator()
+        var dayKeys = DailyUsageAccumulator.DayKeyCache()
         for event in events where event.timestamp >= since {
             let key = EventKey(
                 timestamp: event.timestamp,
@@ -139,7 +140,7 @@ struct SakanaLogUsageScanner: Sendable {
                 continue
             }
 
-            let day = DailyUsageAccumulator.dayKey(from: event.timestamp)
+            let day = dayKeys.key(for: event.timestamp)
             guard let cost = SakanaFuguPricing.estimatedCost(for: event) else {
                 if event.total > 0 {
                     accumulator.addUnknownModel(day: day, model: event.model)

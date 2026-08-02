@@ -108,11 +108,12 @@ struct OpenCodeUsageScanner: Sendable {
         // authoritative, so every row is "priced": feed it straight into the shared accumulator.
         let tileSince = JSONLScanning.sinceDate(daysBack: 30, now: now)
         var accumulator = DailyUsageAccumulator()
+        var dayKeys = DailyUsageAccumulator.DayKeyCache()
         for row in rows {
             let date = Date(timeIntervalSince1970: row.ms / 1000)
             guard date >= tileSince else { continue }
             accumulator.add(
-                day: DailyUsageAccumulator.dayKey(from: date),
+                day: dayKeys.key(for: date),
                 tokens: row.tokens, cost: row.cost, model: row.model
             )
         }
