@@ -280,8 +280,12 @@ jobs:
           git fetch --depth 1 origin main
           git show FETCH_HEAD:Sources/Runway/Resources/pricing_supplement.json > public/pricing_supplement.json
           git archive FETCH_HEAD website | tar -x -C public --strip-components=1
-          # Stamp the mock's footer with the version this run is releasing.
-          "$GITHUB_WORKSPACE/script/stamp_website_version.sh" public/index.html "${{ steps.meta.outputs.version }}"
+          # Stamp the mock's footer with the version this run is releasing. Take the helper from
+          # the fetched main revision, not the workspace: the workspace is pinned to the release
+          # tag, and re-dispatching a tag that predates the helper must still work.
+          git show FETCH_HEAD:script/stamp_website_version.sh > stamp_website_version.sh
+          bash stamp_website_version.sh public/index.html "${{ steps.meta.outputs.version }}"
+          rm stamp_website_version.sh
 
       - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
