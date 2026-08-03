@@ -205,6 +205,11 @@ final class MemoryWindowController: NSObject, NSWindowDelegate {
         window.isMovableByWindowBackground = true
         window.contentMinSize = Self.minimumContentSize
         window.contentViewController = hosting
+        // Assigning the content view controller resizes the window to the hosting view's fitting
+        // size (clamped to `contentMinSize` — 720×460, not the intended default). A saved frame
+        // hides that, but a first-ever open has none, so put the designed size back before the
+        // restore-or-center below decides the final frame.
+        window.setContentSize(Self.defaultContentSize)
         // Follows the app-wide theme override automatically, like every regular window (see
         // `SettingsWindowController.buildWindow`).
 

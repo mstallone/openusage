@@ -21,6 +21,10 @@ struct MemoryDocumentText: Sendable {
 final class MemoryStore {
     private(set) var sources: [MemorySource] = []
     private(set) var isLoading = false
+    /// False until the first `reload()` finishes. The window renders before its `.task` starts that
+    /// scan, so "no sources yet" means *scanning*, not *nothing found*, until this flips — the UI
+    /// must not flash the empty state on the way in.
+    private(set) var hasCompletedInitialScan = false
     private(set) var loadError: String?
     /// Non-fatal scan problems worth showing beside a non-empty inventory — a budget-truncated
     /// scan must not present partial homes as the complete picture.
@@ -68,7 +72,10 @@ final class MemoryStore {
     func reload() async {
         isLoading = true
         loadError = nil
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            hasCompletedInitialScan = true
+        }
 
         let scanner = scanner
         let (scannedWithoutRows, notes, scanMs) = await loadOffMainActor {
