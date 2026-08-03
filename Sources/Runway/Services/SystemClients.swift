@@ -514,14 +514,18 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     /// keychain, denied) reports `nil` ("unknown"), never a definite answer, so callers can pick
     /// their safe side.
     func genericPasswordExists(service: String) -> Bool? {
-        genericPasswordExists(service: service, account: nil)
+        coordinator.probe(service: service, account: nil) {
+            rawGenericPasswordExists(service: service, account: nil)
+        }
     }
 
     func genericPasswordExists(service: String, account: String) -> Bool? {
-        genericPasswordExists(service: service, account: account as String?)
+        coordinator.probe(service: service, account: account) {
+            rawGenericPasswordExists(service: service, account: account)
+        }
     }
 
-    private func genericPasswordExists(service: String, account: String?) -> Bool? {
+    private func rawGenericPasswordExists(service: String, account: String?) -> Bool? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -578,12 +582,16 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     }
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
-        attributeFingerprint(service: service, account: account)
+        coordinator.probe(service: service, account: account) {
+            attributeFingerprint(service: service, account: account)
+        }
     }
 
     /// Attributes-only fingerprint (no `kSecReturnData`, so the item's ACL is never evaluated):
     /// prompt-free, in-process, microseconds. `nil` means the item is absent or the probe failed —
-    /// the coordinator treats both as "cannot cache".
+    /// the coordinator treats both as "cannot cache". Deliberately RAW (not routed through
+    /// `coordinator.probe`): the coordinated read paths invoke it while already holding the item's
+    /// flight, which the probe gate would wait on.
     private func attributeFingerprint(service: String, account: String?) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
