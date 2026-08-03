@@ -1,22 +1,27 @@
-# Publishes the pricing supplement to the update feed whenever it changes on main.
+# Publishes the landing page to the update feed whenever it changes on main.
 #
-# Installed apps fetch https://mstallone.github.io/runway/pricing_supplement.json on their daily
-# pricing refresh, so merging a change to the supplement updates Cursor-native model pricing (auto,
-# composer-*, github_bugbot), fast multipliers, and model alias rules in the field within ~a day —
-# no tag, no release, no Sparkle involvement.
+# The site lives at https://mstallone.github.io/runway/ — the same GitHub Pages origin that serves
+# appcast.xml and pricing_supplement.json from the update-feed branch. This workflow publishes
+# website/ onto that branch with keep_files, so the page coexists with the feed files and a merge
+# to main is all it takes to update the live site.
 #
-# Concurrency: shares the content group with Publish Landing Page, deliberately NOT the release
-# workflow's update-feed-publish group — see landing-page.yml for the full rationale (a queued
-# content publish must never cancel a pending release build; content-on-content supersession is
-# lossless because both content publishers ship the same union of website/ and the supplement).
-name: Publish Pricing Supplement
+# Concurrency: this workflow and Publish Pricing Supplement share their own content group,
+# deliberately NOT the release workflow's update-feed-publish group. GitHub keeps only one PENDING
+# run per concurrency group — a newer queued run silently cancels an older pending one even with
+# cancel-in-progress: false — and sharing the release group would let a website merge cancel a
+# queued release build. Content-on-content supersession is lossless because both content
+# publishers ship the UNION of the main-branch content (website/ plus the validated supplement).
+# The cost of the separate groups is a seconds-wide window where a content push can race the
+# release job's appcast push; the loser fails loudly (non-fast-forward) and a rerun republishes
+# everything, and the release job also ships this union so the feed completes either way.
+name: Publish Landing Page
 
 on:
   push:
     branches: [main]
     paths:
-      - Sources/Runway/Resources/pricing_supplement.json
-      - .github/workflows/pricing-supplement.yml
+      - website/**
+      - .github/workflows/landing-page.yml
   workflow_dispatch:
 
 concurrency:
@@ -32,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Same gate as pricing-supplement.yml: never ship a supplement that fails validation.
       - name: Validate supplement JSON
         run: |
           python3 - << 'PY'
@@ -60,9 +66,14 @@ jobs:
           PY
 
       # Publish the FULL desired state of the branch instead of layering with keep_files: carry the
-      # live appcast forward, then lay down the current main-branch content. See landing-page.yml
-      # for why (deleted website files must disappear; transport failures must abort rather than
-      # publish without the live appcast).
+      # live appcast forward, then lay down the current main-branch content. Publishing the whole
+      # state is what lets a deleted or renamed website file actually disappear from the served
+      # site. The branch holds nothing but the appcast, the supplement, and the website.
+      #
+      # The appcast carry-forward must distinguish "branch does not exist yet" (bootstrap: publish
+      # without an appcast) from "could not reach origin" (abort: publishing without the live
+      # appcast would delete the Sparkle feed that shipped apps poll). git ls-remote --exit-code
+      # returns 2 when the ref is missing and other codes on transport failure.
       - name: Assemble update feed
         run: |
           mkdir -p public
