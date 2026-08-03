@@ -100,13 +100,14 @@ final class StatusItemController: NSObject {
         // work around `[weak self]` being unavailable before `super.init()`. The button is resolved
         // lazily at each apply, so a not-yet-configured button is harmless (same as before the split).
         self.imageUpdater = StatusItemImageUpdater(container: container) { presentation in
-            guard let button = statusItem.button else { return }
+            guard let button = statusItem.button else { return false }
             button.image = presentation.image
             toolTipCoordinator.apply(
                 presentation.toolTipRegions,
                 imageSize: presentation.image.size,
                 to: button
             )
+            return true
         }
 
         let hosting = NSHostingController(
@@ -330,8 +331,10 @@ final class StatusItemController: NSObject {
         statusItem.autosaveName = "\(name).rescue"
         statusItem.autosaveName = name
         UserDefaults.standard.removeObject(forKey: "NSStatusItem Preferred Position \(name).rescue")
-        // The bounce can rebuild the button; re-attach click handling and repaint the strip.
+        // The bounce can rebuild the button; re-attach click handling and repaint the strip. The
+        // rebuilt button lost its image, so force past the unchanged-presentation gate.
         configureStatusItem()
+        imageUpdater.forceNextApply()
         imageUpdater.update()
         AppLog.warn(
             .statusItem,
