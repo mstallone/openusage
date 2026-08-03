@@ -7,12 +7,10 @@ final class CursorAuthStoreTests: XCTestCase {
         let keychainToken = makeCursorJWT(sub: "auth0|keychain-user")
         let sqlite = FakeSQLite(values: [
             CursorAuthStore.accessTokenKey: sqliteToken,
-            CursorAuthStore.refreshTokenKey: "sqlite-refresh",
             CursorAuthStore.membershipTypeKey: "free"
         ])
         let keychain = ServiceKeychain(values: [
-            CursorAuthStore.keychainAccessTokenService: keychainToken,
-            CursorAuthStore.keychainRefreshTokenService: "keychain-refresh"
+            CursorAuthStore.keychainAccessTokenService: keychainToken
         ])
         let store = CursorAuthStore(sqlite: sqlite, keychain: keychain)
 
@@ -20,7 +18,6 @@ final class CursorAuthStoreTests: XCTestCase {
 
         XCTAssertEqual(state?.source, .keychain)
         XCTAssertEqual(state?.accessToken, keychainToken)
-        XCTAssertEqual(state?.refreshToken, "keychain-refresh")
     }
 
 }
@@ -370,14 +367,6 @@ final class CursorKeychainReadModeTests: XCTestCase {
         XCTAssertEqual(keychain.interactiveReads, 0, "keychain entries that cannot win must not prompt")
     }
 
-    func testHalfApprovedKeychainPairSurfacesTheRemainingApprovalNotAPartialLogin() {
-        // Access approved, refresh still protected: a partial login would work until the access
-        // token expires and then fail as a misleading "token expired". The remaining approval is
-        // the actionable state.
-        let store = CursorAuthStore(sqlite: EmptySQLite(), keychain: HalfApprovedCursorKeychain())
-
-        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
-    }
 }
 
 private final class EmptySQLite: SQLiteAccessing, @unchecked Sendable {
@@ -405,24 +394,6 @@ private final class UnavailableCursorKeychain: KeychainReading, @unchecked Senda
     func writeGenericPassword(service: String, value: String) throws {}
 }
 
-/// The access-token item is approved and readable; the refresh-token item exists but is protected.
-private final class HalfApprovedCursorKeychain: KeychainReading, @unchecked Sendable {
-    func readGenericPassword(service: String) throws -> String? {
-        XCTFail("the subprocess-style read path must not be used")
-        return nil
-    }
-
-    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
-        service == CursorAuthStore.keychainAccessTokenService ? .value("approved-access") : .unavailable
-    }
-
-    func genericPasswordExists(service: String) -> Bool? {
-        true
-    }
-
-    func writeGenericPassword(service: String, value: String) throws {}
-}
-
 @MainActor
 final class CursorReadOnlyCredentialTests: XCTestCase {
     func testExpiredTokenNeverRefreshesOrWritesAndReportsRenewal() async {
@@ -430,7 +401,6 @@ final class CursorReadOnlyCredentialTests: XCTestCase {
         // token-endpoint call, NO state-database or keychain write, and a renewal notice.
         let sqlite = FakeSQLite(values: [
             CursorAuthStore.accessTokenKey: makeCursorJWT(exp: 1),
-            CursorAuthStore.refreshTokenKey: "refresh-1",
             CursorAuthStore.membershipTypeKey: "pro"
         ])
         let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))

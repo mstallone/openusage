@@ -7,7 +7,6 @@ struct CursorAuthState: Hashable, Sendable {
     }
 
     var accessToken: String?
-    var refreshToken: String?
     var source: Source
 }
 
@@ -45,10 +44,8 @@ enum CursorCredentialLoad: Equatable, Sendable {
 struct CursorAuthStore: Sendable {
     static let stateDBPath = "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
     static let accessTokenKey = "cursorAuth/accessToken"
-    static let refreshTokenKey = "cursorAuth/refreshToken"
     static let membershipTypeKey = "cursorAuth/stripeMembershipType"
     static let keychainAccessTokenService = "cursor-access-token"
-    static let keychainRefreshTokenService = "cursor-refresh-token"
 
     var sqlite: SQLiteAccessing
     var keychain: KeychainReading
@@ -68,16 +65,14 @@ struct CursorAuthStore: Sendable {
     /// use the prompt-free form, and only a manual refresh (`allowKeychainInteraction`) may raise
     /// the approval prompt — once, for Runway itself.
     func loadCredentials(allowKeychainInteraction: Bool = false) -> CursorCredentialLoad {
-        // One `sqlite3` subprocess for all three keys instead of one per key — this runs on every
-        // Cursor refresh, and each spawn costs a process launch plus pipe drains.
-        let stateValues = readStateValues([
-            Self.accessTokenKey, Self.refreshTokenKey, Self.membershipTypeKey,
-        ])
+        // Only the access token matters: Runway is read-only, so the refresh-token entries (SQLite
+        // row and keychain item) are never read — a stale refresh credential must not influence
+        // source selection or block a usable access token behind a permission notice.
+        let stateValues = readStateValues([Self.accessTokenKey, Self.membershipTypeKey])
         let sqliteAccessToken = stateValues[Self.accessTokenKey]
-        let sqliteRefreshToken = stateValues[Self.refreshTokenKey]
         let sqliteMembershipType = stateValues[Self.membershipTypeKey]?.lowercased()
 
-        let hasSQLiteAuth = sqliteAccessToken != nil || sqliteRefreshToken != nil
+        let hasSQLiteAuth = sqliteAccessToken != nil
 
         // Prompt only when the keychain can actually win source selection: a paid SQLite login is
         // returned unconditionally below, so a manual refresh must not raise approval dialogs for
@@ -85,23 +80,13 @@ struct CursorAuthStore: Sendable {
         let keychainCanWin = !hasSQLiteAuth || sqliteMembershipType == "free"
         let allowKeychainPrompt = allowKeychainInteraction && keychainCanWin
         let accessRead = readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainPrompt)
-        // Keychain approval is per item, so the two entries can each ask once ("Always Allow" makes
-        // both permanent). But a DENIED access prompt must not immediately raise the refresh prompt
-        // too — the user just said no to this exact pair.
-        let refreshRead = readKeychainValue(
-            Self.keychainRefreshTokenService,
-            allowInteraction: allowKeychainPrompt && accessRead != .unavailable
-        )
         let keychainAccessToken = accessRead.trimmedValue
-        let keychainRefreshToken = refreshRead.trimmedValue
 
-        let hasKeychainAuth = keychainAccessToken != nil || keychainRefreshToken != nil
+        let hasKeychainAuth = keychainAccessToken != nil
 
-        // Whether an item is confirmed present but unreadable without approval — checked per item,
-        // so a half-approved pair (access approved, refresh denied) still counts. The existence
-        // probes are attributes-only and prompt-free.
+        // Whether the item is confirmed present but unreadable without approval. The existence
+        // probe is attributes-only and prompt-free.
         let anyProtected = protectedItemExists(accessRead, service: Self.keychainAccessTokenService)
-            || protectedItemExists(refreshRead, service: Self.keychainRefreshTokenService)
 
         if hasSQLiteAuth {
             if sqliteMembershipType == "free" {
@@ -118,35 +103,21 @@ struct CursorAuthStore: Sendable {
                 let keychainSubject = Self.tokenSubject(keychainAccessToken)
                 let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
                 if hasKeychainAuth, subjectsDiffer {
-                    return .state(CursorAuthState(
-                        accessToken: keychainAccessToken,
-                        refreshToken: keychainRefreshToken,
-                        source: .keychain
-                    ))
+                    return .state(CursorAuthState(accessToken: keychainAccessToken, source: .keychain))
                 }
             }
 
-            return .state(CursorAuthState(
-                accessToken: sqliteAccessToken,
-                refreshToken: sqliteRefreshToken,
-                source: .sqlite
-            ))
+            return .state(CursorAuthState(accessToken: sqliteAccessToken, source: .sqlite))
         }
 
-        // A protected item outranks a partial keychain pair: returning only the readable half would
-        // work until the access token expires and then fail as "token expired" instead of naming
-        // the remaining approval. It is also a real login footprint (`hasLocalCredentials` must see
-        // it); only a manual refresh may convert it into access.
+        // A protected item is a real login footprint (`hasLocalCredentials` must see it); only a
+        // manual refresh may convert it into access.
         if anyProtected {
             return .keychainPermissionRequired
         }
 
         if hasKeychainAuth {
-            return .state(CursorAuthState(
-                accessToken: keychainAccessToken,
-                refreshToken: keychainRefreshToken,
-                source: .keychain
-            ))
+            return .state(CursorAuthState(accessToken: keychainAccessToken, source: .keychain))
         }
         return .none
     }

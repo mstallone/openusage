@@ -890,10 +890,10 @@ final class CodexReadOnlyCredentialTests: XCTestCase {
 
         XCTAssertTrue(http.requests.isEmpty, "an expired token short-circuits before any network call")
         XCTAssertEqual(files.files["/tmp/codex/auth.json"], originalBlob, "auth.json is never written by Runway")
-        XCTAssertEqual(
-            errorBadge(snapshot),
-            CodexAuthError.loginRenewalRequired.localizedDescription
-        )
+        // Degraded like Claude: the renewal notice rides the header warning over the (still-local)
+        // spend tiles, not a hard error card.
+        XCTAssertNil(errorBadge(snapshot))
+        XCTAssertEqual(snapshot.warning, CodexAuthError.loginRenewalRequired.localizedDescription)
     }
 
     func testUsage401ReportsRenewalWithoutARetryOrTokenEndpointCall() async {
@@ -925,10 +925,8 @@ final class CodexReadOnlyCredentialTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(http.requests.count, 1, "no refresh-and-retry: one usage call, then renewal")
-        XCTAssertEqual(
-            errorBadge(snapshot),
-            CodexAuthError.loginRenewalRequired.localizedDescription
-        )
+        XCTAssertNil(errorBadge(snapshot))
+        XCTAssertEqual(snapshot.warning, CodexAuthError.loginRenewalRequired.localizedDescription)
     }
 
     func testManualRefreshStopsScanningHomesAfterADeniedPrompt() {

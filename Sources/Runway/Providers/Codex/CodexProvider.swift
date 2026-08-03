@@ -129,6 +129,16 @@ final class CodexProvider: ProviderRuntime {
         }
 
         if let lastFallbackError {
+            // A lapsed login degrades to the local spend tiles under a renewal notice — the data is
+            // still trustworthy and the fix belongs to the `codex` CLI — while other failures stay
+            // hard error cards.
+            if let authError = lastFallbackError as? CodexAuthError, authError == .loginRenewalRequired {
+                AppLog.info(LogTag.auth("codex"), "login needs renewal; serving local usage with a renewal notice")
+                return await localUsageSnapshot(
+                    mapped: CodexMappedUsage(plan: nil, lines: []),
+                    warning: authError.localizedDescription
+                )
+            }
             return ProviderSnapshot.error(provider: provider, error: lastFallbackError)
         }
         return ProviderSnapshot.error(provider: provider, error: CodexAuthError.notLoggedIn)
@@ -172,11 +182,14 @@ final class CodexProvider: ProviderRuntime {
             accessToken: currentToken,
             accountID: authState.auth.tokens?.accountID
         )
-        var mapped = try CodexUsageMapper.mapUsageResponse(response, resetCredits: resetCredits, now: now())
+        let mapped = try CodexUsageMapper.mapUsageResponse(response, resetCredits: resetCredits, now: now())
+        return await localUsageSnapshot(mapped: mapped, warning: nil)
+    }
 
-        // Local spend tiles, scanned natively from the Codex CLI's session rollouts and priced through
-        // the shared pricing store, merged with Codex usage that happened inside pi (attributed back
-        // here). Both scans run on their scanner actors, off the main actor.
+    /// Assembles the published snapshot from whatever live usage is available plus the always-local
+    /// spend tiles and trend (scanned from the Codex CLI's session rollouts and pi's logs).
+    private func localUsageSnapshot(mapped initialMapped: CodexMappedUsage, warning: String?) async -> ProviderSnapshot {
+        var mapped = initialMapped
         let pricing = await pricing()
         let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
         let piScan: LogUsageScan?
@@ -216,7 +229,8 @@ final class CodexProvider: ProviderRuntime {
             plan: mapped.plan,
             lines: mapped.lines,
             refreshedAt: now(),
-            usageHistory: usageHistory
+            usageHistory: usageHistory,
+            warning: warning
         )
     }
 
