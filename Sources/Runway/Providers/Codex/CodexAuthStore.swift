@@ -299,6 +299,10 @@ struct CodexAuthStore: Sendable {
 
     /// Reload exactly the source that produced a state. A standard store can know several homes, so
     /// repeating its normal precedence walk during token rotation could jump accounts.
+    /// Re-reads the state's own credential store mid-refresh (e.g. before a rotation). Keychain
+    /// reloads are prompt-free by construction: the item was already read to get here, so the
+    /// non-interactive in-process read serves it from the coordinator without touching securityd's
+    /// approval machinery again.
     func reload(_ state: CodexAuthState) -> CodexAuthState? {
         switch state.source {
         case .file(let path):
@@ -306,7 +310,7 @@ struct CodexAuthStore: Sendable {
         case .keychain:
             guard let account = state.keychainAccount,
                   let home = state.credentialHome,
-                  let value = try? keychain.readGenericPassword(
+                  case .value(let value) = keychain.readGenericPasswordWithoutUserInteraction(
                       service: Self.keychainService,
                       account: account
                   ),
@@ -410,7 +414,7 @@ struct CodexAuthStore: Sendable {
 
     private func loadLegacyKeychainAuth() -> CodexAuthState? {
         guard scope == .standard,
-              let value = try? keychain.readGenericPassword(service: Self.keychainService),
+              case .value(let value) = keychain.readGenericPasswordWithoutUserInteraction(service: Self.keychainService),
               let auth = Self.parseAuth(value),
               Self.hasTokenLikeAuth(auth)
         else {
