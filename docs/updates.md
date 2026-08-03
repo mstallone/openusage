@@ -23,7 +23,13 @@ before they install, so you always get a genuine, unmodified build.
 ## Where updates come from
 
 Runway publishes stable update builds on its GitHub releases and serves the list of available versions
-(the "appcast") from `https://mstallone.github.io/runway/appcast.xml`. Each download is
+(the "appcast") from `https://mstallone.github.io/runway/appcast.xml`. That address is deliberate:
+it is baked into every shipped app, and it can outlive the custom domain — if the domain is ever
+detached in the Pages settings, the address serves the feed directly again. Today it redirects to
+`https://runway.page/appcast.xml`, the same GitHub Pages site behind the
+[runway.page](https://runway.page/) landing page. While the redirect is in place the feed depends
+on the domain, so keep `runway.page` registered and working — and if it must ever go away, detach
+it in the Pages settings so the redirect stops; never leave a dead domain configured. Each download is
 signed two ways — Apple notarization plus Runway's own signature — and the app refuses anything that
 doesn't match. This is only available in the official signed release build, not in local developer
 builds.
