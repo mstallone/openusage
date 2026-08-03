@@ -42,6 +42,27 @@ final class WidgetDataStoreTests: XCTestCase {
         XCTAssertEqual(data.boundedSubtitle?.hasPrefix("Resets in "), true)
     }
 
+    func testOnlyInteractiveRefreshesMarkTheManualPromptContext() async {
+        // `force` bypasses caches (the CLI's one-shot reader, automated retry loops); only
+        // `interactive` — a user-attended GUI action — may unlock credential UI. A forced but
+        // unattended refresh must run providers with `isManual` false, so no provider can raise a
+        // Keychain approval prompt from the CLI helper or a background retry.
+        let provider = Provider(id: "ctx", displayName: "Ctx", icon: .providerMark("codex"))
+        let runtime = ManualContextCapturingRuntime(provider: provider)
+        let registry = WidgetRegistry(providers: [provider], descriptors: [])
+        let store = WidgetDataStore(
+            registry: registry,
+            providers: [runtime],
+            defaults: makeUserDefaults("manual-context")
+        )
+
+        await store.refresh(providerID: provider.id, force: true)
+        XCTAssertEqual(runtime.capturedIsManual, [false])
+
+        await store.refresh(providerID: provider.id, force: true, interactive: true)
+        XCTAssertEqual(runtime.capturedIsManual, [false, true])
+    }
+
     func testSoftWarningSurfacesOnHeaderWhilePartialDataStillLoads() async {
         // A *successful* snapshot carrying a `warning` (e.g. Claude's "Re-login for live usage" when the
         // login lacks user:profile) surfaces as the header's amber triangle via `warningMessage(for:)`,
@@ -931,5 +952,21 @@ final class WidgetDataStoreTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
+    }
+}
+
+@MainActor
+private final class ManualContextCapturingRuntime: ProviderRuntime {
+    let provider: Provider
+    let widgetDescriptors: [WidgetDescriptor] = []
+    var capturedIsManual: [Bool] = []
+
+    init(provider: Provider) {
+        self.provider = provider
+    }
+
+    func refresh() async -> ProviderSnapshot {
+        capturedIsManual.append(ProviderRefreshContext.isManual)
+        return ProviderSnapshot(providerID: provider.id, displayName: provider.displayName, lines: [])
     }
 }

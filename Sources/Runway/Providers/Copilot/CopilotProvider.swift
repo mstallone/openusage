@@ -129,7 +129,10 @@ final class CopilotProvider: ProviderRuntime {
                     billingTokens = [token]
                 } else {
                     billingTokens = await loadOffMainActor { [authStore] in
-                        authStore.loadBillingTokenCandidates(usageToken: token)
+                        authStore.loadBillingTokenCandidates(
+                            usageToken: token,
+                            allowKeychainInteraction: allowInteraction
+                        )
                     }
                 }
                 switch await orgBillingLookup(

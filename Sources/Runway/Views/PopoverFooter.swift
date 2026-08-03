@@ -136,7 +136,7 @@ struct PopoverFooter: View {
 
     private func refreshNow() {
         guard !isUpdating else { return }
-        Task { await dataStore.refreshAll(force: true) }
+        Task { await dataStore.refreshAll(force: true, interactive: true) }
     }
 
     private func countdownText(now: Date) -> String {

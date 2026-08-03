@@ -72,19 +72,47 @@ final class CopilotAuthStoreTests: XCTestCase {
 
     func testManualRefreshBillingLookupDoesNotPromptASecondTime() throws {
         // A keychain-only org-managed account on a manual refresh: the usage token's interactive
-        // read may prompt once; the billing candidate lookup must reuse a prompt-free read (served
-        // by the coordinator's cache in production), never a second interactive one.
+        // read may prompt once; the billing candidate lookup tries the prompt-free read first
+        // (served by the coordinator's cache in production), so it never raises a second prompt.
         let keychain = ReadModeTrackingKeychain(value: "gho_keychain")
         let store = CopilotAuthStore(files: FakeFiles(), keychain: keychain)
 
         let usageToken = try XCTUnwrap(store.loadCredentials(allowKeychainInteraction: true).token)
         XCTAssertEqual(keychain.interactiveReads, 1)
 
-        let billing = store.loadBillingTokenCandidates(usageToken: usageToken)
+        let billing = store.loadBillingTokenCandidates(usageToken: usageToken, allowKeychainInteraction: true)
 
         XCTAssertEqual(billing.map(\.value), ["gho_keychain"])
         XCTAssertEqual(keychain.interactiveReads, 1, "billing must not raise a second prompt")
         XCTAssertEqual(keychain.plainReads, 0)
+    }
+
+    func testManualRefreshCanApproveAProtectedBillingCredentialBehindAnEditorToken() {
+        // Editor config supplies the usage token, but the gh billing token sits in a Keychain item
+        // Runway isn't authorized for yet — billing is the FIRST Keychain touch. A manual refresh
+        // must be able to approve it (one interactive read); automatic refreshes must not prompt.
+        let keychain = UnauthorizedItemKeychain(approvedValue: "gho_billing")
+        let store = CopilotAuthStore(
+            files: FakeFiles([
+                CopilotAuthStore.editorAppsPath: #"{ "github.com": { "oauth_token": "gho_editor" } }"#
+            ]),
+            keychain: keychain
+        )
+        let usageToken = CopilotToken(value: "gho_editor")
+
+        // Automatic: the protected item is skipped silently; only the usage token remains.
+        XCTAssertEqual(
+            store.loadBillingTokenCandidates(usageToken: usageToken).map(\.value),
+            ["gho_editor"]
+        )
+        XCTAssertEqual(keychain.interactiveReads, 0)
+
+        // Manual: exactly one interactive read approves and returns the billing token.
+        XCTAssertEqual(
+            store.loadBillingTokenCandidates(usageToken: usageToken, allowKeychainInteraction: true).map(\.value),
+            ["gho_billing", "gho_editor"]
+        )
+        XCTAssertEqual(keychain.interactiveReads, 1)
     }
 
     func testEditorConfigWinsOverKeychain() {
@@ -2053,8 +2081,19 @@ final class ReadModeTrackingKeychain: KeychainReading, @unchecked Sendable {
 }
 
 /// A Keychain holding a gh item Runway isn't authorized to read prompt-free: non-interactive reads
-/// report `.unavailable` while the attributes-only existence probe still confirms the item.
+/// report `.unavailable` while the attributes-only existence probe still confirms the item. An
+/// interactive read models the user approving the prompt.
 private final class UnauthorizedItemKeychain: KeychainReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let approvedValue: String?
+    private var interactive = 0
+
+    init(approvedValue: String? = nil) {
+        self.approvedValue = approvedValue
+    }
+
+    var interactiveReads: Int { lock.withLock { interactive } }
+
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
         return nil
@@ -2066,6 +2105,16 @@ private final class UnauthorizedItemKeychain: KeychainReading, @unchecked Sendab
 
     func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
         .unavailable
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        return approvedValue
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String, account: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        return approvedValue
     }
 
     func genericPasswordExists(service: String) -> Bool? {
