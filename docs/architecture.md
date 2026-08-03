@@ -48,10 +48,13 @@ way and doesn't need to know provider-specific details. To add one, see
 ### Credential ownership
 
 The app that owns a credential is the only app allowed to change it. Provider credentials belong to
-the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …), and for
-Claude, Codex, Cursor, Copilot, and Antigravity Runway is strictly a reader: it never calls their
-OAuth token endpoints and never writes their credential stores, because two apps rotating the same
-login can trip the server's token-reuse protection and sign the user out. The type system enforces
+the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …), and Runway
+never writes any of their credential stores. For Claude, Codex, Cursor, and Copilot it never calls
+their OAuth token endpoints either, because two apps rotating the same login can trip the server's
+token-reuse protection and sign the user out. Antigravity is the one exception on the endpoint side:
+Runway refreshes its access token through Google OAuth, which is safe because Google refresh tokens
+do not rotate — and the result is cached in Runway's own file, never written back to Antigravity's
+Keychain item. The type system enforces
 this — every credential store holds the read-only `KeychainReading`, and no Keychain write API
 exists in the app outside `RunwayOwnedKeychainStore`, the store for Runway's own secrets (currently
 the iCloud-sync device id). When one of these providers' tokens lapses, the card shows a renewal

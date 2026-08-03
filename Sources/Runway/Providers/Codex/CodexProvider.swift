@@ -116,6 +116,13 @@ final class CodexProvider: ProviderRuntime {
         case .state(let keychainCandidate):
             do {
                 return try await probe(authState: keychainCandidate)
+            } catch let error as CodexAuthError where error == .loginRenewalRequired {
+                // Keyring logins degrade exactly like file logins: local tiles under the notice.
+                AppLog.info(LogTag.auth("codex"), "login needs renewal; serving local usage with a renewal notice")
+                return await localUsageSnapshot(
+                    mapped: CodexMappedUsage(plan: nil, lines: []),
+                    warning: error.localizedDescription
+                )
             } catch {
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
