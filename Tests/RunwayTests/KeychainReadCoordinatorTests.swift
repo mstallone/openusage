@@ -9,6 +9,15 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         var value: Int { lock.withLock { count } }
     }
 
+    private final class Locked<Value>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Value
+        init(_ value: Value) { self.value = value }
+        func withLock<T>(_ body: (inout Value) -> T) -> T {
+            lock.withLock { body(&value) }
+        }
+    }
+
     func testUnchangedFingerprintServesCachedValueWithoutASecondRead() {
         let coordinator = KeychainReadCoordinator()
         let reads = Counter()
@@ -127,6 +136,81 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(background, .unavailable)
         XCTAssertEqual(reads.value, 0, "a denied manual read must stop background retries until the item changes")
+    }
+
+    func testCachedValueIsRevalidatedAfterTheStalenessBound() {
+        // The Keychain modification date has one-second resolution, so a secret-only rotation in the
+        // same second leaves the fingerprint unchanged. The revalidation interval bounds how long
+        // such a collision can serve a stale secret.
+        let clock = Locked(Date(timeIntervalSince1970: 1_000_000))
+        let coordinator = KeychainReadCoordinator(
+            revalidateAfter: 60,
+            now: { clock.withLock { $0 } }
+        )
+        let reads = Counter()
+
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { reads.increment(); return .value("old") }
+        )
+        // Within the interval and unchanged: cache hit.
+        clock.withLock { $0 = $0.addingTimeInterval(30) }
+        XCTAssertEqual(
+            coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: { reads.increment(); return .value("collided") }
+            ),
+            .value("old")
+        )
+        // Past the interval: same fingerprint, but the secret is re-read.
+        clock.withLock { $0 = $0.addingTimeInterval(31) }
+        XCTAssertEqual(
+            coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: { reads.increment(); return .value("collided") }
+            ),
+            .value("collided")
+        )
+        XCTAssertEqual(reads.value, 2)
+    }
+
+    func testManualReadProceedsPastAStuckBackgroundReadAndItsResultIsNotClobbered() {
+        // Manual refresh is the documented recovery path; it must not hang behind the very wedge the
+        // coordinator exists to contain. Past the bounded wait it performs its own read — and when
+        // the wedged background read finally finishes, its stale outcome must not overwrite the
+        // fresher manual result.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        let readStarted = DispatchSemaphore(value: 0)
+        let releaseRead = DispatchSemaphore(value: 0)
+        let backgroundDone = expectation(description: "background read completed")
+
+        let background = Thread {
+            _ = coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: {
+                    readStarted.signal()
+                    releaseRead.wait()
+                    return .unavailable
+                }
+            )
+            backgroundDone.fulfill()
+        }
+        background.start()
+        XCTAssertEqual(readStarted.wait(timeout: .now() + 2), .success)
+
+        let manual = try? coordinator.interactiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { "approved-secret" }
+        )
+        XCTAssertEqual(manual, "approved-secret")
+
+        releaseRead.signal()
+        wait(for: [backgroundDone], timeout: 2)
+        let afterwards = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { .unavailable }
+        )
+        XCTAssertEqual(afterwards, .value("approved-secret"))
     }
 
     func testConcurrentReadersShareOneReadAndLateArriversDoNotPileOn() {
