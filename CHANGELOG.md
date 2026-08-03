@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.8.7
+
+### New Features
+- Add the Memory Explorer: browse and edit every agent harness's memory ([#70](https://github.com/mstallone/runway/pull/70)) by @mstallone
+- ⌘M opens the Memory Explorer ([#74](https://github.com/mstallone/runway/pull/74)) by @mstallone
+- Add the Runway landing page at mstallone.github.io/runway ([#76](https://github.com/mstallone/runway/pull/76)) by @mstallone
+- Add Claude Opus 5 pricing to the supplement ([#75](https://github.com/mstallone/runway/pull/75)) by @mstallone
+
+### Bug Fixes
+- Fix all build warnings except the deliberate SecKeychain deprecations ([#82](https://github.com/mstallone/runway/pull/82)) by @mstallone
+- Skip re-applying unchanged menu-bar presentations to AppKit ([#81](https://github.com/mstallone/runway/pull/81)) by @mstallone
+- Fix Memory Explorer cold-load layout shifts ([#80](https://github.com/mstallone/runway/pull/80)) by @mstallone
+- Stop showing "~100% left at reset" on untouched meters ([#77](https://github.com/mstallone/runway/pull/77)) by @mstallone
+- ⌘Q on the Settings or Memory window closes the window, not the app ([#73](https://github.com/mstallone/runway/pull/73)) by @mstallone
+- Fade sidebar rows under the Memory window's traffic lights ([#72](https://github.com/mstallone/runway/pull/72)) by @mstallone
+- Memory Explorer: fix the eight review findings left unanswered on PR #70 ([#71](https://github.com/mstallone/runway/pull/71)) by @mstallone
+
+### Chores
+- Stamp the landing page footer with the current release version ([#79](https://github.com/mstallone/runway/pull/79)) by @mstallone
+- Point the site's canonical URLs at runway.page and document the domain ([#78](https://github.com/mstallone/runway/pull/78)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.6...v0.8.7](https://github.com/mstallone/runway/compare/v0.8.6...v0.8.7)
+
+- [552f993](https://github.com/mstallone/runway/commit/552f9933f09fd27e8c9fd423c8da39e78ce2ec61) Fix all build warnings except the deliberate SecKeychain deprecations (#82) by @mstallone
+- [e05e07b](https://github.com/mstallone/runway/commit/e05e07b67d8a272e9d99b9a0e49bee737a0d2950) Skip re-applying unchanged menu-bar presentations to AppKit (#81) by @mstallone
+- [8bcbb1b](https://github.com/mstallone/runway/commit/8bcbb1bf4ec74f519cbddfcd44b2feb5575314cc) Fix Memory Explorer cold-load layout shifts (#80) by @mstallone
+- [060d2b0](https://github.com/mstallone/runway/commit/060d2b04f33319bac4706e8e83e408a3d43eb899) Stamp the landing page footer with the current release version (#79) by @mstallone
+- [0454607](https://github.com/mstallone/runway/commit/0454607ba651f985c8fed4bfb8db670d3b31e369) Point the site's canonical URLs at runway.page and document the domain (#78) by @mstallone
+- [c2a2e0a](https://github.com/mstallone/runway/commit/c2a2e0a675a56531968831f219de9b132372d4e4) Stop showing "~100% left at reset" on untouched meters (#77) by @mstallone
+- [15ead90](https://github.com/mstallone/runway/commit/15ead903ca03b8b75132a2b5aae084a67b233ee6) Add the Runway landing page at mstallone.github.io/runway (#76) by @mstallone
+- [4c82fe7](https://github.com/mstallone/runway/commit/4c82fe799a1590fc7520c74d262bcd9a773e96a4) Add Claude Opus 5 pricing to the supplement (#75) by @mstallone
+- [cc1a5f2](https://github.com/mstallone/runway/commit/cc1a5f2d4d358baff72208081703c89a02c77228) ⌘M opens the Memory Explorer (#74) by @mstallone
+- [a301688](https://github.com/mstallone/runway/commit/a301688ea096a179b0a075ae0995ecffc2e60992) ⌘Q on the Settings or Memory window closes the window, not the app (#73) by @mstallone
+- [396ed77](https://github.com/mstallone/runway/commit/396ed77cf6a20f6babef66117ea2f77d87553be0) Fade sidebar rows under the Memory window's traffic lights (#72) by @mstallone
+- [6308098](https://github.com/mstallone/runway/commit/63080983e29837b1f0b1fa41b207a774b21bf030) Memory Explorer: fix the eight review findings left unanswered on PR #70 (#71) by @mstallone
+- [7de55a0](https://github.com/mstallone/runway/commit/7de55a0577fbff3e2dfddb1e9ddd4d8dec4012a0) Add the Memory Explorer: browse and edit every agent harness's memory (#70) by @mstallone
+
 ## v0.8.6
 
 ### Bug Fixes
