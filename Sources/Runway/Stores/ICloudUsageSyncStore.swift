@@ -63,10 +63,14 @@ struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
     /// One-time recovery from the v1 item the `/usr/bin/security` subprocess created, for upgrades
     /// where the saved preference is also gone (a preferences reset). Copying it keeps this device's
     /// iCloud record instead of minting a duplicate. The subprocess read can raise a Keychain prompt
-    /// when the login keychain is locked, which is why `resolveDeviceID` reaches here last. The v1
-    /// item's ACL belongs to the subprocess, so Runway cannot silently delete it; it stays behind,
-    /// orphaned and never read again once the v2 item exists.
+    /// when the login keychain is locked, which is why `resolveDeviceID` reaches here last — and why
+    /// the prompt-free existence probe gates it: a fresh install has no v1 item and must not spawn
+    /// the subprocess at all. The v1 item's ACL belongs to the subprocess, so Runway cannot silently
+    /// delete it; it stays behind, orphaned and never read again once the v2 item exists.
     func migrateLegacyDeviceID() throws -> String? {
+        guard legacyKeychain.genericPasswordExists(service: legacyService) == true else {
+            return nil
+        }
         guard let legacy = try legacyKeychain.readGenericPasswordForCurrentUser(service: legacyService) else {
             return nil
         }
