@@ -79,7 +79,6 @@ struct PopoverKeyReader: NSViewRepresentable {
         private static let escapeKeyCode: UInt16 = 53
         private static let returnKeyCode: UInt16 = 36
         private static let commaKeyCode: UInt16 = 43
-        private static let mKeyCode: UInt16 = 46
         private static let zKeyCode: UInt16 = 6
 
         override func viewDidMoveToWindow() {
@@ -91,16 +90,20 @@ struct PopoverKeyReader: NSViewRepresentable {
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 let keyCode = event.keyCode
+                // ⌘M is matched by the character the key produces, not the ANSI key code: on layouts
+                // like AZERTY the physical ANSI-M key types "," while M lives elsewhere, so a key-code
+                // match would both miss the real ⌘M and steal ⌘, (lowercased so caps lock can't defeat
+                // it; Shift is already excluded by the modifier check below).
+                let isMemory = event.charactersIgnoringModifiers?.lowercased() == "m"
                 guard keyCode == MonitorView.escapeKeyCode
                     || keyCode == MonitorView.returnKeyCode
                     || keyCode == MonitorView.commaKeyCode
-                    || keyCode == MonitorView.mKeyCode
-                    || keyCode == MonitorView.zKeyCode else {
+                    || keyCode == MonitorView.zKeyCode
+                    || isMemory else {
                     return event
                 }
                 let isReturn = keyCode == MonitorView.returnKeyCode
                 let isComma = keyCode == MonitorView.commaKeyCode
-                let isMemory = keyCode == MonitorView.mKeyCode
                 let isUndo = keyCode == MonitorView.zKeyCode
                 // Only bare Return navigates; ⌘⏎, ⌥⏎, etc. belong to other controls.
                 if isReturn,
