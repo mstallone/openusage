@@ -70,6 +70,24 @@ final class CopilotAuthStoreTests: XCTestCase {
         XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
     }
 
+    func testProtectedScopedItemNeverBroadensToAnotherAccountsToken() {
+        // hosts.yml names the intended account, whose Keychain item is protected — but another
+        // (authorized) gh:github.com item exists for a different account. The load must report
+        // permission-required for the intended item, never silently pick up the other account's
+        // token through the account-less lookup.
+        let store = CopilotAuthStore(
+            files: FakeFiles([
+                CopilotAuthStore.ghHostsPath: """
+                github.com:
+                    user: octocat
+                """
+            ]),
+            keychain: CrossAccountKeychain(otherAccountsValue: "gho_other_account")
+        )
+
+        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+    }
+
     func testManualRefreshBillingLookupDoesNotPromptASecondTime() throws {
         // A keychain-only org-managed account on a manual refresh: the usage token's interactive
         // read may prompt once; the billing candidate lookup tries the prompt-free read first
@@ -2118,6 +2136,38 @@ private final class UnauthorizedItemKeychain: KeychainReading, @unchecked Sendab
     }
 
     func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+}
+
+/// Models two `gh:github.com` items: the intended account's item is protected, while a different
+/// account's item would be readable through the account-less lookup. Tests use it to prove the load
+/// never crosses accounts.
+private final class CrossAccountKeychain: KeychainReading, @unchecked Sendable {
+    private let otherAccountsValue: String
+
+    init(otherAccountsValue: String) {
+        self.otherAccountsValue = otherAccountsValue
+    }
+
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .value(otherAccountsValue)
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
         true
     }
 }

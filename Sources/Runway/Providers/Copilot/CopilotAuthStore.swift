@@ -131,34 +131,35 @@ struct CopilotAuthStore: Sendable {
     func loadFromGhKeychain(allowKeychainInteraction: Bool = false) -> CopilotCredentialLoad {
         let account = ghUsername()
         guard allowKeychainInteraction else {
-            // Account-scoped first, and the broad service-only lookup only when it is actually
-            // needed — a successful scoped read must not also read (and cache) an arbitrary
-            // `gh:github.com` secret or wait on a wedged broad query.
-            var unavailable = false
-            var reads = [{ keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService) }]
             if let account {
-                reads.insert(
-                    { keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService, account: account) },
-                    at: 0
-                )
-            }
-            for read in reads {
-                switch read() {
+                switch keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService, account: account) {
                 case .value(let raw):
                     return credentialLoad(fromKeychainRaw: raw)
-                case .missing:
-                    continue
                 case .unavailable:
-                    unavailable = true
+                    // The intended account's item is protected (or the keychain can't be checked).
+                    // Never broaden to the account-less query from here — with several
+                    // `gh:github.com` items it could silently select another account's token.
+                    // Broadening is allowed only when the scoped item provably does not exist.
+                    if keychain.genericPasswordExists(service: Self.ghKeychainService, account: account) != false {
+                        return .keychainPermissionRequired
+                    }
+                case .missing:
+                    break
                 }
             }
-            // An existing-but-unreadable item is a real login footprint (`hasLocalCredentials` must
-            // see it); only a manual refresh may convert it into access. The existence probe is
-            // attributes-only and prompt-free.
-            if unavailable, keychain.genericPasswordExists(service: Self.ghKeychainService) == true {
-                return .keychainPermissionRequired
+            switch keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService) {
+            case .value(let raw):
+                return credentialLoad(fromKeychainRaw: raw)
+            case .missing:
+                return .none
+            case .unavailable:
+                // An existing-but-unreadable item is a real login footprint (`hasLocalCredentials`
+                // must see it); only a manual refresh may convert it into access. The existence
+                // probe is attributes-only and prompt-free.
+                return keychain.genericPasswordExists(service: Self.ghKeychainService) == true
+                    ? .keychainPermissionRequired
+                    : .none
             }
-            return .none
         }
         // Manual refresh: may raise the approval prompt, once, for Runway itself. A denial is
         // reported as still-needing-permission and deliberately NOT retried through the broader
