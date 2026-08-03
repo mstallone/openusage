@@ -8,6 +8,20 @@ import SwiftUI
 /// multiple of the authored card width) because `ImageRenderer.scale` is not honored in headless CI.
 @MainActor
 final class ShareCardRendererTests: XCTestCase {
+    private var alertSounds = 0
+
+    override func setUp() async throws {
+        // The failure paths below play the audible failure cue in production. Automated runs must
+        // stay silent (no system alert sound from a test box), so swap the cue for a counter — which
+        // also lets the failure test assert the cue actually fires.
+        alertSounds = 0
+        ShareCardRenderer.playAlertSound = { [weak self] in self?.alertSounds += 1 }
+    }
+
+    override func tearDown() async throws {
+        ShareCardRenderer.playAlertSound = { NSSound.beep() }
+    }
+
     private func sampleCard() -> ShareCardView {
         let provider = MockData.claude
         let rows = MockData.descriptors(for: provider.id).map { $0.sample }
@@ -107,6 +121,7 @@ final class ShareCardRendererTests: XCTestCase {
         let empty = NSImage()
         XCTAssertFalse(ShareCardRenderer.copyToPasteboard(empty),
                        "a failed encode must report false, not silently return success")
+        XCTAssertEqual(alertSounds, 1, "a failed copy plays the audible failure cue exactly once")
     }
 
     /// `copyToPasteboard` reports `true` and actually writes PNG data onto the pasteboard for a valid
