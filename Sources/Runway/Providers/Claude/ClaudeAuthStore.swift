@@ -194,7 +194,7 @@ struct ClaudeAuthStore: Sendable {
 
     var environment: EnvironmentReading
     var files: TextFileAccessing
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
     var desktop: ClaudeDesktopAuthStore
     var now: @Sendable () -> Date
     let scope: ClaudeCredentialScope
@@ -207,7 +207,7 @@ struct ClaudeAuthStore: Sendable {
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         files: TextFileAccessing = LocalTextFileAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        keychain: KeychainReading = SecurityKeychainAccessor(),
         desktop: ClaudeDesktopAuthStore? = nil,
         scope: ClaudeCredentialScope = .standard,
         allowsDesktopFallback: Bool = true,

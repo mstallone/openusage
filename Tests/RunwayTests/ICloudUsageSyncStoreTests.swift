@@ -365,13 +365,15 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
     }
 
     func testKeychainIdentityIsScopedToDevelopmentAndProductionBundles() throws {
-        let keychain = ServiceKeychain()
+        let owned = InMemoryOwnedSecretStore()
         let development = KeychainICloudDeviceIDStore(
-            keychain: keychain,
+            ownedStore: owned,
+            legacyKeychain: ServiceKeychain(),
             bundleIdentifier: "com.mattstallone.runway.dev"
         )
         let production = KeychainICloudDeviceIDStore(
-            keychain: keychain,
+            ownedStore: owned,
+            legacyKeychain: ServiceKeychain(),
             bundleIdentifier: "com.mattstallone.runway"
         )
 
@@ -380,6 +382,39 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
 
         XCTAssertEqual(try development.readDeviceID(), "development-id")
         XCTAssertEqual(try production.readDeviceID(), "production-id")
+    }
+
+    func testLegacyDeviceIDMigratesIntoTheRunwayOwnedItemOnce() throws {
+        // Existing installs keep their iCloud device record: the v1 item the subprocess created is
+        // copied into the Runway-owned v2 item on first read, and the legacy item is never consulted
+        // again once the v2 item exists.
+        let owned = InMemoryOwnedSecretStore()
+        let legacy = ServiceKeychain()
+        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "legacy-device-id"
+        let store = KeychainICloudDeviceIDStore(
+            ownedStore: owned,
+            legacyKeychain: legacy,
+            bundleIdentifier: "com.mattstallone.runway"
+        )
+
+        XCTAssertEqual(try store.readDeviceID(), "legacy-device-id")
+        XCTAssertEqual(
+            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
+            "legacy-device-id"
+        )
+
+        // The legacy item changing afterwards is irrelevant — v2 is authoritative.
+        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "changed-later"
+        XCTAssertEqual(try store.readDeviceID(), "legacy-device-id")
+    }
+
+    func testMissingDeviceIDReadsNilWithoutInventingAnIdentity() throws {
+        let store = KeychainICloudDeviceIDStore(
+            ownedStore: InMemoryOwnedSecretStore(),
+            legacyKeychain: ServiceKeychain(),
+            bundleIdentifier: "com.mattstallone.runway"
+        )
+        XCTAssertNil(try store.readDeviceID())
     }
 
     private func makeDataStore(_ defaults: UserDefaults) -> WidgetDataStore {
@@ -428,6 +463,18 @@ private final class MemoryDeviceIDStore: ICloudDeviceIDStoring, @unchecked Senda
 
     func writeDeviceID(_ deviceID: String) throws {
         self.deviceID = deviceID
+    }
+}
+
+private final class InMemoryOwnedSecretStore: RunwayOwnedSecretStoring, @unchecked Sendable {
+    var secrets: [String: String] = [:]
+
+    func read(service: String) throws -> String? {
+        secrets[service]
+    }
+
+    func write(service: String, value: String) throws {
+        secrets[service] = value
     }
 }
 

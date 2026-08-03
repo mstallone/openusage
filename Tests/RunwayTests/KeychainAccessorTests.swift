@@ -193,4 +193,29 @@ final class KeychainAccessorTests: XCTestCase {
         )
     }
 
+    func testRunwayOwnedStoreRoundTripsAndUpdatesInProcess() throws {
+        // Runway-owned items are created and read entirely in-process: no subprocess, no secret in
+        // an argument list, and the creating process's ACL keeps every read silent.
+        let store = RunwayOwnedKeychainStore()
+        let service = "RunwayTests.owned.\(UUID().uuidString)"
+        defer {
+            _ = SecItemDelete([
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+            ] as CFDictionary)
+        }
+
+        XCTAssertNil(try store.read(service: service))
+        do {
+            try store.write(service: service, value: "first-value")
+        } catch {
+            throw XCTSkip("cannot create a login-keychain item in this environment (\(error))")
+        }
+        XCTAssertEqual(try store.read(service: service), "first-value")
+
+        // A second write updates the existing item in place.
+        try store.write(service: service, value: "second-value")
+        XCTAssertEqual(try store.read(service: service), "second-value")
+    }
+
 }

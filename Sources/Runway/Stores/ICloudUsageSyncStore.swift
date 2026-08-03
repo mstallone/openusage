@@ -26,22 +26,38 @@ protocol ICloudDeviceIDStoring: Sendable {
 
 struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
     private let service: String
-    private let keychain: any KeychainAccessing
+    private let legacyService: String
+    private let ownedStore: any RunwayOwnedSecretStoring
+    private let legacyKeychain: any KeychainReading
 
     init(
-        keychain: any KeychainAccessing = SecurityKeychainAccessor(),
+        ownedStore: any RunwayOwnedSecretStoring = RunwayOwnedKeychainStore(),
+        legacyKeychain: any KeychainReading = SecurityKeychainAccessor(),
         bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.mattstallone.runway"
     ) {
-        self.keychain = keychain
-        self.service = "\(bundleIdentifier).icloud-sync-device-id.v1"
+        self.ownedStore = ownedStore
+        self.legacyKeychain = legacyKeychain
+        self.service = "\(bundleIdentifier).icloud-sync-device-id.v2"
+        self.legacyService = "\(bundleIdentifier).icloud-sync-device-id.v1"
     }
 
     func readDeviceID() throws -> String? {
-        try keychain.readGenericPasswordForCurrentUser(service: service)
+        if let deviceID = try ownedStore.read(service: service) {
+            return deviceID
+        }
+        // One-time migration from the v1 item the `/usr/bin/security` subprocess created. Copying it
+        // keeps this device's iCloud record instead of minting a duplicate. The v1 item's ACL belongs
+        // to the subprocess, so Runway cannot silently delete it; it stays behind, orphaned and
+        // never read again once the v2 item exists.
+        guard let legacy = try legacyKeychain.readGenericPasswordForCurrentUser(service: legacyService) else {
+            return nil
+        }
+        try ownedStore.write(service: service, value: legacy)
+        return legacy
     }
 
     func writeDeviceID(_ deviceID: String) throws {
-        try keychain.writeGenericPasswordForCurrentUser(service: service, value: deviceID)
+        try ownedStore.write(service: service, value: deviceID)
     }
 }
 

@@ -45,6 +45,17 @@ Because every provider produces the same normalized `MetricLine` shapes, the UI 
 way and doesn't need to know provider-specific details. To add one, see
 [Adding a provider](adding-a-provider.md).
 
+### Credential ownership
+
+The app that owns a credential is the only app allowed to change it. Provider credentials belong to
+the provider's own tool (Claude Code, GitHub CLI, …), so the stores that read them hold a read-only
+Keychain type (`KeychainReading`) — a write simply does not compile there. Claude is fully read-only:
+Runway never refreshes its OAuth tokens and never writes its credential stores, because two apps
+rotating the same login can trip the server's token-reuse protection and sign the user out. The only
+secrets Runway writes are its own (`RunwayOwnedKeychainStore`, currently the iCloud-sync device id),
+kept under a Runway-specific service and account. Codex and Cursor still rotate their providers'
+tokens; moving them to the same read-only model is planned follow-up work.
+
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,
 partitioned by provider/home identity. Provider instances that read the same home share one scanner
