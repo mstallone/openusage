@@ -216,6 +216,13 @@ struct DashboardView: View {
                         SettingsWindowLink.open()
                         return true
                     },
+                    // ⌘M opens the standalone Memory window — same arrangement as ⌘, above: the
+                    // always-on monitor fires from every screen, and the gear options menu's Memory
+                    // item carries ⌘M only as a label.
+                    onMemory: {
+                        MemoryWindowLink.open()
+                        return true
+                    },
                     // ⌘Z walks back the last customization step (remove/add, reorder, pin/unpin, caret
                     // move) — app-wide, since Hide and Pin happen via the dashboard's context menus too,
                     // not only in Customize. Always consumed here: by the time the monitor calls this it

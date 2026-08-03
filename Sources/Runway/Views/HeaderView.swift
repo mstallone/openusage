@@ -19,10 +19,10 @@ import SwiftUI
 /// carries its own top-leading back button (`PopoverTopBar`) to return home, and Settings lives in
 /// its own window.
 ///
-/// Shortcuts survive: ⌘, (Settings window), ⏎ (Customize) and Esc are handled by the always-on
-/// `PopoverKeyReader` monitor, so they fire from every screen. The menu items only carry their ⌘
-/// key-equivalents as labels and fire while the menu is open, so the monitor and the items never
-/// double-fire. ⌘Q (Quit) is unowned elsewhere, so it rides its menu item directly.
+/// Shortcuts survive: ⌘, (Settings window), ⌘M (Memory window), ⏎ (Customize) and Esc are handled
+/// by the always-on `PopoverKeyReader` monitor, so they fire from every screen. The menu items only
+/// carry their ⌘ key-equivalents as labels and fire while the menu is open, so the monitor and the
+/// items never double-fire. ⌘Q (Quit) is unowned elsewhere, so it rides its menu item directly.
 struct HeaderView: View {
     @Environment(AppContainer.self) private var container
     @Environment(LayoutStore.self) private var layout
@@ -86,10 +86,10 @@ struct HeaderView: View {
     /// which opens the standalone Settings window (closing the popover on the way, via the installed
     /// handler). `autoenablesItems` has no SwiftUI equivalent, so the Check for Updates item disables
     /// itself when Sparkle can't currently check — e.g. dev builds with no feed, or while a check is
-    /// already in flight. Customize and Settings carry their key equivalents so the menu shows the
-    /// shortcuts: when the menu is open the items handle them; when it's closed the `PopoverKeyReader`
-    /// monitor handles (and consumes) them first, so the equivalents can't double-fire. Same split as
-    /// the Quit ⌘Q item below.
+    /// already in flight. Customize, Settings, and Memory carry their key equivalents so the menu
+    /// shows the shortcuts: when the menu is open the items handle them; when it's closed the
+    /// `PopoverKeyReader` monitor handles (and consumes) them first, so the equivalents can't
+    /// double-fire. Same split as the Quit ⌘Q item below.
     @ViewBuilder
     private var menuItems: some View {
         Button { toggle(.customize) } label: {
@@ -105,6 +105,7 @@ struct HeaderView: View {
         Button { MemoryWindowLink.open() } label: {
             Label("Memory", systemImage: "brain")
         }
+        .keyboardShortcut("m")
 
         Divider()
 

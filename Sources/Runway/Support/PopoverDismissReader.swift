@@ -26,6 +26,10 @@ struct PopoverKeyReader: NSViewRepresentable {
     /// carries ⌘, only as a *label*: while that menu is open the item handles it, while it's closed
     /// this monitor does, so they never both fire.
     var onSettings: @MainActor () -> Bool = { false }
+    /// Called on ⌘M (opens the standalone Memory window). Same arrangement as `onSettings`: this
+    /// always-on monitor handles it from every screen, and the gear options menu's Memory item
+    /// carries ⌘M only as a label, so the two can never both fire.
+    var onMemory: @MainActor () -> Bool = { false }
     /// Called on plain ⌘Z (undo). Rides this monitor — same reasons as Esc/Return: a hidden SwiftUI
     /// shortcut only fires when the popover is the key window, which the panel isn't always for. By the
     /// time this runs the monitor has already confirmed the panel owns the keystroke and no text field is
@@ -38,6 +42,7 @@ struct PopoverKeyReader: NSViewRepresentable {
         view.onEscape = onEscape
         view.onReturn = onReturn
         view.onSettings = onSettings
+        view.onMemory = onMemory
         view.onUndo = onUndo
         return view
     }
@@ -47,6 +52,7 @@ struct PopoverKeyReader: NSViewRepresentable {
         view.onEscape = onEscape
         view.onReturn = onReturn
         view.onSettings = onSettings
+        view.onMemory = onMemory
         view.onUndo = onUndo
     }
 
@@ -67,6 +73,7 @@ struct PopoverKeyReader: NSViewRepresentable {
         var onEscape: (@MainActor () -> Bool)?
         var onReturn: (@MainActor () -> Bool)?
         var onSettings: (@MainActor () -> Bool)?
+        var onMemory: (@MainActor () -> Bool)?
         var onUndo: (@MainActor () -> Bool)?
         private var monitor: Any?
         private static let escapeKeyCode: UInt16 = 53
@@ -83,10 +90,16 @@ struct PopoverKeyReader: NSViewRepresentable {
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 let keyCode = event.keyCode
+                // ⌘M is matched by the character the key produces, not the ANSI key code: on layouts
+                // like AZERTY the physical ANSI-M key types "," while M lives elsewhere, so a key-code
+                // match would both miss the real ⌘M and steal ⌘, (lowercased so caps lock can't defeat
+                // it; Shift is already excluded by the modifier check below).
+                let isMemory = event.charactersIgnoringModifiers?.lowercased() == "m"
                 guard keyCode == MonitorView.escapeKeyCode
                     || keyCode == MonitorView.returnKeyCode
                     || keyCode == MonitorView.commaKeyCode
-                    || keyCode == MonitorView.zKeyCode else {
+                    || keyCode == MonitorView.zKeyCode
+                    || isMemory else {
                     return event
                 }
                 let isReturn = keyCode == MonitorView.returnKeyCode
@@ -99,6 +112,11 @@ struct PopoverKeyReader: NSViewRepresentable {
                 }
                 // Only plain ⌘, navigates; a bare comma (typing) or ⌥⌘, etc. belong elsewhere.
                 if isComma,
+                   event.modifierFlags.intersection([.command, .option, .control, .shift]) != [.command] {
+                    return event
+                }
+                // Only plain ⌘M opens Memory; a bare m (typing) or ⌥⌘M etc. belong elsewhere.
+                if isMemory,
                    event.modifierFlags.intersection([.command, .option, .control, .shift]) != [.command] {
                     return event
                 }
@@ -126,6 +144,9 @@ struct PopoverKeyReader: NSViewRepresentable {
                     }
                     if isComma {
                         return self.onSettings?() ?? false
+                    }
+                    if isMemory {
+                        return self.onMemory?() ?? false
                     }
                     if isUndo {
                         return self.onUndo?() ?? false
