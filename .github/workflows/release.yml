@@ -268,6 +268,8 @@ jobs:
           echo "Appcast OK: $before -> $after items."
 
       - name: Assemble update feed
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p public
           cp feed/appcast.xml public/appcast.xml
@@ -280,6 +282,15 @@ jobs:
           git fetch --depth 1 origin main
           git show FETCH_HEAD:Sources/Runway/Resources/pricing_supplement.json > public/pricing_supplement.json
           git archive FETCH_HEAD website | tar -x -C public --strip-components=1
+          # Stamp the mock's footer with the newest PUBLISHED release, not the tag being built:
+          # in a normal release the new GitHub Release is already published (and latest) by this
+          # point, and re-running an older tag after a newer release exists must not regress the
+          # live footer. Take the helper from the fetched main revision, not the workspace: the
+          # workspace is pinned to the release tag, which may predate the helper.
+          git show FETCH_HEAD:script/stamp_website_version.sh > stamp_website_version.sh
+          LATEST="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          bash stamp_website_version.sh public/index.html "${LATEST#v}"
+          rm stamp_website_version.sh
 
       - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0

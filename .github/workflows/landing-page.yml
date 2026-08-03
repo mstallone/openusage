@@ -21,6 +21,7 @@ on:
     branches: [main]
     paths:
       - website/**
+      - script/stamp_website_version.sh
       - .github/workflows/landing-page.yml
   workflow_dispatch:
 
@@ -75,6 +76,8 @@ jobs:
       # appcast would delete the Sparkle feed that shipped apps poll). git ls-remote --exit-code
       # returns 2 when the ref is missing and other codes on transport failure.
       - name: Assemble update feed
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p public
           set +e
@@ -96,6 +99,21 @@ jobs:
           fi
           cp -R website/. public/
           cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json
+          # Keep the mock's footer on the latest released version instead of whatever the source
+          # carried when it was last edited. No release yet (HTTP 404) is a legitimate bootstrap
+          # state — keep the source's literal; any other API failure aborts loudly.
+          set +e
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>&1)"
+          api_status=$?
+          set -e
+          if [ "$api_status" -eq 0 ]; then
+            ./script/stamp_website_version.sh public/index.html "${latest#v}"
+          elif echo "$latest" | grep -q "HTTP 404"; then
+            echo "No published release yet; keeping the source's version literal."
+          else
+            echo "Failed to query the latest release: $latest" >&2
+            exit 1
+          fi
 
       - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
