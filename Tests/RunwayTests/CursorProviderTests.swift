@@ -361,6 +361,15 @@ final class CursorKeychainReadModeTests: XCTestCase {
         let paid = CursorAuthStore(sqlite: paidSqlite, keychain: UnavailableCursorKeychain())
         XCTAssertEqual(paid.loadCredentials().state?.accessToken, "sqlite-pro-token")
     }
+
+    func testHalfApprovedKeychainPairSurfacesTheRemainingApprovalNotAPartialLogin() {
+        // Access approved, refresh still protected: a partial login would work until the access
+        // token expires and then fail as a misleading "token expired". The remaining approval is
+        // the actionable state.
+        let store = CursorAuthStore(sqlite: EmptySQLite(), keychain: HalfApprovedCursorKeychain())
+
+        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+    }
 }
 
 private final class EmptySQLite: SQLiteAccessing, @unchecked Sendable {
@@ -379,6 +388,24 @@ private final class UnavailableCursorKeychain: KeychainAccessing, @unchecked Sen
 
     func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
         .unavailable
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
+}
+
+/// The access-token item is approved and readable; the refresh-token item exists but is protected.
+private final class HalfApprovedCursorKeychain: KeychainAccessing, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        service == CursorAuthStore.keychainAccessTokenService ? .value("approved-access") : .unavailable
     }
 
     func genericPasswordExists(service: String) -> Bool? {

@@ -89,25 +89,33 @@ struct CursorAuthStore: Sendable {
         let hasSQLiteAuth = sqliteAccessToken != nil || sqliteRefreshToken != nil
         let hasKeychainAuth = keychainAccessToken != nil || keychainRefreshToken != nil
 
-        let keychainUnreadable = accessRead == .unavailable || refreshRead == .unavailable
+        // Whether an item is confirmed present but unreadable without approval — checked per item,
+        // so a half-approved pair (access approved, refresh denied) still counts. The existence
+        // probes are attributes-only and prompt-free.
+        let anyProtected = protectedItemExists(accessRead, service: Self.keychainAccessTokenService)
+            || protectedItemExists(refreshRead, service: Self.keychainRefreshTokenService)
 
         if hasSQLiteAuth {
-            let sqliteSubject = Self.tokenSubject(sqliteAccessToken)
-            let keychainSubject = Self.tokenSubject(keychainAccessToken)
-            let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
-            if hasKeychainAuth, sqliteMembershipType == "free", subjectsDiffer {
-                return .state(CursorAuthState(
-                    accessToken: keychainAccessToken,
-                    refreshToken: keychainRefreshToken,
-                    source: .keychain
-                ))
-            }
-            // The free-membership preference above exists because the keychain (agent CLI) login can
-            // be the real paid account. With the keychain items protected, that comparison is
-            // impossible — silently accepting the free SQLite token could show the wrong account, so
-            // surface the approval need instead. A paid SQLite login keeps winning, as it always has.
-            if sqliteMembershipType == "free", keychainUnreadable, protectedKeychainItemExists() {
-                return .keychainPermissionRequired
+            if sqliteMembershipType == "free" {
+                // The free-membership preference exists because the keychain (agent CLI) login can
+                // be the real paid account. A protected item makes that comparison impossible —
+                // silently accepting the free SQLite token could show the wrong account — and a
+                // partial keychain pair would fail later as a misleading "token expired". Either
+                // way, surface the approval need. A paid SQLite login keeps winning, as it always
+                // has.
+                if anyProtected {
+                    return .keychainPermissionRequired
+                }
+                let sqliteSubject = Self.tokenSubject(sqliteAccessToken)
+                let keychainSubject = Self.tokenSubject(keychainAccessToken)
+                let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
+                if hasKeychainAuth, subjectsDiffer {
+                    return .state(CursorAuthState(
+                        accessToken: keychainAccessToken,
+                        refreshToken: keychainRefreshToken,
+                        source: .keychain
+                    ))
+                }
             }
 
             return .state(CursorAuthState(
@@ -117,6 +125,14 @@ struct CursorAuthStore: Sendable {
             ))
         }
 
+        // A protected item outranks a partial keychain pair: returning only the readable half would
+        // work until the access token expires and then fail as "token expired" instead of naming
+        // the remaining approval. It is also a real login footprint (`hasLocalCredentials` must see
+        // it); only a manual refresh may convert it into access.
+        if anyProtected {
+            return .keychainPermissionRequired
+        }
+
         if hasKeychainAuth {
             return .state(CursorAuthState(
                 accessToken: keychainAccessToken,
@@ -124,19 +140,11 @@ struct CursorAuthStore: Sendable {
                 source: .keychain
             ))
         }
-
-        // No usable credential anywhere — but a protected keychain item is a real login footprint
-        // (`hasLocalCredentials` must see it); only a manual refresh may convert it into access.
-        if keychainUnreadable, protectedKeychainItemExists() {
-            return .keychainPermissionRequired
-        }
         return .none
     }
 
-    /// Whether either Cursor keychain item verifiably exists. Attributes-only and prompt-free.
-    private func protectedKeychainItemExists() -> Bool {
-        keychain.genericPasswordExists(service: Self.keychainAccessTokenService) == true
-            || keychain.genericPasswordExists(service: Self.keychainRefreshTokenService) == true
+    private func protectedItemExists(_ read: NonInteractiveKeychainRead, service: String) -> Bool {
+        read == .unavailable && keychain.genericPasswordExists(service: service) == true
     }
 
     func needsRefresh(_ accessToken: String?) -> Bool {
