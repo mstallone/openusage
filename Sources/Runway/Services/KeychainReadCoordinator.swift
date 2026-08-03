@@ -171,6 +171,35 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         }
     }
 
+    /// Bounded, single-flighted metadata query (existence or fingerprint probes). Such probes are
+    /// prompt-free by construction, but they are still securityd round trips — against a wedged
+    /// securityd they block like any other call, so they must not stack behind a stuck read of the
+    /// same item. Returns nil ("unknown") when the item's flight is stuck past the bounded wait.
+    ///
+    /// Only the PUBLIC probe entry points route through here. The fingerprint the coordinator's own
+    /// read path computes runs inside its already-held flight and must stay raw — routing it back
+    /// through this method would wait on the very flight it holds.
+    func probe<T>(service: String, account: String?, _ body: () -> T?) -> T? {
+        let key = Key(service: service, account: account)
+
+        condition.lock()
+        guard waitWhileInFlight(key, deadline: now().addingTimeInterval(inFlightWait)) else {
+            condition.unlock()
+            return nil
+        }
+        inFlight.insert(key)
+        condition.unlock()
+
+        defer {
+            condition.lock()
+            inFlight.remove(key)
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        return body()
+    }
+
     /// Waits (under `condition`'s lock) while `key` has a read in flight. Returns `false` if the
     /// deadline passed with the read still stuck.
     private func waitWhileInFlight(_ key: Key, deadline: Date) -> Bool {

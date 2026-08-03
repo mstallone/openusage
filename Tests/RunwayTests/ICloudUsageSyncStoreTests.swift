@@ -420,6 +420,7 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         let owned = InMemoryOwnedSecretStore()
         let legacy = ServiceKeychain()
         legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "bbbbbbbb-1111-2222-3333-444444444444"
+        legacy.values["com.mattstallone.runway.icloud-sync-device-id.v1"] = "bbbbbbbb-1111-2222-3333-444444444444"
         let deviceIDStore = KeychainICloudDeviceIDStore(
             ownedStore: owned,
             legacyKeychain: legacy,
@@ -451,6 +452,17 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
             pollInterval: nil
         )
         XCTAssertEqual(relaunch.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
+    }
+
+    func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
+        // A fresh install has no v1 item: the prompt-free existence probe answers "absent" and the
+        // subprocess-backed legacy read must never run — not even once.
+        let store = KeychainICloudDeviceIDStore(
+            ownedStore: InMemoryOwnedSecretStore(),
+            legacyKeychain: ProbeOnlyKeychain(),
+            bundleIdentifier: "com.mattstallone.runway"
+        )
+        XCTAssertNil(try store.migrateLegacyDeviceID())
     }
 
     func testMissingDeviceIDReadsNilWithoutInventingAnIdentity() throws {
@@ -644,4 +656,18 @@ private actor RecordingUsageCloudStore: UsageCloudStoring {
         writeGate?.resume()
         writeGate = nil
     }
+}
+
+/// Answers the prompt-free existence probe with "absent" and fails the test if any secret read runs.
+private final class ProbeOnlyKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("no secret read may run when the existence probe reports the item absent")
+        return nil
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        false
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
 }
