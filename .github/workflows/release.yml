@@ -280,6 +280,8 @@ jobs:
           git fetch --depth 1 origin main
           git show FETCH_HEAD:Sources/Runway/Resources/pricing_supplement.json > public/pricing_supplement.json
           git archive FETCH_HEAD website | tar -x -C public --strip-components=1
+          # Stamp the mock's footer with the version this run is releasing.
+          "$GITHUB_WORKSPACE/script/stamp_website_version.sh" public/index.html "${{ steps.meta.outputs.version }}"
 
       - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0

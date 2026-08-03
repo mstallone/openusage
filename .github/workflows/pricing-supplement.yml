@@ -64,6 +64,8 @@ jobs:
       # for why (deleted website files must disappear; transport failures must abort rather than
       # publish without the live appcast).
       - name: Assemble update feed
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p public
           set +e
@@ -85,6 +87,10 @@ jobs:
           fi
           cp -R website/. public/
           cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json
+          # Keep the mock's footer on the latest released version instead of whatever the source
+          # carried when it was last edited.
+          VERSION="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          ./script/stamp_website_version.sh public/index.html "${VERSION#v}"
 
       - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
