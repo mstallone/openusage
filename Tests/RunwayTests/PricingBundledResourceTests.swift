@@ -102,6 +102,44 @@ final class PricingBundledResourceTests: XCTestCase {
         XCTAssertEqual(sonnet5, canonical)
     }
 
+    /// Claude Opus 5: launch rates come from LiteLLM (the supplement deliberately carries no entry —
+    /// a published supplement entry would shadow LiteLLM on released decoders that drop the fast
+    /// multiplier), with the `[1m]`, thinking/effort, and fast slug variants resolving to the right
+    /// rates via the supplement alias rules.
+    func testClaudeOpus5PricingAndAliases() throws {
+        let pricing = Self.pricing
+        let opus5 = try XCTUnwrap(pricing.resolve(model: "claude-opus-5"))
+        XCTAssertEqual(opus5.inputPerMillion, 5.0)
+        XCTAssertEqual(opus5.cacheWritePerMillion, 6.25)
+        XCTAssertEqual(opus5.cacheReadPerMillion, 0.5)
+        XCTAssertEqual(opus5.outputPerMillion, 25.0)
+        XCTAssertEqual(pricing.resolve(model: "claude-opus-5[1m]"), opus5)
+        XCTAssertEqual(pricing.resolve(model: "claude-opus-5-thinking-xhigh"), opus5)
+
+        let opus5Fast = try XCTUnwrap(pricing.resolve(model: "claude-opus-5-thinking-high-fast"))
+        XCTAssertEqual(opus5Fast.inputPerMillion, opus5.inputPerMillion * 2)
+        XCTAssertEqual(opus5Fast.outputPerMillion, opus5.outputPerMillion * 2)
+
+        let opus48 = try XCTUnwrap(pricing.resolve(model: "claude-opus-4-8"))
+        XCTAssertEqual(opus5.inputPerMillion, opus48.inputPerMillion)
+        XCTAssertEqual(opus5.outputPerMillion, opus48.outputPerMillion)
+        XCTAssertEqual(opus5.fastMultiplier, opus48.fastMultiplier)
+    }
+
+    /// Claude logs signal fast mode with a `speed` field while the model stays `claude-opus-5`, so
+    /// the base entry itself must carry the 2x multiplier (LiteLLM's `fast` field) — the `-fast`
+    /// slug is never involved.
+    func testClaudeOpus5FastModeBillsAtTwiceBaseRate() throws {
+        let pricing = Self.pricing
+        let opus5 = try XCTUnwrap(pricing.resolve(model: "claude-opus-5"))
+        XCTAssertEqual(opus5.fastMultiplier, 2.0)
+
+        let tokens = TokenBreakdown(input: 1_000_000, cacheWrite5m: 1_000_000, cacheRead: 1_000_000, output: 1_000_000)
+        var fastTokens = tokens
+        fastTokens.isFast = true
+        XCTAssertEqual(opus5.costDollars(for: fastTokens), opus5.costDollars(for: tokens) * 2, accuracy: 0.000_001)
+    }
+
     func testGPT56PricingAndAliases() throws {
         let pricing = Self.pricing
         let sol = try XCTUnwrap(pricing.resolve(model: "gpt-5.6-sol-ultra"))

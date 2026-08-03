@@ -1,6 +1,6 @@
 {
   "$comment": "Runway pricing supplement. Prices Cursor-native models that no public catalog carries, supplies fast-variant multipliers the catalogs omit, and maps provider log/CSV model slugs to canonical pricing keys (LiteLLM keys, models.dev ids, or entries in this file). Published to update-feed by .github/workflows/pricing-supplement.yml on every change, so installed apps pick edits up within about an hour - no release needed. Rates are USD per million tokens. Sources: https://cursor.com/docs/models-and-pricing.md for Cursor-native entries.",
-  "updated_at": "2026-07-30",
+  "updated_at": "2026-08-02",
   "pricing": {
     "auto": {
       "input_per_million": 1.25,
@@ -154,6 +154,8 @@
     { "pattern": "^claude-opus-4-7(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-opus-4-7" },
     { "pattern": "^claude-opus-4-8(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", "canonical": "claude-opus-4-8-fast" },
     { "pattern": "^claude-opus-4-8(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-opus-4-8" },
+    { "pattern": "^claude-opus-5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?-fast$", "canonical": "claude-opus-5-fast", "$comment": "No supplement pricing entries for Opus 5: LiteLLM already carries the launch rates and the 2x fast multiplier, and a supplement entry would shadow them on released decoders that drop fast_multipliers. claude-opus-5-fast prices off the LiteLLM base entry via the fast-variant path." },
+    { "pattern": "^claude-opus-5(?:\\[1m\\])?(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-opus-5" },
     { "pattern": "^claude-fable-5(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-fable-5" },
     { "pattern": "^claude-sonnet-5(?:-thinking)?(?:-(?:low|medium|high|xhigh|max))?$", "canonical": "claude-sonnet-5" },
     { "pattern": "^gemini-2\\.5-flash$", "canonical": "gemini-2.5-flash" },

@@ -131,6 +131,29 @@ final class ModelPricingTests: XCTestCase {
         XCTAssertEqual(fast?.cacheReadPerMillion, 1.25)
     }
 
+    /// Regression: decode used to drop `fast_multipliers` on the entry itself, so a supplement-priced
+    /// model's speed-flagged fast requests (Claude's `speed` field on the base slug, no `-fast`
+    /// suffix) billed at the standard rate.
+    func testSupplementEntryCarriesDeclaredFastMultiplier() throws {
+        let supplement = """
+        {"pricing": {
+            "test-opus": {"input_per_million": 5.0, "output_per_million": 25.0},
+            "test-sonnet": {"input_per_million": 3.0, "output_per_million": 15.0}
+        }, "fast_multipliers": {"test-opus": 2.0}, "alias_rules": []}
+        """
+        let pricing = try makePricing(supplementJSON: supplement)
+        let entry = try XCTUnwrap(pricing.resolve(model: "test-opus"))
+        XCTAssertEqual(entry.fastMultiplier, 2.0)
+
+        let standard = TokenBreakdown(input: 1_000_000, output: 1_000_000)
+        var fast = standard
+        fast.isFast = true
+        XCTAssertEqual(entry.costDollars(for: fast), entry.costDollars(for: standard) * 2, accuracy: 1e-9)
+
+        let unlisted = try XCTUnwrap(pricing.resolve(model: "test-sonnet"))
+        XCTAssertEqual(unlisted.fastMultiplier, 1, "models absent from fast_multipliers decode with no multiplier")
+    }
+
     func testFastSuffixUsesEntryMultiplier() throws {
         let pricing = try makePricing(primary: ["claude-opus-4-6": rates(5, 25, fast: 6)])
         let fast = pricing.resolve(model: "claude-opus-4-6-fast")
