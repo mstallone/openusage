@@ -76,6 +76,7 @@ Using Copilot in a supported editor is enough on its own — the editor writes t
 ## Troubleshooting
 
 - **"Sign in to GitHub Copilot…"** — no token was found. Sign in to Copilot in your editor, or run `gh auth login`.
+- **"GitHub login found in Keychain"** — `gh` keeps its token in the system keyring and Runway can't read it silently yet. Refresh manually and choose **Always Allow** when macOS asks; later reads stay silent.
 - **"GitHub token invalid or expired"** — the token was rejected (401/403). Re-authenticate with `gh auth login`.
 - **"Managed by Your Organization"** — GitHub doesn't expose a live per-seat quota for Business/Enterprise, and none of the locally available credentials could read the relevant organization or enterprise billing. Organization reporting requires organization billing access; consolidated reporting also requires enterprise read and billing access. Some editor-plugin and GitHub CLI tokens do not carry those scopes.
 

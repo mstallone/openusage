@@ -80,18 +80,26 @@ final class CopilotProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Same source as `refresh()`: editor config, gh config, or the gh keychain entry.
-        await loadOffMainActor { [authStore] in authStore.loadToken() } != nil
+        // Same sources as `refresh()`: editor config, gh config, or the gh keychain entry. A
+        // protected keychain item counts — it is a real login even though only a manual refresh may
+        // ask the user to approve reading it.
+        await loadOffMainActor { [authStore] in authStore.loadCredentials() } != .none
     }
 
     func refresh() async -> ProviderSnapshot {
         // A manual refresh may raise the Keychain approval prompt (once, for Runway itself);
         // automatic refreshes stay prompt-free.
         let allowInteraction = ProviderRefreshContext.isManual
-        let token = await loadOffMainActor { [authStore] in
-            authStore.loadToken(allowKeychainInteraction: allowInteraction)
+        let load = await loadOffMainActor { [authStore] in
+            authStore.loadCredentials(allowKeychainInteraction: allowInteraction)
         }
-        guard let token else {
+        let token: CopilotToken
+        switch load {
+        case .token(let loaded):
+            token = loaded
+        case .keychainPermissionRequired:
+            return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.keychainPermissionRequired)
+        case .none:
             return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.notLoggedIn)
         }
 
@@ -121,10 +129,7 @@ final class CopilotProvider: ProviderRuntime {
                     billingTokens = [token]
                 } else {
                     billingTokens = await loadOffMainActor { [authStore] in
-                        authStore.loadBillingTokenCandidates(
-                            usageToken: token,
-                            allowKeychainInteraction: allowInteraction
-                        )
+                        authStore.loadBillingTokenCandidates(usageToken: token)
                     }
                 }
                 switch await orgBillingLookup(

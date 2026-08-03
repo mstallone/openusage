@@ -12,7 +12,7 @@ final class CopilotAuthStoreTests: XCTestCase {
             keychain: FakeKeychain()
         )
 
-        let token = store.loadToken()
+        let token = store.loadCredentials().token
 
         XCTAssertEqual(token?.value, "gho_editor")
     }
@@ -30,7 +30,7 @@ final class CopilotAuthStoreTests: XCTestCase {
             keychain: FakeKeychain()
         )
 
-        let token = store.loadToken()
+        let token = store.loadCredentials().token
 
         XCTAssertEqual(token?.value, "gho_ghconfig")
     }
@@ -39,7 +39,7 @@ final class CopilotAuthStoreTests: XCTestCase {
         let wrapped = "go-keyring-base64:" + Data("gho_keychain".utf8).base64EncodedString()
         let store = CopilotAuthStore(files: FakeFiles(), keychain: FakeKeychain(wrapped))
 
-        let token = store.loadToken()
+        let token = store.loadCredentials().token
 
         XCTAssertEqual(token?.value, "gho_keychain")
     }
@@ -51,13 +51,39 @@ final class CopilotAuthStoreTests: XCTestCase {
         let keychain = ReadModeTrackingKeychain(value: "gho_keychain")
         let store = CopilotAuthStore(files: FakeFiles(), keychain: keychain)
 
-        XCTAssertEqual(store.loadToken()?.value, "gho_keychain")
+        XCTAssertEqual(store.loadCredentials().token?.value, "gho_keychain")
         XCTAssertEqual(keychain.interactiveReads, 0)
         XCTAssertGreaterThan(keychain.nonInteractiveReads, 0)
         XCTAssertEqual(keychain.plainReads, 0, "the subprocess-style read path must not be used")
 
-        XCTAssertEqual(store.loadToken(allowKeychainInteraction: true)?.value, "gho_keychain")
+        XCTAssertEqual(store.loadCredentials(allowKeychainInteraction: true).token?.value, "gho_keychain")
         XCTAssertGreaterThan(keychain.interactiveReads, 0)
+        XCTAssertEqual(keychain.plainReads, 0)
+    }
+
+    func testUnauthorizedKeychainItemCountsAsAFootprintNeedingPermission() {
+        // A gh token stored only in the Keychain, not yet approved for Runway: detection must still
+        // see the login (so seeding enables the card) and the load must report permission-required —
+        // not "not logged in" — so the user is told to refresh manually and approve.
+        let store = CopilotAuthStore(files: FakeFiles(), keychain: UnauthorizedItemKeychain())
+
+        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+    }
+
+    func testManualRefreshBillingLookupDoesNotPromptASecondTime() throws {
+        // A keychain-only org-managed account on a manual refresh: the usage token's interactive
+        // read may prompt once; the billing candidate lookup must reuse a prompt-free read (served
+        // by the coordinator's cache in production), never a second interactive one.
+        let keychain = ReadModeTrackingKeychain(value: "gho_keychain")
+        let store = CopilotAuthStore(files: FakeFiles(), keychain: keychain)
+
+        let usageToken = try XCTUnwrap(store.loadCredentials(allowKeychainInteraction: true).token)
+        XCTAssertEqual(keychain.interactiveReads, 1)
+
+        let billing = store.loadBillingTokenCandidates(usageToken: usageToken)
+
+        XCTAssertEqual(billing.map(\.value), ["gho_keychain"])
+        XCTAssertEqual(keychain.interactiveReads, 1, "billing must not raise a second prompt")
         XCTAssertEqual(keychain.plainReads, 0)
     }
 
@@ -70,7 +96,7 @@ final class CopilotAuthStoreTests: XCTestCase {
         )
 
         // Editor config wins over the keychain: the editor token is returned, not the keychain one.
-        XCTAssertEqual(store.loadToken()?.value, "gho_editor")
+        XCTAssertEqual(store.loadCredentials().token?.value, "gho_editor")
     }
 
     func testBillingTokensPreferGitHubCLIAndDeduplicateUsageToken() throws {
@@ -82,7 +108,7 @@ final class CopilotAuthStoreTests: XCTestCase {
             ]),
             keychain: FakeKeychain(wrappedBillingToken)
         )
-        let usageToken = try XCTUnwrap(store.loadToken())
+        let usageToken = try XCTUnwrap(store.loadCredentials().token)
 
         XCTAssertEqual(
             store.loadBillingTokenCandidates(usageToken: usageToken).map(\.value),
@@ -96,7 +122,7 @@ final class CopilotAuthStoreTests: XCTestCase {
 
     func testReturnsNilWhenNoCredentials() {
         let store = CopilotAuthStore(files: FakeFiles(), keychain: FakeKeychain())
-        XCTAssertNil(store.loadToken())
+        XCTAssertNil(store.loadCredentials().token)
     }
 
     func testEditorConfigIgnoresNonGithubDotComHost() {
@@ -109,7 +135,7 @@ final class CopilotAuthStoreTests: XCTestCase {
             keychain: FakeKeychain("go-keyring-base64:" + Data("gho_dotcom".utf8).base64EncodedString())
         )
 
-        let token = store.loadToken()
+        let token = store.loadCredentials().token
 
         XCTAssertEqual(token?.value, "gho_dotcom")
     }
@@ -122,7 +148,7 @@ final class CopilotAuthStoreTests: XCTestCase {
             keychain: FakeKeychain()
         )
 
-        XCTAssertEqual(store.loadToken()?.value, "gho_dotcom")
+        XCTAssertEqual(store.loadCredentials().token?.value, "gho_dotcom")
     }
 
     func testYamlValueIgnoresNestedUsersMap() {
@@ -162,7 +188,7 @@ final class CopilotAuthStoreTests: XCTestCase {
             keychain: FakeKeychain()
         )
 
-        XCTAssertEqual(store.loadToken()?.value, "gho_dotcom")
+        XCTAssertEqual(store.loadCredentials().token?.value, "gho_dotcom")
     }
 }
 
@@ -2023,5 +2049,26 @@ final class ReadModeTrackingKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
         lock.withLock { interactive += 1 }
         return value
+    }
+}
+
+/// A Keychain holding a gh item Runway isn't authorized to read prompt-free: non-interactive reads
+/// report `.unavailable` while the attributes-only existence probe still confirms the item.
+private final class UnauthorizedItemKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
     }
 }
