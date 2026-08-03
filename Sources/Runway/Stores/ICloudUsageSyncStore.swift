@@ -22,6 +22,17 @@ protocol UsageCloudStoring: Sendable {
 protocol ICloudDeviceIDStoring: Sendable {
     func readDeviceID() throws -> String?
     func writeDeviceID(_ deviceID: String) throws
+    /// Recover the device id from the store's legacy (pre-v2) location and persist it in the
+    /// current one, or return nil when there is nothing to migrate. Callers reach for this LAST —
+    /// only when both the current store and the saved preference are empty — because the legacy
+    /// location may sit behind a prompt-capable Keychain path.
+    func migrateLegacyDeviceID() throws -> String?
+}
+
+extension ICloudDeviceIDStoring {
+    func migrateLegacyDeviceID() throws -> String? {
+        nil
+    }
 }
 
 struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
@@ -42,22 +53,25 @@ struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
     }
 
     func readDeviceID() throws -> String? {
-        if let deviceID = try ownedStore.read(service: service) {
-            return deviceID
-        }
-        // One-time migration from the v1 item the `/usr/bin/security` subprocess created. Copying it
-        // keeps this device's iCloud record instead of minting a duplicate. The v1 item's ACL belongs
-        // to the subprocess, so Runway cannot silently delete it; it stays behind, orphaned and
-        // never read again once the v2 item exists.
+        try ownedStore.read(service: service)
+    }
+
+    func writeDeviceID(_ deviceID: String) throws {
+        try ownedStore.write(service: service, value: deviceID)
+    }
+
+    /// One-time recovery from the v1 item the `/usr/bin/security` subprocess created, for upgrades
+    /// where the saved preference is also gone (a preferences reset). Copying it keeps this device's
+    /// iCloud record instead of minting a duplicate. The subprocess read can raise a Keychain prompt
+    /// when the login keychain is locked, which is why `resolveDeviceID` reaches here last. The v1
+    /// item's ACL belongs to the subprocess, so Runway cannot silently delete it; it stays behind,
+    /// orphaned and never read again once the v2 item exists.
+    func migrateLegacyDeviceID() throws -> String? {
         guard let legacy = try legacyKeychain.readGenericPasswordForCurrentUser(service: legacyService) else {
             return nil
         }
         try ownedStore.write(service: service, value: legacy)
         return legacy
-    }
-
-    func writeDeviceID(_ deviceID: String) throws {
-        try ownedStore.write(service: service, value: deviceID)
     }
 }
 
@@ -285,7 +299,21 @@ final class ICloudUsageSyncStore {
                 return (stored, nil)
             }
 
-            let id = saved ?? UUID().uuidString.lowercased()
+            // The saved preference is the same id the Keychain held, so on upgrades it seeds the
+            // store without touching any legacy Keychain path. Legacy recovery — which can raise a
+            // prompt when the login keychain is locked — runs only when BOTH are gone (a
+            // preferences reset), and at most once: after it, either the store holds the id or a
+            // freshly minted one is saved, so no later launch reaches it again.
+            if let saved {
+                try store.writeDeviceID(saved)
+                return (saved, nil)
+            }
+            if let migrated = normalizedDeviceID(try store.migrateLegacyDeviceID()) {
+                defaults.set(migrated, forKey: deviceIDKey)
+                return (migrated, nil)
+            }
+
+            let id = UUID().uuidString.lowercased()
             try store.writeDeviceID(id)
             defaults.set(id, forKey: deviceIDKey)
             return (id, nil)

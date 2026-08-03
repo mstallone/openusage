@@ -384,28 +384,73 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         XCTAssertEqual(try production.readDeviceID(), "production-id")
     }
 
-    func testLegacyDeviceIDMigratesIntoTheRunwayOwnedItemOnce() throws {
-        // Existing installs keep their iCloud device record: the v1 item the subprocess created is
-        // copied into the Runway-owned v2 item on first read, and the legacy item is never consulted
-        // again once the v2 item exists.
+    func testUpgradeSeedsTheOwnedItemFromSavedPreferencesWithoutTouchingLegacyKeychain() async throws {
+        // The normal upgrade: UserDefaults still carries the device id, so the v2 item is seeded
+        // from it directly. The legacy `/usr/bin/security` path — the only prompt-capable step —
+        // must not be consulted at all.
+        let defaults = makeDefaults("upgrade-from-saved")
+        defaults.set("aaaaaaaa-1111-2222-3333-444444444444", forKey: "runway.icloudSync.deviceID.v1")
+        let owned = InMemoryOwnedSecretStore()
+        let deviceIDStore = KeychainICloudDeviceIDStore(
+            ownedStore: owned,
+            legacyKeychain: TrappingKeychain(),
+            bundleIdentifier: "com.mattstallone.runway"
+        )
+
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: RecordingUsageCloudStore(),
+            deviceIDStore: deviceIDStore,
+            pollInterval: nil
+        )
+
+        XCTAssertEqual(sync.deviceID, "aaaaaaaa-1111-2222-3333-444444444444")
+        XCTAssertEqual(
+            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
+            "aaaaaaaa-1111-2222-3333-444444444444"
+        )
+    }
+
+    func testPreferencesResetUpgradeRecoversTheLegacyDeviceIDOnce() async throws {
+        // Only when BOTH the v2 item and the saved preference are gone (a preferences reset on an
+        // upgrade) is the legacy v1 item consulted — once. It seeds v2, and later launches never
+        // reach the legacy path again.
+        let defaults = makeDefaults("upgrade-after-prefs-reset")
         let owned = InMemoryOwnedSecretStore()
         let legacy = ServiceKeychain()
-        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "legacy-device-id"
-        let store = KeychainICloudDeviceIDStore(
+        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "bbbbbbbb-1111-2222-3333-444444444444"
+        let deviceIDStore = KeychainICloudDeviceIDStore(
             ownedStore: owned,
             legacyKeychain: legacy,
             bundleIdentifier: "com.mattstallone.runway"
         )
 
-        XCTAssertEqual(try store.readDeviceID(), "legacy-device-id")
-        XCTAssertEqual(
-            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
-            "legacy-device-id"
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: RecordingUsageCloudStore(),
+            deviceIDStore: deviceIDStore,
+            pollInterval: nil
         )
 
-        // The legacy item changing afterwards is irrelevant — v2 is authoritative.
-        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "changed-later"
-        XCTAssertEqual(try store.readDeviceID(), "legacy-device-id")
+        XCTAssertEqual(sync.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
+        XCTAssertEqual(
+            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
+            "bbbbbbbb-1111-2222-3333-444444444444"
+        )
+        XCTAssertEqual(defaults.string(forKey: "runway.icloudSync.deviceID.v1"), "bbbbbbbb-1111-2222-3333-444444444444")
+
+        // Relaunch: v2 exists now, so the legacy path is dead even if the item changes.
+        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "cccccccc-1111-2222-3333-444444444444"
+        let relaunch = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: RecordingUsageCloudStore(),
+            deviceIDStore: deviceIDStore,
+            pollInterval: nil
+        )
+        XCTAssertEqual(relaunch.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
     }
 
     func testMissingDeviceIDReadsNilWithoutInventingAnIdentity() throws {
@@ -415,6 +460,7 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
             bundleIdentifier: "com.mattstallone.runway"
         )
         XCTAssertNil(try store.readDeviceID())
+        XCTAssertNil(try store.migrateLegacyDeviceID())
     }
 
     private func makeDataStore(_ defaults: UserDefaults) -> WidgetDataStore {
@@ -476,6 +522,17 @@ private final class InMemoryOwnedSecretStore: RunwayOwnedSecretStoring, @uncheck
     func write(service: String, value: String) throws {
         secrets[service] = value
     }
+}
+
+/// Fails the test on ANY read: proves a code path never consults the (prompt-capable) legacy
+/// Keychain.
+private final class TrappingKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the legacy Keychain path must not be consulted")
+        return nil
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
 }
 
 private actor RecordingUsageCloudStore: UsageCloudStoring {
