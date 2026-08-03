@@ -2,7 +2,7 @@
 
 Fast, observable AI usage across every provider and account, right from the macOS menu bar.
 
-**Website:** [mstallone.github.io/runway](https://mstallone.github.io/runway/)
+**Website:** [runway.page](https://runway.page/)
 
 Runway brings multiple accounts across Claude, Codex, Cursor, Grok, Devin, and more into one focused view of limits, credits, and spend. Cached data appears instantly, live refreshes stay out of the way, and the metrics you care about can sit directly in the menu bar.
 
