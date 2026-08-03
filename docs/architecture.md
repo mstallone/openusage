@@ -53,8 +53,10 @@ Keychain type (`KeychainReading`) — a write simply does not compile there. Cla
 Runway never refreshes its OAuth tokens and never writes its credential stores, because two apps
 rotating the same login can trip the server's token-reuse protection and sign the user out. The only
 secrets Runway writes are its own (`RunwayOwnedKeychainStore`, currently the iCloud-sync device id),
-kept under a Runway-specific service and account. Codex and Cursor still rotate their providers'
-tokens; moving them to the same read-only model is planned follow-up work.
+kept under a Runway-specific service and account. Every provider's automatic Keychain reads are
+in-process and prompt-free; only a user's manual refresh may raise the approval dialog, once, for
+Runway itself. Codex and Cursor still rotate their providers' tokens (their writes are the last
+`/usr/bin/security` use); moving them to the same read-only model is planned follow-up work.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,

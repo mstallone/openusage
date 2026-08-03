@@ -76,6 +76,7 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
     case tokenExpired
     case usageAPIKey
     case invalidAuthPayload
+    case keychainPermissionRequired
 
     var errorDescription: String? {
         switch self {
@@ -93,6 +94,8 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
             return "Usage not available for API key."
         case .invalidAuthPayload:
             return "Codex auth data is invalid."
+        case .keychainPermissionRequired:
+            return "Codex login found in Keychain. Refresh manually and choose Always Allow to connect it."
         }
     }
 
@@ -100,9 +103,23 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .sessionExpired, .tokenConflict, .tokenRevoked, .tokenExpired:
             return true
-        case .notLoggedIn, .usageAPIKey, .invalidAuthPayload:
+        case .notLoggedIn, .usageAPIKey, .invalidAuthPayload, .keychainPermissionRequired:
             return false
         }
+    }
+}
+
+/// Outcome of the keyring lookup. `permissionRequired` means a Codex Keychain item exists but Runway
+/// isn't authorized to read it prompt-free yet — a real login footprint that only an explicit manual
+/// refresh may convert into access.
+enum CodexKeychainLoad {
+    case state(CodexAuthState)
+    case permissionRequired
+    case none
+
+    var state: CodexAuthState? {
+        guard case .state(let state) = self else { return nil }
+        return state
     }
 }
 
@@ -171,40 +188,86 @@ struct CodexAuthStore: Sendable {
         )
     }
 
+    /// Convenience for callers that only care about a successfully loaded credential (the identity
+    /// warm task); the permission state collapses to nil there, keeping the home hidden.
     func loadKeychainAuth() -> CodexAuthState? {
+        guard case .state(let state) = loadKeychainCredentials() else { return nil }
+        return state
+    }
+
+    /// Keychain reads are in-process, never the `/usr/bin/security` subprocess: automatic refreshes
+    /// use the prompt-free form, and only a manual refresh (`allowKeychainInteraction`) may raise
+    /// the approval prompt — once, for Runway itself.
+    func loadKeychainCredentials(allowKeychainInteraction: Bool = false) -> CodexKeychainLoad {
         // Target each candidate home's computed account first. A scoped card has exactly one; a
-        // standard unresolved card follows the same home order as its file candidates.
+        // standard unresolved card follows the same home order as its file candidates. Later homes
+        // are still tried after a protected item — each read targets its own exact account, so
+        // there is no cross-credential risk between them.
+        var permissionRequired = false
         for home in credentialHomes() {
             let canonicalHome = Self.canonicalHome(home)
             let account = Self.keychainAccountName(forHome: canonicalHome)
-            guard let value = try? keychain.readGenericPassword(
-                service: Self.keychainService,
-                account: account
-            ),
-                let auth = Self.parseAuth(value),
-                Self.hasTokenLikeAuth(auth)
-            else {
+            switch readKeychainValue(account: account, allowInteraction: allowKeychainInteraction) {
+            case .value(let value):
+                guard let auth = Self.parseAuth(value), Self.hasTokenLikeAuth(auth) else { continue }
+                _ = recordResolvedIdentity(auth, home: canonicalHome)
+                return .state(CodexAuthState(
+                    auth: auth,
+                    source: .keychain,
+                    keychainAccount: account,
+                    credentialHome: canonicalHome
+                ))
+            case .unavailable:
+                // This home's item exists but is protected (or the keychain can't be checked) —
+                // a real login footprint. The existence probe is attributes-only and prompt-free.
+                if keychain.genericPasswordExists(service: Self.keychainService, account: account) != false {
+                    permissionRequired = true
+                }
+            case .missing:
                 continue
             }
-            _ = recordResolvedIdentity(auth, home: canonicalHome)
-            return CodexAuthState(
-                auth: auth,
-                source: .keychain,
-                keychainAccount: account,
-                credentialHome: canonicalHome
-            )
+        }
+        // A protected exact item forbids the broad service-only lookup — with several Codex items
+        // it could silently select a different login. Broadening stays allowed only when every
+        // scoped item provably does not exist.
+        if permissionRequired {
+            return .permissionRequired
         }
 
         // Preserve the historical service-only fallback for the unresolved single card. A scoped
         // account card never reaches it, so an unrelated item can never cross into a verified card.
-        guard scope == .standard else { return nil }
-        guard let value = try? keychain.readGenericPassword(service: Self.keychainService),
-              let auth = Self.parseAuth(value),
-              Self.hasTokenLikeAuth(auth)
-        else {
-            return nil
+        guard scope == .standard else { return .none }
+        switch readKeychainValue(account: nil, allowInteraction: allowKeychainInteraction) {
+        case .value(let value):
+            guard let auth = Self.parseAuth(value), Self.hasTokenLikeAuth(auth) else { return .none }
+            return .state(CodexAuthState(auth: auth, source: .keychain))
+        case .missing:
+            return .none
+        case .unavailable:
+            return keychain.genericPasswordExists(service: Self.keychainService) == true
+                ? .permissionRequired
+                : .none
         }
-        return CodexAuthState(auth: auth, source: .keychain)
+    }
+
+    private func readKeychainValue(account: String?, allowInteraction: Bool) -> NonInteractiveKeychainRead {
+        guard allowInteraction else {
+            if let account {
+                return keychain.readGenericPasswordWithoutUserInteraction(service: Self.keychainService, account: account)
+            }
+            return keychain.readGenericPasswordWithoutUserInteraction(service: Self.keychainService)
+        }
+        do {
+            let value: String?
+            if let account {
+                value = try keychain.readGenericPasswordAllowingUserInteraction(service: Self.keychainService, account: account)
+            } else {
+                value = try keychain.readGenericPasswordAllowingUserInteraction(service: Self.keychainService)
+            }
+            return value.map(NonInteractiveKeychainRead.value) ?? .missing
+        } catch {
+            return .unavailable
+        }
     }
 
     func save(_ state: CodexAuthState) throws {

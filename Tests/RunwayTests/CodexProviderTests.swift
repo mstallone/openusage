@@ -857,3 +857,73 @@ final class CodexUsageClientRefreshTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class CodexKeychainReadModeTests: XCTestCase {
+    func testAutomaticKeyringLoadIsPromptFreeAndManualLoadMayPrompt() {
+        // Regression for the 2026-08-03 prompt loop: the Codex keyring item must never be read
+        // through a prompt-capable path on an automatic refresh or at launch. Only a manual refresh
+        // may use the interactive read (which prompts once, for Runway itself).
+        let keychain = ReadModeTrackingKeychain(value: #"{"tokens":{"access_token":"keychain"}}"#)
+        let store = CodexAuthStore(
+            environment: FakeEnvironment(),
+            files: FakeFiles(),
+            keychain: keychain
+        )
+
+        XCTAssertEqual(store.loadKeychainCredentials().state?.auth.tokens?.accessToken, "keychain")
+        XCTAssertEqual(keychain.interactiveReads, 0)
+        XCTAssertGreaterThan(keychain.nonInteractiveReads, 0)
+        XCTAssertEqual(keychain.plainReads, 0, "the subprocess-style read path must not be used")
+
+        XCTAssertEqual(
+            store.loadKeychainCredentials(allowKeychainInteraction: true).state?.auth.tokens?.accessToken,
+            "keychain"
+        )
+        XCTAssertGreaterThan(keychain.interactiveReads, 0)
+        XCTAssertEqual(keychain.plainReads, 0)
+    }
+
+    func testProtectedKeyringItemCountsAsPermissionRequiredAndNeverBroadens() {
+        // A protected per-home item is a real login footprint and must be reported as
+        // permission-required — never silently skipped, and never broadened past to the
+        // service-only lookup, which could select a different login.
+        let store = CodexAuthStore(
+            environment: FakeEnvironment(),
+            files: FakeFiles(),
+            keychain: ProtectedKeyringKeychain()
+        )
+
+        guard case .permissionRequired = store.loadKeychainCredentials() else {
+            return XCTFail("a protected keyring item must report permission-required")
+        }
+    }
+}
+
+/// Models Codex keyring items Runway isn't authorized to read prompt-free. The service-only lookup
+/// fails the test outright: a protected exact item must never broaden to it.
+private final class ProtectedKeyringKeychain: KeychainAccessing, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        XCTFail("a protected exact item must not broaden to the service-only lookup")
+        return .unavailable
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        true
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
+}

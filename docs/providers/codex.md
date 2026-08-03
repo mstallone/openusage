@@ -19,6 +19,10 @@ When Codex reports your plan name, Runway shows it beside the provider name.
 
 Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). Tokens refresh automatically and rotate back into that account's original credential store.
 
+Automatic refreshes read the keyring item silently and never open a macOS password dialog. If access
+hasn't been approved yet, the card says so — refresh manually once and choose **Always Allow** when
+macOS asks; later reads stay silent.
+
 ## Multiple accounts
 
 Runway discovers Codex homes at launch and gives every distinct ChatGPT account its own card. Each card has isolated limits, plan, spend logs, cached data, and reset-credit actions. If the same account is signed in under more than one home, Runway keeps one card and combines those homes' session logs instead of duplicating it. Pi's Codex usage identifies only the provider family, so Runway assigns that slice to the account currently occupying the default Codex home; when no account holds that badge, it leaves the ambiguous pi slice unattributed.

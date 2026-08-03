@@ -75,13 +75,21 @@ final class CodexProvider: ProviderRuntime {
     func hasLocalCredentials() async -> Bool {
         // Same sources as `refresh()`: auth.json candidates first, keychain as the fallback. Only a
         // usable access token counts (see `hasUsableAccessToken`) — an API-key-only auth.json can't
-        // serve the usage API, so seeding it on would just show an error row.
+        // serve the usage API, so seeding it on would just show an error row. A protected keyring
+        // item counts too: it is a real login even though only a manual refresh may ask the user to
+        // approve reading it.
         let fileCandidates = authStore.loadAuthCandidates()
         if fileCandidates.contains(where: \.hasUsableAccessToken) {
             return true
         }
-        let keychain = await loadOffMainActor { [authStore] in authStore.loadKeychainAuth() }
-        return keychain?.hasUsableAccessToken == true
+        switch await loadOffMainActor({ [authStore] in authStore.loadKeychainCredentials() }) {
+        case .state(let state):
+            return state.hasUsableAccessToken
+        case .permissionRequired:
+            return true
+        case .none:
+            return false
+        }
     }
 
     func refresh() async -> ProviderSnapshot {
@@ -99,12 +107,25 @@ final class CodexProvider: ProviderRuntime {
             }
         }
 
-        if let keychainCandidate = await loadOffMainActor({ [authStore] in authStore.loadKeychainAuth() }) {
+        // A manual refresh may raise the Keychain approval prompt (once, for Runway itself);
+        // automatic refreshes stay prompt-free.
+        let allowInteraction = ProviderRefreshContext.isManual
+        switch await loadOffMainActor({ [authStore] in
+            authStore.loadKeychainCredentials(allowKeychainInteraction: allowInteraction)
+        }) {
+        case .state(let keychainCandidate):
             do {
                 return try await probe(authState: keychainCandidate)
             } catch {
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
+        case .permissionRequired:
+            // The keyring likely holds the freshest rotated credential (it is Codex CLI's source of
+            // truth in keyring mode), so approving it is the actionable fix — surface it over a
+            // stale file candidate's token error.
+            return ProviderSnapshot.error(provider: provider, error: CodexAuthError.keychainPermissionRequired)
+        case .none:
+            break
         }
 
         if let lastFallbackError {

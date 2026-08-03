@@ -57,12 +57,26 @@ final class CursorProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Same source as `refresh()`: any auth state (state DB or keychain) counts.
-        await loadOffMainActor { [authStore] in authStore.loadAuthState() } != nil
+        // Same sources as `refresh()`: any auth state (state DB or keychain) counts. A protected
+        // keychain item counts too — it is a real login even though only a manual refresh may ask
+        // the user to approve reading it.
+        await loadOffMainActor { [authStore] in authStore.loadCredentials() } != .none
     }
 
     func refresh() async -> ProviderSnapshot {
-        guard let state = await loadOffMainActor({ [authStore] in authStore.loadAuthState() }) else {
+        // A manual refresh may raise the Keychain approval prompt (once, for Runway itself);
+        // automatic refreshes stay prompt-free.
+        let allowInteraction = ProviderRefreshContext.isManual
+        let load = await loadOffMainActor { [authStore] in
+            authStore.loadCredentials(allowKeychainInteraction: allowInteraction)
+        }
+        let state: CursorAuthState
+        switch load {
+        case .state(let loaded):
+            state = loaded
+        case .keychainPermissionRequired:
+            return ProviderSnapshot.error(provider: provider, error: CursorAuthError.keychainPermissionRequired)
+        case .none:
             return ProviderSnapshot.error(provider: provider, error: CursorAuthError.notLoggedIn)
         }
 
