@@ -132,7 +132,7 @@ final class CodexAuthStoreTests: XCTestCase {
         XCTAssertEqual(store.authPaths(), ["/tmp/codex-work/auth.json"])
     }
 
-    func testScopedHomeReadsAndRotatesOnlyItsComputedKeyringItem() throws {
+    func testScopedHomeReadsOnlyItsComputedKeyringItem() throws {
         let workHome = "/tmp/codex-work"
         let personalHome = "/tmp/codex-personal"
         let workAccount = CodexAuthStore.keychainAccountName(forHome: workHome)
@@ -161,17 +161,11 @@ final class CodexAuthStoreTests: XCTestCase {
             scope: .home(path: workHome)
         )
 
-        var state = try XCTUnwrap(store.loadKeychainAuth())
+        let state = try XCTUnwrap(store.loadKeychainAuth())
         XCTAssertEqual(state.auth.tokens?.accessToken, "work")
         XCTAssertEqual(state.keychainAccount, workAccount)
         XCTAssertEqual(state.credentialHome, workHome)
-
-        state.auth.tokens?.accessToken = "work-rotated"
-        try store.save(state)
-
-        XCTAssertTrue(keychain.accountValues[workKey]?.contains("work-rotated") == true)
-        XCTAssertTrue(keychain.accountValues[personalKey]?.contains("personal") == true)
-        XCTAssertTrue(keychain.serviceValues[CodexAuthStore.keychainService]?.contains("legacy") == true)
+        XCTAssertEqual(keychain.accountValues[personalKey]?.contains("personal"), true)
     }
 }
 
@@ -795,67 +789,8 @@ final class CodexProviderTests: XCTestCase {
 }
 
 final class CodexUsageClientRefreshTests: XCTestCase {
-    func testRefreshFormEncodesReservedCharactersInRequestBody() async throws {
-        let http = FakeHTTPClient(response: HTTPResponse(
-            statusCode: 200,
-            headers: [:],
-            body: Data(#"{"access_token":"new-token"}"#.utf8)
-        ))
-        let client = CodexUsageClient(http: http)
 
-        _ = try await client.refreshToken("refresh token&=+/?%")
 
-        let request = try XCTUnwrap(http.requests.first)
-        XCTAssertEqual(request.method, "POST")
-        XCTAssertEqual(request.headers["Content-Type"], "application/x-www-form-urlencoded")
-        XCTAssertEqual(
-            String(data: try XCTUnwrap(request.body), encoding: .utf8),
-            "grant_type=refresh_token&client_id=app_EMoamEEZ73f0CkXaXp7hrann" +
-                "&refresh_token=refresh%20token%26%3D%2B%2F%3F%25"
-        )
-    }
-
-    func testRefreshReportsRequestFailureForUnrecognizedErrorBody() async {
-        // A 400 carrying a non-OAuth body (an HTML proxy/WAF page) must surface as a request failure,
-        // not "Token expired. Run `codex` to log in again." — re-login can't fix a transport/infra error.
-        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 400, headers: [:], body: Data("<html>Bad Gateway</html>".utf8)))
-        let client = CodexUsageClient(http: http)
-        do {
-            _ = try await client.refreshToken("refresh")
-            XCTFail("expected refreshToken to throw")
-        } catch let error as CodexUsageError {
-            XCTAssertEqual(error, .requestFailed(400))
-        } catch {
-            XCTFail("expected CodexUsageError.requestFailed, got \(error)")
-        }
-    }
-
-    func testRefreshReportsRequestFailureForNon4xxStatus() async {
-        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 503, headers: [:], body: Data()))
-        let client = CodexUsageClient(http: http)
-        do {
-            _ = try await client.refreshToken("refresh")
-            XCTFail("expected refreshToken to throw")
-        } catch let error as CodexUsageError {
-            XCTAssertEqual(error, .requestFailed(503))
-        } catch {
-            XCTFail("expected CodexUsageError.requestFailed, got \(error)")
-        }
-    }
-
-    func testRefreshStillMapsKnownOAuthCodeToSessionExpired() async {
-        let body = Data(#"{"error":{"code":"refresh_token_expired"}}"#.utf8)
-        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 400, headers: [:], body: body))
-        let client = CodexUsageClient(http: http)
-        do {
-            _ = try await client.refreshToken("refresh")
-            XCTFail("expected refreshToken to throw")
-        } catch let error as CodexAuthError {
-            XCTAssertEqual(error, .sessionExpired)
-        } catch {
-            XCTFail("expected CodexAuthError.sessionExpired, got \(error)")
-        }
-    }
 }
 
 @MainActor
@@ -902,7 +837,7 @@ final class CodexKeychainReadModeTests: XCTestCase {
 
 /// Models Codex keyring items Runway isn't authorized to read prompt-free. The service-only lookup
 /// fails the test outright: a protected exact item must never broaden to it.
-private final class ProtectedKeyringKeychain: KeychainAccessing, @unchecked Sendable {
+private final class ProtectedKeyringKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
         return nil
@@ -926,4 +861,144 @@ private final class ProtectedKeyringKeychain: KeychainAccessing, @unchecked Send
     }
 
     func writeGenericPassword(service: String, value: String) throws {}
+}
+
+@MainActor
+final class CodexReadOnlyCredentialTests: XCTestCase {
+    func testExpiredFileTokenNeverRefreshesOrWritesAndReportsRenewal() async {
+        // Runway is a read-only consumer of Codex's credentials: an expired token means NO
+        // token-endpoint call, NO auth.json write, and a renewal notice.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expired = jwt(exp: now.addingTimeInterval(-60))
+        let originalBlob = #"{"tokens":{"access_token":"\#(expired)","refresh_token":"refresh-1"}}"#
+        let files = FakeFiles(["/tmp/codex/auth.json": originalBlob])
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))
+        let provider = CodexProvider(
+            authStore: CodexAuthStore(
+                environment: FakeEnvironment(["CODEX_HOME": "/tmp/codex"]),
+                files: files,
+                keychain: FakeKeychain(),
+                now: { now }
+            ),
+            usageClient: CodexUsageClient(http: http),
+            logUsageScanner: CodexLogFixture.scanner(home: nil),
+            now: { now },
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertTrue(http.requests.isEmpty, "an expired token short-circuits before any network call")
+        XCTAssertEqual(files.files["/tmp/codex/auth.json"], originalBlob, "auth.json is never written by Runway")
+        XCTAssertEqual(
+            errorBadge(snapshot),
+            CodexAuthError.loginRenewalRequired.localizedDescription
+        )
+    }
+
+    func testUsage401ReportsRenewalWithoutARetryOrTokenEndpointCall() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let valid = jwt(exp: now.addingTimeInterval(60 * 60))
+        let files = FakeFiles([
+            "/tmp/codex/auth.json": #"{"tokens":{"access_token":"\#(valid)","refresh_token":"refresh-1"}}"#
+        ])
+        let http = RoutingHTTPClient { request in
+            XCTAssertFalse(
+                request.url.absoluteString.contains("oauth/token"),
+                "the token endpoint must never be contacted"
+            )
+            return HTTPResponse(statusCode: 401, headers: [:], body: Data())
+        }
+        let provider = CodexProvider(
+            authStore: CodexAuthStore(
+                environment: FakeEnvironment(["CODEX_HOME": "/tmp/codex"]),
+                files: files,
+                keychain: FakeKeychain(),
+                now: { now }
+            ),
+            usageClient: CodexUsageClient(http: http),
+            logUsageScanner: CodexLogFixture.scanner(home: nil),
+            now: { now },
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(http.requests.count, 1, "no refresh-and-retry: one usage call, then renewal")
+        XCTAssertEqual(
+            errorBadge(snapshot),
+            CodexAuthError.loginRenewalRequired.localizedDescription
+        )
+    }
+
+    func testManualRefreshStopsScanningHomesAfterADeniedPrompt() {
+        // Two keyring homes, both protected: a manual refresh may prompt for the first, but a denial
+        // must stop the scan — never one dialog per remaining home.
+        let keychain = DenyingInteractiveKeychain()
+        let store = CodexAuthStore(
+            environment: FakeEnvironment(),
+            files: FakeFiles(),
+            keychain: keychain
+        )
+
+        guard case .permissionRequired = store.loadKeychainCredentials(allowKeychainInteraction: true) else {
+            return XCTFail("a denied prompt must report permission-required")
+        }
+        XCTAssertEqual(keychain.interactiveReads, 1, "a denial must not raise further per-home prompts")
+    }
+
+    private func errorBadge(_ snapshot: ProviderSnapshot) -> String? {
+        snapshot.lines.compactMap { line -> String? in
+            guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+            return text
+        }.first
+    }
+
+    private func jwt(exp date: Date) -> String {
+        let payload = #"{"exp":\#(Int(date.timeIntervalSince1970))}"#
+        let encoded = Data(payload.utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+        return "h.\(encoded).s"
+    }
+}
+
+/// Every interactive read is denied (throws); non-interactive reads report the item as protected.
+private final class DenyingInteractiveKeychain: KeychainReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private var interactive = 0
+
+    var interactiveReads: Int { lock.withLock { interactive } }
+
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        throw KeychainError.readFailed("denied")
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String, account: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        throw KeychainError.readFailed("denied")
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        true
+    }
 }

@@ -70,10 +70,7 @@ struct CodexAuthState: Hashable, Sendable {
 
 enum CodexAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
-    case sessionExpired
-    case tokenConflict
-    case tokenRevoked
-    case tokenExpired
+    case loginRenewalRequired
     case usageAPIKey
     case invalidAuthPayload
     case keychainPermissionRequired
@@ -82,14 +79,8 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .notLoggedIn:
             return "Not logged in. Run `codex` to authenticate."
-        case .sessionExpired:
-            return "Session expired. Run `codex` to log in again."
-        case .tokenConflict:
-            return "Token conflict. Run `codex` to log in again."
-        case .tokenRevoked:
-            return "Token revoked. Run `codex` to log in again."
-        case .tokenExpired:
-            return "Token expired. Run `codex` to log in again."
+        case .loginRenewalRequired:
+            return "Codex login needs renewal. Run `codex`, then refresh Runway."
         case .usageAPIKey:
             return "Usage not available for API key."
         case .invalidAuthPayload:
@@ -101,7 +92,7 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
 
     var allowsAuthFallback: Bool {
         switch self {
-        case .sessionExpired, .tokenConflict, .tokenRevoked, .tokenExpired:
+        case .loginRenewalRequired:
             return true
         case .notLoggedIn, .usageAPIKey, .invalidAuthPayload, .keychainPermissionRequired:
             return false
@@ -133,7 +124,7 @@ struct CodexAuthStore: Sendable {
 
     var environment: EnvironmentReading
     var files: TextFileAccessing
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
     var identityCache: (any CodexHomeIdentityCaching)?
     var now: @Sendable () -> Date
     let scope: CodexCredentialScope
@@ -141,7 +132,7 @@ struct CodexAuthStore: Sendable {
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         files: TextFileAccessing = LocalTextFileAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        keychain: KeychainReading = SecurityKeychainAccessor(),
         scope: CodexCredentialScope = .standard,
         identityCache: (any CodexHomeIdentityCaching)? = nil,
         now: @escaping @Sendable () -> Date = Date.init
@@ -218,6 +209,11 @@ struct CodexAuthStore: Sendable {
                     credentialHome: canonicalHome
                 ))
             case .unavailable:
+                // Interactive mode: the user just saw (and declined/failed) this exact item's
+                // prompt. Stop the scan — continuing would raise one dialog per remaining home.
+                if allowKeychainInteraction {
+                    return .permissionRequired
+                }
                 // This home's item exists but is protected (or the keychain can't be checked) —
                 // a real login footprint. The existence probe is attributes-only and prompt-free.
                 if keychain.genericPasswordExists(service: Self.keychainService, account: account) != false {
@@ -273,33 +269,6 @@ struct CodexAuthStore: Sendable {
         }
     }
 
-    func save(_ state: CodexAuthState) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = state.source.isFile ? [.prettyPrinted, .sortedKeys] : []
-        let data = try encoder.encode(state.auth)
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw CodexAuthError.invalidAuthPayload
-        }
-
-        switch state.source {
-        case .file(let path):
-            try files.writeText(path, text)
-        case .keychain:
-            if let account = state.keychainAccount {
-                try keychain.writeGenericPassword(
-                    service: Self.keychainService,
-                    account: account,
-                    value: text
-                )
-            } else {
-                try keychain.writeGenericPassword(service: Self.keychainService, value: text)
-            }
-        }
-        if state.source.isKeychain, let home = state.credentialHome {
-            _ = recordResolvedIdentity(state.auth, home: home)
-        }
-    }
-
     /// Reload exactly the source that produced a state. A standard store can know several homes, so
     /// repeating its normal precedence walk during token rotation could jump accounts.
     /// Re-reads the state's own credential store mid-refresh (e.g. before a rotation). Keychain
@@ -352,6 +321,8 @@ struct CodexAuthStore: Sendable {
     /// wall-clock age is only a fallback for tokens whose `exp` we can't read; on its own it forced a
     /// refresh while the access token was still valid, tripping `refresh_token_reused` (issue #516).
     /// A brand-new login with no `last_refresh` and no readable `exp` does NOT need a refresh.
+    /// Whether the credential is at (or within a slack window of) its expiry — the trigger for
+    /// re-reading the live store, where the `codex` CLI may already have rotated a fresh token.
     func needsRefresh(_ auth: CodexAuth) -> Bool {
         if let accessToken = auth.tokens?.accessToken,
            let expiresAt = accessTokenExpiresAt(accessToken) {
@@ -363,6 +334,19 @@ struct CodexAuthStore: Sendable {
             return false
         }
         return now().timeIntervalSince(date) > 8 * 24 * 60 * 60
+    }
+
+    /// Whether the access token's own JWT `exp` has lapsed. Runway never refreshes a Codex token —
+    /// the `codex` CLI owns rotation (and OpenAI's reuse detection punishes a second rotator) — so
+    /// an expired candidate is reported for renewal, not renewed. Unknown expiry is not "expired":
+    /// the usage call decides.
+    func isExpired(_ auth: CodexAuth) -> Bool {
+        guard let accessToken = auth.tokens?.accessToken,
+              let expiresAt = accessTokenExpiresAt(accessToken)
+        else {
+            return false
+        }
+        return expiresAt <= now()
     }
 
     /// The access token's expiry from its JWT `exp` claim, or `nil` when the token isn't a decodable

@@ -145,8 +145,9 @@ final class CodexProvider: ProviderRuntime {
 
         if authStore.needsRefresh(authState.auth) {
             // The `codex` CLI may have rotated the token on disk since we loaded it. Re-read the live
-            // credential first and adopt its (newer) access token — refreshing our stale copy would send
-            // an already-rotated refresh_token and trip `refresh_token_reused` (issue #516).
+            // credential and adopt its (newer) access token. Runway itself never refreshes: the CLI
+            // owns rotation, and a second rotator trips OpenAI's `refresh_token_reused` reuse
+            // detection (issue #516) — the same failure class the Claude read-only change closed.
             if let live = authStore.reload(authState),
                let liveToken = live.auth.tokens?.accessToken, !liveToken.isEmpty {
                 authState = live
@@ -154,14 +155,14 @@ final class CodexProvider: ProviderRuntime {
             }
         }
 
-        if authStore.needsRefresh(authState.auth),
-           let refreshToken = authState.auth.tokens?.refreshToken,
-           !refreshToken.isEmpty {
-            let refreshed = try await refreshAccessToken(authState: &authState, refreshToken: refreshToken)
-            accessToken = refreshed
+        // An expired stamp means the call below is doomed; skip the network round trip. Renewal
+        // belongs to the `codex` CLI.
+        if authStore.isExpired(authState.auth) {
+            AppLog.info(LogTag.auth("codex"), "access token expired; renewal belongs to Codex")
+            throw CodexAuthError.loginRenewalRequired
         }
 
-        let response = try await fetchUsageWithRetry(accessToken: accessToken, authState: &authState)
+        let response = try await fetchUsage(accessToken: accessToken, accountID: authState.auth.tokens?.accountID)
         // A successful exact keyring candidate can now safely bind its home for the next launch's
         // attributes-only discovery pass.
         _ = authStore.recordSelectedIdentity(authState)
@@ -232,48 +233,20 @@ final class CodexProvider: ProviderRuntime {
         }
     }
 
-    private func fetchUsageWithRetry(accessToken: String, authState: inout CodexAuthState) async throws -> HTTPResponse {
-        var working = authState
-        defer { authState = working }
-        return try await ProviderAuthRetry.fetch(
-            token: accessToken,
-            attempt: { try await self.usageClient.fetchUsage(accessToken: $0, accountID: working.auth.tokens?.accountID) },
-            refreshAccessToken: {
-                guard let refreshToken = working.auth.tokens?.refreshToken, !refreshToken.isEmpty else {
-                    throw CodexAuthError.tokenExpired
-                }
-                do {
-                    return try await self.refreshAccessToken(authState: &working, refreshToken: refreshToken)
-                } catch let error as CodexAuthError {
-                    throw error
-                } catch {
-                    throw CodexUsageError.connectionFailed
-                }
-            },
-            connectionFailed: CodexUsageError.connectionFailed,
-            authExpired: CodexAuthError.tokenExpired
-        )
-    }
-
-    private func refreshAccessToken(authState: inout CodexAuthState, refreshToken: String) async throws -> String {
-        let response = try await usageClient.refreshToken(refreshToken)
-        authState.auth.tokens?.accessToken = response.accessToken
-        if let refreshToken = response.refreshToken {
-            authState.auth.tokens?.refreshToken = refreshToken
-        }
-        if let idToken = response.idToken {
-            authState.auth.tokens?.idToken = idToken
-        }
-        authState.auth.lastRefresh = RunwayISO8601.string(from: now())
-        // Fail loudly: a swallowed save strands the rotated token on disk (next launch re-refreshes /
-        // can surface a false "token expired"). The refreshed token works for this session, so log and
-        // continue. This is also the only call site of authStore.save, so a genuinely undecodable
-        // payload (CodexAuthError.invalidAuthPayload) now surfaces in the log instead of vanishing.
+    /// Fetch usage with the token exactly as Codex stored it. Runway is a read-only consumer of
+    /// Codex's credentials: it never calls the OAuth token endpoint and never writes `auth.json` or
+    /// the keyring item — so a 401/403 means the login lapsed and only the `codex` CLI can renew it.
+    private func fetchUsage(accessToken: String, accountID: String?) async throws -> HTTPResponse {
+        let response: HTTPResponse
         do {
-            try authStore.save(authState)
+            response = try await usageClient.fetchUsage(accessToken: accessToken, accountID: accountID)
         } catch {
-            AppLog.error(LogTag.auth("codex"), "failed to persist rotated credentials; using the refreshed token for this session only: \(error.localizedDescription)")
+            throw CodexUsageError.connectionFailed
         }
-        return response.accessToken
+        if ProviderAuthRetry.isAuthFailure(response) {
+            AppLog.warn(LogTag.auth("codex"), "unauthorized (\(response.statusCode)); renewal belongs to Codex")
+            throw CodexAuthError.loginRenewalRequired
+        }
+        return response
     }
 }

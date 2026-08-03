@@ -87,40 +87,37 @@ final class CursorProvider: ProviderRuntime {
         }
     }
 
-    private func probe(authState initialState: CursorAuthState) async throws -> ProviderSnapshot {
-        var authState = initialState
-        var accessToken = authState.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-
-        if authStore.needsRefresh(accessToken) {
-            do {
-                if let refreshed = try await refreshAccessToken(authState: authState) {
-                    authState.accessToken = refreshed
-                    accessToken = refreshed
-                } else if accessToken == nil {
-                    throw CursorAuthError.notLoggedIn
-                }
-            } catch {
-                if accessToken == nil {
-                    throw error
-                }
-            }
-        }
+    /// Read-only: Runway never calls Cursor's token endpoint and never writes its state database or
+    /// keychain items — the Cursor app owns its login and its rotation. A lapsed token is reported
+    /// for renewal, not renewed.
+    private func probe(authState: CursorAuthState) async throws -> ProviderSnapshot {
+        let accessToken = authState.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
 
         guard let accessToken else {
             throw CursorAuthError.notLoggedIn
         }
+        // An expired stamp means the calls below are doomed; skip the network round trips. Runway
+        // never refreshes a Cursor token — the Cursor app owns rotation — so renewal is Cursor's.
+        if authStore.isExpired(accessToken) {
+            AppLog.info(LogTag.auth("cursor"), "access token expired; renewal belongs to Cursor")
+            throw CursorAuthError.loginRenewalRequired
+        }
 
-        let usageResponse = try await fetchUsageWithRetry(accessToken: accessToken, authState: &authState)
+        let usageResponse: HTTPResponse
+        do {
+            usageResponse = try await usageClient.fetchUsage(accessToken: accessToken)
+        } catch {
+            throw CursorUsageError.connectionFailed
+        }
         try ProviderAuthRetry.requireSuccess(
             usageResponse,
-            authExpired: CursorAuthError.tokenExpired,
+            authExpired: CursorAuthError.loginRenewalRequired,
             requestFailed: { CursorUsageError.requestFailed($0) }
         )
         guard let usage = ProviderParse.jsonObject(usageResponse.body) else {
             throw CursorUsageError.invalidResponse
         }
-        // The access token may have rotated during the usage fetch's refresh-and-retry; read the live one.
-        let currentToken = authState.accessToken ?? accessToken
+        let currentToken = accessToken
 
         let (planName, planInfoUnavailable) = await fetchPlanName(accessToken: currentToken)
         let fallback = CursorUsageMapper.shouldUseRequestBasedFallback(
@@ -214,61 +211,6 @@ final class CursorProvider: ProviderRuntime {
             AppLog.warn(LogTag.plugin("cursor"), "usage CSV could not be parsed")
         }
         return nil
-    }
-
-    private func fetchUsageWithRetry(accessToken: String, authState: inout CursorAuthState) async throws -> HTTPResponse {
-        var working = authState
-        defer { authState = working }
-        return try await ProviderAuthRetry.fetch(
-            token: accessToken,
-            attempt: { try await self.usageClient.fetchUsage(accessToken: $0) },
-            refreshAccessToken: {
-                guard let refreshed = try await self.refreshAccessToken(authState: working) else {
-                    throw CursorAuthError.tokenExpired
-                }
-                working.accessToken = refreshed
-                return refreshed
-            },
-            connectionFailed: CursorUsageError.connectionFailed,
-            retriedConnectionFailed: CursorUsageError.usageAfterRefreshFailed,
-            authExpired: CursorAuthError.tokenExpired
-        )
-    }
-
-    private func refreshAccessToken(authState: CursorAuthState) async throws -> String? {
-        guard let refreshToken = authState.refreshToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
-            return nil
-        }
-
-        let response = try await usageClient.refreshToken(refreshToken)
-        if response.statusCode == 400 || response.statusCode == 401 {
-            let body = ProviderParse.jsonObject(response.body)
-            if body?["shouldLogout"] as? Bool == true {
-                throw CursorAuthError.sessionExpired
-            }
-            throw CursorAuthError.tokenExpired
-        }
-        guard (200..<300).contains(response.statusCode),
-              let body = ProviderParse.jsonObject(response.body)
-        else {
-            return nil
-        }
-        if body["shouldLogout"] as? Bool == true {
-            throw CursorAuthError.sessionExpired
-        }
-        guard let accessToken = (body["access_token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty else {
-            return nil
-        }
-        // Fail loudly, but do NOT interpolate the error: the Cursor token is persisted via a SQL
-        // statement that embeds the token, and a sqlite3 failure surfaces as stderr that could echo a
-        // fragment of that statement (JWTs aren't covered by log redaction). A generic error line keeps
-        // it loud without risking a token leak. The refreshed token still works for this session.
-        do {
-            try authStore.saveAccessToken(accessToken, source: authState.source)
-        } catch {
-            AppLog.error(LogTag.auth("cursor"), "failed to persist rotated access token to the Cursor state DB; using it for this session only")
-        }
-        return accessToken
     }
 
     private func fetchPlanName(accessToken: String) async -> (String?, Bool) {

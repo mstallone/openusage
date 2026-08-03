@@ -61,7 +61,7 @@ struct ProviderAccountAssembly {
     /// Shared cache used by scoped keyring stores and the post-launch warming task.
     var codexIdentityCache: CodexHomeIdentityCache?
     /// Same accessor discovery probed; retained so warming reads the exact items from that source.
-    var codexIdentityWarmKeychain: (any KeychainAccessing)?
+    var codexIdentityWarmKeychain: (any KeychainReading)?
     /// Homes kept hidden because their exact keyring item hasn't been safely identity-bound yet.
     var unverifiedCodexKeyringHomes: Set<String> = []
 
@@ -177,7 +177,7 @@ struct ProviderAccountAssembly {
     static func assemble(
         readout: DiscoveryReadout,
         accountsStore: ProviderAccountsStore,
-        codexKeychain: (any KeychainAccessing)?
+        codexKeychain: (any KeychainReading)?
     ) -> ProviderAccountAssembly {
         var identityKeys: [String: String] = [:]
         var observations: [ProviderAccountsStore.AccountObservation] = []

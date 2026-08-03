@@ -23,14 +23,6 @@ final class CursorAuthStoreTests: XCTestCase {
         XCTAssertEqual(state?.refreshToken, "keychain-refresh")
     }
 
-    func testPersistsSQLiteAccessToken() throws {
-        let sqlite = FakeSQLite()
-        let store = CursorAuthStore(sqlite: sqlite, keychain: FakeKeychain())
-
-        try store.saveAccessToken("fresh-token", source: .sqlite)
-
-        XCTAssertEqual(sqlite.writtenValues[CursorAuthStore.accessTokenKey], "fresh-token")
-    }
 }
 
 final class CursorUsageMapperTests: XCTestCase {
@@ -396,7 +388,7 @@ private final class EmptySQLite: SQLiteAccessing, @unchecked Sendable {
 
 /// Cursor keychain items Runway isn't authorized to read prompt-free: non-interactive reads report
 /// `.unavailable` while the attributes-only existence probe still confirms the items.
-private final class UnavailableCursorKeychain: KeychainAccessing, @unchecked Sendable {
+private final class UnavailableCursorKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
         return nil
@@ -414,7 +406,7 @@ private final class UnavailableCursorKeychain: KeychainAccessing, @unchecked Sen
 }
 
 /// The access-token item is approved and readable; the refresh-token item exists but is protected.
-private final class HalfApprovedCursorKeychain: KeychainAccessing, @unchecked Sendable {
+private final class HalfApprovedCursorKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
         return nil
@@ -429,4 +421,102 @@ private final class HalfApprovedCursorKeychain: KeychainAccessing, @unchecked Se
     }
 
     func writeGenericPassword(service: String, value: String) throws {}
+}
+
+@MainActor
+final class CursorReadOnlyCredentialTests: XCTestCase {
+    func testExpiredTokenNeverRefreshesOrWritesAndReportsRenewal() async {
+        // Runway is a read-only consumer of Cursor's credentials: an expired token means NO
+        // token-endpoint call, NO state-database or keychain write, and a renewal notice.
+        let sqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: makeCursorJWT(exp: 1),
+            CursorAuthStore.refreshTokenKey: "refresh-1",
+            CursorAuthStore.membershipTypeKey: "pro"
+        ])
+        let http = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(sqlite: sqlite, keychain: FakeKeychain()),
+            usageClient: CursorUsageClient(http: http)
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertTrue(http.requests.isEmpty, "an expired token short-circuits before any network call")
+        XCTAssertTrue(sqlite.writtenValues.isEmpty, "Cursor's state database is never written by Runway")
+        XCTAssertEqual(
+            snapshot.lines.compactMap { line -> String? in
+                guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+                return text
+            }.first,
+            CursorAuthError.loginRenewalRequired.localizedDescription
+        )
+    }
+
+    func testUsage401ReportsRenewalWithoutARetryOrTokenEndpointCall() async {
+        let sqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: makeCursorJWT(),
+            CursorAuthStore.membershipTypeKey: "pro"
+        ])
+        let http = RoutingHTTPClient { request in
+            XCTAssertFalse(
+                request.url.absoluteString.contains("token"),
+                "the token endpoint must never be contacted"
+            )
+            return HTTPResponse(statusCode: 401, headers: [:], body: Data())
+        }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(sqlite: sqlite, keychain: FakeKeychain()),
+            usageClient: CursorUsageClient(http: http)
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(http.requests.count, 1, "no refresh-and-retry: one usage call, then renewal")
+        XCTAssertEqual(
+            snapshot.lines.compactMap { line -> String? in
+                guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+                return text
+            }.first,
+            CursorAuthError.loginRenewalRequired.localizedDescription
+        )
+    }
+}
+
+@MainActor
+final class CursorPromptBoundTests: XCTestCase {
+    func testDeniedAccessPromptDoesNotRaiseTheRefreshPromptToo() {
+        // Approval is per item, but a denial of the first prompt means "no" — the companion item's
+        // prompt must not follow in the same pass.
+        let keychain = DenyingCursorKeychain()
+        let store = CursorAuthStore(sqlite: EmptySQLite(), keychain: keychain)
+
+        XCTAssertEqual(store.loadCredentials(allowKeychainInteraction: true), .keychainPermissionRequired)
+        XCTAssertEqual(keychain.interactiveReads, 1, "a denial must not chain into a second prompt")
+    }
+}
+
+/// Every interactive read is denied (throws); non-interactive reads report items as protected.
+private final class DenyingCursorKeychain: KeychainReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private var interactive = 0
+
+    var interactiveReads: Int { lock.withLock { interactive } }
+
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        throw KeychainError.readFailed("denied")
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
 }

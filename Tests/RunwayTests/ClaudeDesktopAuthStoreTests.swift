@@ -575,7 +575,7 @@ private struct DesktopFixture {
     var keyReader: FakeClaudeDesktopKeyReader
 }
 
-private final class DenyingClaudeCodeKeychain: KeychainAccessing, @unchecked Sendable {
+private final class DenyingClaudeCodeKeychain: KeychainReading, @unchecked Sendable {
     private(set) var currentUserInteractiveReads = 0
     private(set) var legacyInteractiveReads = 0
 

@@ -13,18 +13,15 @@ struct CursorAuthState: Hashable, Sendable {
 
 enum CursorAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
-    case sessionExpired
-    case tokenExpired
+    case loginRenewalRequired
     case keychainPermissionRequired
 
     var errorDescription: String? {
         switch self {
         case .notLoggedIn:
             return "Not logged in. Sign in via Cursor app or run `agent login`."
-        case .sessionExpired:
-            return "Session expired. Sign in via Cursor app or run `agent login`."
-        case .tokenExpired:
-            return "Token expired. Sign in via Cursor app or run `agent login`."
+        case .loginRenewalRequired:
+            return "Cursor login needs renewal. Open the Cursor app, then refresh Runway."
         case .keychainPermissionRequired:
             return "Cursor login found in Keychain. Refresh manually and choose Always Allow to connect it."
         }
@@ -52,15 +49,14 @@ struct CursorAuthStore: Sendable {
     static let membershipTypeKey = "cursorAuth/stripeMembershipType"
     static let keychainAccessTokenService = "cursor-access-token"
     static let keychainRefreshTokenService = "cursor-refresh-token"
-    static let refreshBufferSeconds: TimeInterval = 5 * 60
 
     var sqlite: SQLiteAccessing
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
     var now: @Sendable () -> Date
 
     init(
         sqlite: SQLiteAccessing = SQLiteCLIAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        keychain: KeychainReading = SecurityKeychainAccessor(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.sqlite = sqlite
@@ -89,7 +85,13 @@ struct CursorAuthStore: Sendable {
         let keychainCanWin = !hasSQLiteAuth || sqliteMembershipType == "free"
         let allowKeychainPrompt = allowKeychainInteraction && keychainCanWin
         let accessRead = readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainPrompt)
-        let refreshRead = readKeychainValue(Self.keychainRefreshTokenService, allowInteraction: allowKeychainPrompt)
+        // Keychain approval is per item, so the two entries can each ask once ("Always Allow" makes
+        // both permanent). But a DENIED access prompt must not immediately raise the refresh prompt
+        // too — the user just said no to this exact pair.
+        let refreshRead = readKeychainValue(
+            Self.keychainRefreshTokenService,
+            allowInteraction: allowKeychainPrompt && accessRead != .unavailable
+        )
         let keychainAccessToken = accessRead.trimmedValue
         let keychainRefreshToken = refreshRead.trimmedValue
 
@@ -149,26 +151,19 @@ struct CursorAuthStore: Sendable {
         return .none
     }
 
+    /// `nil` from the probe means "cannot check" (locked keychain, stuck flight), not "absent" —
+    /// treating it as logged-out would silently swallow an access problem. Only a confirmed-absent
+    /// item reads as no footprint.
     private func protectedItemExists(_ read: NonInteractiveKeychainRead, service: String) -> Bool {
-        read == .unavailable && keychain.genericPasswordExists(service: service) == true
+        read == .unavailable && keychain.genericPasswordExists(service: service) != false
     }
 
-    func needsRefresh(_ accessToken: String?) -> Bool {
-        guard let accessToken,
-              let expiresAt = Self.tokenExpiration(accessToken)
-        else {
-            return true
-        }
-        return expiresAt.timeIntervalSince(now()) <= Self.refreshBufferSeconds
-    }
-
-    func saveAccessToken(_ accessToken: String, source: CursorAuthState.Source) throws {
-        switch source {
-        case .sqlite:
-            try writeStateValue(Self.accessTokenKey, accessToken)
-        case .keychain:
-            try keychain.writeGenericPassword(service: Self.keychainAccessTokenService, value: accessToken)
-        }
+    /// Whether the token's own JWT `exp` has lapsed. Runway never refreshes a Cursor token — the
+    /// Cursor app owns rotation — so an expired token is reported for renewal, not renewed. Unknown
+    /// expiry is not "expired": the usage call decides.
+    func isExpired(_ accessToken: String) -> Bool {
+        guard let expiresAt = Self.tokenExpiration(accessToken) else { return false }
+        return expiresAt <= now()
     }
 
     /// All requested keys in one query. `json_group_object` folds the matching rows into a single
@@ -187,13 +182,6 @@ struct CursorAuthStore: Sendable {
             if !trimmed.isEmpty { values[key] = trimmed }
         }
         return values
-    }
-
-    private func writeStateValue(_ key: String, _ value: String) throws {
-        let sql = """
-        INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('\(Self.sqlEscaped(key))', '\(Self.sqlEscaped(value))');
-        """
-        try sqlite.execute(path: Self.stateDBPath, sql: sql)
     }
 
     private func readKeychainValue(_ service: String, allowInteraction: Bool) -> NonInteractiveKeychainRead {

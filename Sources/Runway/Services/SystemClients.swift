@@ -51,7 +51,6 @@ protocol SQLiteAccessing: Sendable {
     /// Read-only query whose rows come back as a JSON array of objects (sqlite3 `-json` output).
     /// `nil` means the database is absent or the query matched no rows.
     func queryJSONRows(path: String, sql: String) throws -> String?
-    func execute(path: String, sql: String) throws
 }
 
 struct SQLiteCLIAccessor: SQLiteAccessing {
@@ -98,13 +97,6 @@ struct SQLiteCLIAccessor: SQLiteAccessing {
     private func immutableURI(forExpandedPath path: String) -> String {
         let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
         return "file:\(encoded)?immutable=1"
-    }
-
-    func execute(path: String, sql: String) throws {
-        let result = try run(path: path, sql: sql)
-        guard result.succeeded else {
-            throw SQLiteError.queryFailed(result.stderr)
-        }
     }
 
     private func run(
@@ -194,16 +186,6 @@ protocol KeychainReading: Sendable {
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String?
 }
 
-/// Full Keychain access. Only stores that legitimately write remain on this type: Codex and Cursor
-/// (their read-only ownership audit is planned follow-up work) and test fakes.
-protocol KeychainAccessing: KeychainReading {
-    func writeGenericPassword(service: String, value: String) throws
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws
-    /// Write one explicitly addressed item. Codex keyring mode stores every home under the shared
-    /// `Codex Auth` service with a home-derived account, so token rotation must preserve that account.
-    func writeGenericPassword(service: String, account: String, value: String) throws
-}
-
 extension KeychainReading {
     func readGenericPasswordForCurrentUser(service: String) throws -> String? {
         try readGenericPassword(service: service)
@@ -279,16 +261,6 @@ extension KeychainReading {
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
         nil
-    }
-}
-
-extension KeychainAccessing {
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
-        try writeGenericPassword(service: service, value: value)
-    }
-
-    func writeGenericPassword(service: String, account: String, value: String) throws {
-        try writeGenericPassword(service: service, value: value)
     }
 }
 
@@ -398,7 +370,7 @@ enum KeychainUISuppression {
     }
 }
 
-struct SecurityKeychainAccessor: KeychainAccessing {
+struct SecurityKeychainAccessor: KeychainReading {
     let processRunner: ProcessRunning
     /// Gates every in-process secret read: change-gated caching, single-flight per item, and a
     /// circuit breaker after denials. See `KeychainReadCoordinator`.
@@ -599,18 +571,6 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         return value.isEmpty ? nil : value
     }
 
-    func writeGenericPassword(service: String, value: String) throws {
-        try writePassword(["add-generic-password", "-U", "-s", service, "-w", value])
-    }
-
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
-        try writePassword(["add-generic-password", "-U", "-a", currentUserAccount(), "-s", service, "-w", value])
-    }
-
-    func writeGenericPassword(service: String, account: String, value: String) throws {
-        try writePassword(["add-generic-password", "-U", "-a", account, "-s", service, "-w", value])
-    }
-
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
         coordinator.probe(service: service, account: account) {
             attributeFingerprint(service: service, account: account)
@@ -671,18 +631,6 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         let context = LAContext()
         context.interactionNotAllowed = true
         return context
-    }
-
-    private func writePassword(_ arguments: [String]) throws {
-        let result = try processRunner.run(
-            executable: "/usr/bin/security",
-            arguments: arguments,
-            environment: [:],
-            timeout: 5
-        )
-        if !result.succeeded {
-            throw KeychainError.writeFailed(result.stderr)
-        }
     }
 
     private func currentUserAccount() -> String {

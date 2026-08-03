@@ -67,7 +67,7 @@ final class CodexKeyringAssemblyTests: XCTestCase {
 
     private func makeDiscovery(
         home: String,
-        keychain: KeychainAccessing,
+        keychain: KeychainReading,
         identityCache: any CodexHomeIdentityCaching
     ) -> CodexHomeDiscovery {
         CodexHomeDiscovery(

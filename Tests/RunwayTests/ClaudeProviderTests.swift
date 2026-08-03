@@ -1309,7 +1309,7 @@ final class ClaudeProviderTests: XCTestCase {
 /// Models an existing Claude Code item that Runway has not been authorized to read yet. The launch
 /// path may inspect its attributes and attempt an interaction-forbidden read, but must never call either
 /// interactive secret API — those are what cause macOS to present the password dialog.
-private final class InteractionTrackingKeychain: KeychainAccessing, @unchecked Sendable {
+private final class InteractionTrackingKeychain: KeychainReading, @unchecked Sendable {
     private let lock = NSLock()
     private let approvedValue: String?
     private let existence: Bool?
@@ -1376,7 +1376,7 @@ private final class InteractionTrackingKeychain: KeychainAccessing, @unchecked S
 
 /// Models a readable Claude Code item and counts every write-capable call. Runway is a read-only
 /// consumer of Claude's credentials, so tests assert the count stays zero.
-private final class WriteTrackingKeychain: KeychainAccessing, @unchecked Sendable {
+private final class WriteTrackingKeychain: KeychainReading, @unchecked Sendable {
     private let lock = NSLock()
     private let value: String
     private var writes = 0

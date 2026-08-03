@@ -82,7 +82,7 @@ final class ProviderAccountAssemblyTests: XCTestCase {
         files: [String: String],
         subdirectories: [String],
         environment: [String: String] = [:],
-        keychain: KeychainAccessing = AccountKeychain(),
+        keychain: KeychainReading = AccountKeychain(),
         identityCache: (any CodexHomeIdentityCaching)? = nil
     ) -> CodexHomeDiscovery {
         CodexHomeDiscovery(

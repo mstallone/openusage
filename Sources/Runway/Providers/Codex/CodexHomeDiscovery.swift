@@ -28,7 +28,7 @@ struct CodexHomeDiscovery {
 
     var environment: EnvironmentReading
     var files: TextFileAccessing
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
     var identityCache: (any CodexHomeIdentityCaching)?
     var homeDirectory: @Sendable () -> URL
     var listSubdirectories: @Sendable (URL) -> [URL]
@@ -38,7 +38,7 @@ struct CodexHomeDiscovery {
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         files: TextFileAccessing = LocalTextFileAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        keychain: KeychainReading = SecurityKeychainAccessor(),
         identityCache: (any CodexHomeIdentityCaching)? = nil,
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         listSubdirectories: @escaping @Sendable (URL) -> [URL] = Self.filesystemSubdirectories,

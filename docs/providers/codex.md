@@ -17,7 +17,7 @@ When Codex reports your plan name, Runway shows it beside the provider name.
 
 ## Where credentials come from
 
-Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). Tokens refresh automatically and rotate back into that account's original credential store.
+Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). All Codex credentials are strictly read-only to Runway: it never refreshes a token and never writes `auth.json` or the keyring — the `codex` CLI owns the login and its rotation. When the token lapses, the card shows **"Codex login needs renewal"**: run `codex` (it renews its own login), then refresh Runway. The local spend tiles keep working the whole time.
 
 Automatic refreshes read the keyring item silently and never open a macOS password dialog. If access
 hasn't been approved yet, the card says so — refresh manually once and choose **Always Allow** when
@@ -36,7 +36,7 @@ CODEX_HOME="$HOME/.codex-personal" codex
 
 A discovered home must contain a usable OAuth login that names its account through Codex's own account id. For file storage, that identity comes directly from `auth.json`. For keyring storage, Runway reads the exact home-scoped item once after launch and binds the account identity to that item's non-secret fingerprint; the card appears on the next launch. Replacing the keyring item invalidates the binding, so the home stays hidden until the new login is safely rebound.
 
-Runway never treats a directory name as identity. Every card is pinned to one credential home, and refreshes rotate back into that home's original file or keyring item. That keeps a token, session log, cached snapshot, or reset claim from crossing between accounts when homes are added, removed, or swapped.
+Runway never treats a directory name as identity. Every card is pinned to one credential home and reads only that home's original file or keyring item. That keeps a token, session log, cached snapshot, or reset claim from crossing between accounts when homes are added, removed, or swapped.
 
 With one discovered account, the default name is simply "Codex." With multiple accounts, every card
 includes its account email, including the first/default card. An organization name appears after the
@@ -55,13 +55,15 @@ For supported GPT-5.4, GPT-5.5, and GPT-5.6 models, requests above 272k input to
 ## Troubleshooting
 
 - **"Not logged in"** — run `codex` and sign in, then refresh.
+- **"Codex login needs renewal"** — the stored token has expired or was revoked. Runway never renews Codex's tokens itself, so run `codex` (it refreshes its login when it starts), then refresh Runway. The spend tiles keep working in the meantime.
+- **"Codex login found in Keychain"** — refresh manually and choose **Always Allow** when macOS asks for access to `Codex Auth`.
 - **API-key-only setups** can't read subscription usage — sign in with your ChatGPT account instead.
 - **Spend tiles show "No data"** — Runway found no Codex session logs in the last 30 days. If your Codex home lives somewhere custom, set `CODEX_HOME` so both the Codex CLI and Runway look in the same place.
 - **A custom home doesn't become a separate card** — confirm it has a ChatGPT OAuth login and either an `auth.json`, `config.toml`, or sessions directory that lets discovery recognize the home. API-key-only, tokenless, and nameless file credentials are skipped rather than guessed. A keyring-only home sometimes needs one additional Runway launch after its exact credential is first bound.
 
 ## Under the hood
 
-`GET https://chatgpt.com/backend-api/wham/usage` with the Codex OAuth token; refresh via `auth.openai.com`. A 401/403 triggers one token refresh and retry. Session and Weekly are classified by each usage window's duration rather than by its primary/secondary slot. This matters when Codex temporarily removes one limit and moves the remaining weekly window into the primary slot. Payloads without a recognized duration retain the primary-as-Session and secondary-as-Weekly compatibility fallback; response headers fill percentages missing from the corresponding window.
+`GET https://chatgpt.com/backend-api/wham/usage` with the Codex OAuth token, read-only: Runway never calls the token endpoint, and a 401/403 shows the renewal notice instead of retrying. Session and Weekly are classified by each usage window's duration rather than by its primary/secondary slot. This matters when Codex temporarily removes one limit and moves the remaining weekly window into the primary slot. Payloads without a recognized duration retain the primary-as-Session and secondary-as-Weekly compatibility fallback; response headers fill percentages missing from the corresponding window.
 
 Spark and Spark Weekly come from the same response's `additional_rate_limits` array — model-specific limits that reuse the duration-based Session/Weekly classification. Runway surfaces the entry whose name identifies GPT-5.3-Codex-Spark as those two meters; accounts without the limit simply omit the entry, so the rows read "No data". Other model limits in that array aren't shown.
 

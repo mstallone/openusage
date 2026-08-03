@@ -432,7 +432,7 @@ final class DefaultAccountObserverTests: XCTestCase {
     }
 }
 
-private final class ThrowingKeychain: KeychainAccessing, @unchecked Sendable {
+private final class ThrowingKeychain: KeychainReading, @unchecked Sendable {
     struct Unavailable: Error {}
     func readGenericPassword(service: String) throws -> String? { throw Unavailable() }
     func writeGenericPassword(service: String, value: String) throws { throw Unavailable() }

@@ -8,7 +8,7 @@ Provider usage stays on your Mac except for the network requests needed to read 
 
 ## Credentials Stored on This Mac
 
-Runway primarily reads credentials that provider tools already keep on your Mac. When it writes a user-supplied API key or saves a refreshed credential, it replaces the file atomically and restricts it to your macOS account (owner read and write only). Antigravity's short-lived refreshed-token cache is tied to the current Keychain login using a one-way fingerprint; the refresh credential itself is not copied. The cache is never used after logout, an account change, or while Keychain access is unavailable.
+Runway reads credentials that provider tools already keep on your Mac and never writes a provider's credential store — every provider's tool owns its own login and token rotation. When Runway writes a user-supplied API key of its own, it replaces the file atomically and restricts it to your macOS account (owner read and write only). Antigravity's short-lived refreshed-token cache is tied to the current Keychain login using a one-way fingerprint; the refresh credential itself is not copied. The cache is never used after logout, an account change, or while Keychain access is unavailable.
 
 All Claude access is strictly read-only. Runway never refreshes a Claude OAuth token and never writes to Claude Code's Keychain items or `.credentials.json` — Claude owns its logins and their rotation. For Claude Desktop, Runway can ask macOS for permission to use the `Claude Safe Storage` Keychain item so it can decrypt Desktop's current access token; it never uses Desktop's rotating refresh token and never modifies Desktop's config, cookies, or Keychain data.
 
