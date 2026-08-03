@@ -5,12 +5,15 @@
 # website/ onto that branch with keep_files, so the page coexists with the feed files and a merge
 # to main is all it takes to update the live site.
 #
-# Shares the release workflow's concurrency group: everything that pushes to update-feed does so
-# with keep_files, so serializing the publishers prevents lost updates from concurrent pushes.
-# GitHub keeps only one PENDING run per concurrency group — a newer queued publisher silently
-# replaces an older pending one even with cancel-in-progress: false. To make that supersession
-# lossless, this workflow and Publish Pricing Supplement each publish the UNION of the main-branch
-# content (website/ plus the validated pricing supplement), so whichever run survives ships both.
+# Concurrency: this workflow and Publish Pricing Supplement share their own content group,
+# deliberately NOT the release workflow's update-feed-publish group. GitHub keeps only one PENDING
+# run per concurrency group — a newer queued run silently cancels an older pending one even with
+# cancel-in-progress: false — and sharing the release group would let a website merge cancel a
+# queued release build. Content-on-content supersession is lossless because both content
+# publishers ship the UNION of the main-branch content (website/ plus the validated supplement).
+# The cost of the separate groups is a seconds-wide window where a content push can race the
+# release job's appcast push; the loser fails loudly (non-fast-forward) and a rerun republishes
+# everything, and the release job also ships this union so the feed completes either way.
 name: Publish Landing Page
 
 on:
@@ -22,7 +25,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: update-feed-publish
+  group: update-feed-content-publish
   cancel-in-progress: false
 
 permissions:
@@ -65,13 +68,31 @@ jobs:
       # Publish the FULL desired state of the branch instead of layering with keep_files: carry the
       # live appcast forward, then lay down the current main-branch content. Publishing the whole
       # state is what lets a deleted or renamed website file actually disappear from the served
-      # site. The branch holds nothing but the appcast, the supplement, and the website, and the
-      # shared concurrency group serializes publishers, so the carry-forward cannot race a release.
+      # site. The branch holds nothing but the appcast, the supplement, and the website.
+      #
+      # The appcast carry-forward must distinguish "branch does not exist yet" (bootstrap: publish
+      # without an appcast) from "could not reach origin" (abort: publishing without the live
+      # appcast would delete the Sparkle feed that shipped apps poll). git ls-remote --exit-code
+      # returns 2 when the ref is missing and other codes on transport failure.
       - name: Assemble update feed
         run: |
           mkdir -p public
-          if git fetch --depth 1 origin update-feed 2>/dev/null; then
-            git show FETCH_HEAD:appcast.xml > public/appcast.xml 2>/dev/null || rm -f public/appcast.xml
+          set +e
+          git ls-remote --exit-code --heads origin update-feed > /dev/null
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            git fetch --depth 1 origin update-feed
+            if git cat-file -e FETCH_HEAD:appcast.xml 2>/dev/null; then
+              git show FETCH_HEAD:appcast.xml > public/appcast.xml
+            else
+              echo "update-feed exists but has no appcast.xml yet (pre-first-release); continuing."
+            fi
+          elif [ "$status" -eq 2 ]; then
+            echo "update-feed branch does not exist yet; bootstrapping it without an appcast."
+          else
+            echo "Cannot query origin for the update-feed branch (exit $status); aborting instead of risking the live appcast." >&2
+            exit 1
           fi
           cp -R website/. public/
           cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json

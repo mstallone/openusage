@@ -272,10 +272,11 @@ jobs:
           mkdir -p public
           cp feed/appcast.xml public/appcast.xml
           # Also publish the current main-branch site content (website + pricing supplement).
-          # GitHub keeps only one PENDING run per concurrency group, so this queued publish can
-          # silently replace a pending Publish Landing Page / Publish Pricing Supplement run. All
-          # three update-feed publishers therefore ship the same content union: whichever run
-          # survives supersession publishes everything, and nothing is stranded.
+          # The content publishers run in their own concurrency group (update-feed-content-
+          # publish) so they can never cancel a pending release build; the cost is a seconds-wide
+          # window where a content push can race this job's push and fail (non-fast-forward).
+          # Shipping the same content union here means the feed still ends up complete even if a
+          # content run loses that race, and keep_files above preserves whatever else is live.
           git fetch --depth 1 origin main
           git show FETCH_HEAD:Sources/Runway/Resources/pricing_supplement.json > public/pricing_supplement.json
           git archive FETCH_HEAD website | tar -x -C public --strip-components=1

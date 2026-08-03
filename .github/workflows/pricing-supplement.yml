@@ -5,12 +5,10 @@
 # composer-*, github_bugbot), fast multipliers, and model alias rules in the field within ~a day —
 # no tag, no release, no Sparkle involvement.
 #
-# Shares the release workflow's concurrency group: all publishers push to update-feed with
-# keep_files, so serializing them prevents lost updates from concurrent pushes to the branch.
-# GitHub keeps only one PENDING run per concurrency group — a newer queued publisher silently
-# replaces an older pending one even with cancel-in-progress: false. To make that supersession
-# lossless, this workflow and Publish Landing Page each publish the UNION of the main-branch
-# content (the validated supplement plus website/), so whichever run survives ships both.
+# Concurrency: shares the content group with Publish Landing Page, deliberately NOT the release
+# workflow's update-feed-publish group — see landing-page.yml for the full rationale (a queued
+# content publish must never cancel a pending release build; content-on-content supersession is
+# lossless because both content publishers ship the same union of website/ and the supplement).
 name: Publish Pricing Supplement
 
 on:
@@ -22,7 +20,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: update-feed-publish
+  group: update-feed-content-publish
   cancel-in-progress: false
 
 permissions:
@@ -63,12 +61,27 @@ jobs:
 
       # Publish the FULL desired state of the branch instead of layering with keep_files: carry the
       # live appcast forward, then lay down the current main-branch content. See landing-page.yml
-      # for why (deleted website files must disappear; the concurrency group makes this race-free).
+      # for why (deleted website files must disappear; transport failures must abort rather than
+      # publish without the live appcast).
       - name: Assemble update feed
         run: |
           mkdir -p public
-          if git fetch --depth 1 origin update-feed 2>/dev/null; then
-            git show FETCH_HEAD:appcast.xml > public/appcast.xml 2>/dev/null || rm -f public/appcast.xml
+          set +e
+          git ls-remote --exit-code --heads origin update-feed > /dev/null
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            git fetch --depth 1 origin update-feed
+            if git cat-file -e FETCH_HEAD:appcast.xml 2>/dev/null; then
+              git show FETCH_HEAD:appcast.xml > public/appcast.xml
+            else
+              echo "update-feed exists but has no appcast.xml yet (pre-first-release); continuing."
+            fi
+          elif [ "$status" -eq 2 ]; then
+            echo "update-feed branch does not exist yet; bootstrapping it without an appcast."
+          else
+            echo "Cannot query origin for the update-feed branch (exit $status); aborting instead of risking the live appcast." >&2
+            exit 1
           fi
           cp -R website/. public/
           cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json
