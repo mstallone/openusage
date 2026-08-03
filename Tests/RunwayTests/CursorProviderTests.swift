@@ -342,6 +342,25 @@ final class CursorKeychainReadModeTests: XCTestCase {
 
         XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
     }
+
+    func testFreeSQLiteTokenDoesNotSilentlyBypassAProtectedKeychainLogin() {
+        // The keychain (agent CLI) login can be the real paid account; with its items protected the
+        // free-vs-different-subject comparison is impossible, so the load surfaces the approval need
+        // instead of silently showing the free SQLite account. A paid SQLite login keeps winning.
+        let sqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: "sqlite-free-token",
+            CursorAuthStore.membershipTypeKey: "free"
+        ])
+        let protected = CursorAuthStore(sqlite: sqlite, keychain: UnavailableCursorKeychain())
+        XCTAssertEqual(protected.loadCredentials(), .keychainPermissionRequired)
+
+        let paidSqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: "sqlite-pro-token",
+            CursorAuthStore.membershipTypeKey: "pro"
+        ])
+        let paid = CursorAuthStore(sqlite: paidSqlite, keychain: UnavailableCursorKeychain())
+        XCTAssertEqual(paid.loadCredentials().state?.accessToken, "sqlite-pro-token")
+    }
 }
 
 private final class EmptySQLite: SQLiteAccessing, @unchecked Sendable {
