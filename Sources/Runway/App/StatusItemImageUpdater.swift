@@ -10,12 +10,14 @@ import Observation
 @MainActor
 final class StatusItemImageUpdater {
     private let container: AppContainer
-    private let apply: (MenuBarStripPresentation) -> Void
+    private let gate: StatusItemPresentationGate
 
     /// - Parameter apply: sets the rendered image and native tooltip regions onto the status item.
-    init(container: AppContainer, apply: @escaping (MenuBarStripPresentation) -> Void) {
+    ///   Returns `false` when the status button wasn't available, so the presentation is re-sent on
+    ///   the next update instead of being remembered as applied.
+    init(container: AppContainer, apply: @escaping (MenuBarStripPresentation) -> Bool) {
         self.container = container
-        self.apply = apply
+        self.gate = StatusItemPresentationGate(apply: apply)
     }
 
     /// Render now and re-arm on the next observable change.
@@ -27,7 +29,13 @@ final class StatusItemImageUpdater {
                 self?.scheduleDelayedUpdate()
             }
         }
-        apply(presentation)
+        gate.submit(presentation)
+    }
+
+    /// Re-applies even an unchanged presentation on the next `update()` — for when AppKit rebuilds
+    /// the status button (the notch rescue's autosave bounce) and the applied image is gone.
+    func forceNextApply() {
+        gate.invalidate()
     }
 
     /// The observation callback fires only once until `update()` reads and re-arms it. Waiting here lets
@@ -64,5 +72,38 @@ final class StatusItemImageUpdater {
         }
         let image = MenuBarIcon.image ?? MenuBarStripRenderer.fallbackIcon
         return MenuBarStripPresentation(image: image, toolTipRegions: [])
+    }
+}
+
+/// Gates presentations on their way to AppKit: forwards one only when it differs from the last one
+/// actually applied. Re-applying is not free — every apply re-registers the native tooltip tags and
+/// runs a layout pass on the status button — and most coalesced renders change nothing visible.
+///
+/// Image comparison is by instance, not by bitmap: `MenuBarStripRenderer` memoizes and returns the
+/// identical `NSImage` for unchanged content, and the privacy/fallback images are singletons, so
+/// identity is a complete "unchanged" signal.
+@MainActor
+final class StatusItemPresentationGate {
+    private let apply: (MenuBarStripPresentation) -> Bool
+    private var lastApplied: MenuBarStripPresentation?
+
+    init(apply: @escaping (MenuBarStripPresentation) -> Bool) {
+        self.apply = apply
+    }
+
+    func submit(_ presentation: MenuBarStripPresentation) {
+        if let lastApplied,
+           lastApplied.image === presentation.image,
+           lastApplied.toolTipRegions == presentation.toolTipRegions {
+            return
+        }
+        if apply(presentation) {
+            lastApplied = presentation
+        }
+    }
+
+    /// Forgets the applied state so the next `submit` re-applies even an unchanged presentation.
+    func invalidate() {
+        lastApplied = nil
     }
 }
