@@ -148,7 +148,9 @@ final class ClaudeProvider: ProviderRuntime {
             case .permissionRequired:
                 return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopPermissionRequired)
             case .stale:
-                return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopTokenExpired)
+                // A Desktop-only login whose cached token lapsed: same renewal treatment as a lapsed
+                // CLI login (Desktop's loader returns no credential state for a stale entry).
+                return await failureSnapshot(.desktopTokenExpired, renewalState: nil)
             case .invalid:
                 return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopCredentialsUnavailable)
             case .notChecked, .notFound, .available:
@@ -205,20 +207,23 @@ final class ClaudeProvider: ProviderRuntime {
 
     /// Terminal failure handling: a lapsed login (`isLoginRenewal`) degrades to the local spend tiles
     /// under a renewal notice — the data is still trustworthy and the fix belongs to the owning Claude
-    /// app — while every other failure stays a hard error card.
+    /// app — while every other failure stays a hard error card. `renewalState` only feeds the plan
+    /// badge; a stale Desktop-only login has none and still degrades.
     private func failureSnapshot(
         _ error: ClaudeAuthError,
         renewalState: ClaudeCredentialState?
     ) async -> ProviderSnapshot {
-        guard error.isLoginRenewal, let state = renewalState else {
+        guard error.isLoginRenewal else {
             return ProviderSnapshot.error(provider: provider, error: error)
         }
         AppLog.info(LogTag.auth("claude"), "login needs renewal; serving local usage with a renewal notice")
         let mapped = ClaudeMappedUsage(
-            plan: ClaudeUsageMapper.formatPlan(
-                subscriptionType: state.displayOAuth.subscriptionType,
-                rateLimitTier: state.displayOAuth.rateLimitTier
-            ),
+            plan: renewalState.flatMap {
+                ClaudeUsageMapper.formatPlan(
+                    subscriptionType: $0.displayOAuth.subscriptionType,
+                    rateLimitTier: $0.displayOAuth.rateLimitTier
+                )
+            },
             lines: []
         )
         return await localUsageSnapshot(mapped: mapped, warning: error.localizedDescription)

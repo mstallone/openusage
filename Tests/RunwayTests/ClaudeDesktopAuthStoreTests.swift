@@ -310,6 +310,41 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testStaleDesktopOnlyLoginDegradesToRenewalNoticeNotAnError() async throws {
+        // A Desktop-only user whose cached token lapsed gets the same renewal treatment as a lapsed
+        // CLI login: an amber warning over the (still-working) local tiles, not a hard error card.
+        // The stale Desktop loader yields no credential state, so there is no plan badge to show.
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [cacheKey(organization: organization): tokenEntry("expired-desktop", expiresIn: -1)]
+        )
+        let now = now
+        let httpClient = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: fixture.files,
+                keychain: FakeKeychain(),
+                desktop: fixture.store,
+                now: { now }
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            now: { now },
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await ProviderRefreshContext.$isManual.withValue(true) {
+            await provider.refresh()
+        }
+
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.desktopTokenExpired.localizedDescription)
+        XCTAssertNil(snapshot.plan)
+        XCTAssertTrue(httpClient.requests.isEmpty)
+    }
+
+    @MainActor
     func testRevokedCLILoginFallsBackToDesktop() async throws {
         let fixture = try makeFixture(
             activeOrganization: organization,
