@@ -66,7 +66,9 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     }
 
     /// Background read: serve the cache when the item is unchanged and fresh, honor the breaker,
-    /// otherwise perform `read` (single-flight per item).
+    /// otherwise perform `read`. The WHOLE operation — fingerprint probe included — is one flight
+    /// per item: attribute queries are normally instant, but a wedged `securityd` blocks them like
+    /// any other call, so concurrent callers must not stack up inside the probe either.
     func nonInteractiveRead(
         service: String,
         account: String?,
@@ -74,15 +76,29 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         read: () -> NonInteractiveKeychainRead
     ) -> NonInteractiveKeychainRead {
         let key = Key(service: service, account: account)
-        let fingerprint = fingerprint()
 
         condition.lock()
         guard waitWhileInFlight(key, deadline: now().addingTimeInterval(inFlightWait)) else {
             // Someone else's read of this item has been stuck past the deadline (an open approval
-            // dialog or a wedged securityd). Report unavailable instead of piling on.
+            // dialog or a wedged securityd). Report unavailable instead of piling on — without
+            // touching the Keychain at all.
             condition.unlock()
             return .unavailable
         }
+        inFlight.insert(key)
+        let epoch = epochs[key, default: 0]
+        condition.unlock()
+
+        defer {
+            condition.lock()
+            inFlight.remove(key)
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        let fingerprint = fingerprint()
+
+        condition.lock()
         if let fingerprint,
            let entry = entries[key],
            entry.fingerprint == fingerprint,
@@ -97,8 +113,6 @@ final class KeychainReadCoordinator: @unchecked Sendable {
                 return value
             }
         }
-        inFlight.insert(key)
-        let epoch = epochs[key, default: 0]
         condition.unlock()
 
         let result = read()
@@ -107,8 +121,6 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         if epochs[key, default: 0] == epoch {
             store(key: key, fingerprint: fingerprint, value: result == .unavailable ? nil : result, tripped: result == .unavailable)
         }
-        inFlight.remove(key)
-        condition.broadcast()
         condition.unlock()
         return result
     }
@@ -125,7 +137,6 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         read: () throws -> String?
     ) throws -> String? {
         let key = Key(service: service, account: account)
-        let fingerprint = fingerprint()
 
         condition.lock()
         let acquired = waitWhileInFlight(key, deadline: now().addingTimeInterval(inFlightWait))
@@ -142,6 +153,9 @@ final class KeychainReadCoordinator: @unchecked Sendable {
                 condition.unlock()
             }
         }
+
+        // Inside the flight, like the read itself — see `nonInteractiveRead`.
+        let fingerprint = fingerprint()
 
         do {
             let value = try read()

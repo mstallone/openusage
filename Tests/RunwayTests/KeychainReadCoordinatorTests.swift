@@ -138,6 +138,39 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(reads.value, 0, "a denied manual read must stop background retries until the item changes")
     }
 
+    func testLateArriverSkipsEvenTheFingerprintProbeWhileAReadIsStuck() {
+        // The fingerprint probe is a Keychain call too: against a wedged securityd it blocks like
+        // any other. A caller that gives up on someone else's stuck read must not have touched the
+        // Keychain at all — no probe, no read.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        let readStarted = DispatchSemaphore(value: 0)
+        let releaseRead = DispatchSemaphore(value: 0)
+        let probes = Counter()
+
+        let readerA = Thread {
+            _ = coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { probes.increment(); return "fp-1" },
+                read: {
+                    readStarted.signal()
+                    releaseRead.wait()
+                    return .value("secret")
+                }
+            )
+        }
+        readerA.start()
+        XCTAssertEqual(readStarted.wait(timeout: .now() + 2), .success)
+
+        let blocked = coordinator.nonInteractiveRead(
+            service: "svc", account: nil,
+            fingerprint: { probes.increment(); return "fp-1" },
+            read: { XCTFail("must not read"); return .value("never") }
+        )
+        releaseRead.signal()
+
+        XCTAssertEqual(blocked, .unavailable)
+        XCTAssertEqual(probes.value, 1, "only reader A may probe; the late arriver stays off the Keychain")
+    }
+
     func testCachedValueIsRevalidatedAfterTheStalenessBound() {
         // The Keychain modification date has one-second resolution, so a secret-only rotation in the
         // same second leaves the fingerprint unchanged. The revalidation interval bounds how long
