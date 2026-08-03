@@ -61,9 +61,15 @@ jobs:
                 f"{len(supplement['alias_rules'])} alias rules.")
           PY
 
+      # Publish the FULL desired state of the branch instead of layering with keep_files: carry the
+      # live appcast forward, then lay down the current main-branch content. See landing-page.yml
+      # for why (deleted website files must disappear; the concurrency group makes this race-free).
       - name: Assemble update feed
         run: |
           mkdir -p public
+          if git fetch --depth 1 origin update-feed 2>/dev/null; then
+            git show FETCH_HEAD:appcast.xml > public/appcast.xml 2>/dev/null || rm -f public/appcast.xml
+          fi
           cp -R website/. public/
           cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json
 
@@ -73,4 +79,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: update-feed
           publish_dir: ./public
-          keep_files: true
+          keep_files: false

@@ -271,6 +271,14 @@ jobs:
         run: |
           mkdir -p public
           cp feed/appcast.xml public/appcast.xml
+          # Also publish the current main-branch site content (website + pricing supplement).
+          # GitHub keeps only one PENDING run per concurrency group, so this queued publish can
+          # silently replace a pending Publish Landing Page / Publish Pricing Supplement run. All
+          # three update-feed publishers therefore ship the same content union: whichever run
+          # survives supersession publishes everything, and nothing is stranded.
+          git fetch --depth 1 origin main
+          git show FETCH_HEAD:Sources/Runway/Resources/pricing_supplement.json > public/pricing_supplement.json
+          git archive FETCH_HEAD website | tar -x -C public --strip-components=1
 
       - name: Publish update feed branch
         uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
