@@ -262,6 +262,32 @@ final class AntigravityProviderTests: XCTestCase {
         XCTAssertEqual(AntigravityAuthStore.extractToken(fromKeychainRaw: "rawtoken")?.accessToken, "rawtoken")
     }
 
+    func testAutomaticKeychainLoadIsPromptFreeAndManualLoadMayPrompt() throws {
+        // Automatic refreshes and launch detection must never touch a prompt-capable Keychain path;
+        // only a manual refresh may use the interactive read (one prompt, for Runway itself).
+        let keychain = ReadModeTrackingKeychain(value: "rawtoken")
+        let store = AntigravityAuthStore(keychain: keychain, files: FakeFiles())
+
+        XCTAssertEqual(try store.loadKeychainToken()?.accessToken, "rawtoken")
+        XCTAssertEqual(keychain.interactiveReads, 0)
+        XCTAssertEqual(keychain.nonInteractiveReads, 1)
+        XCTAssertEqual(keychain.plainReads, 0, "the subprocess-style read path must not be used")
+
+        XCTAssertEqual(try store.loadKeychainToken(allowKeychainInteraction: true)?.accessToken, "rawtoken")
+        XCTAssertEqual(keychain.interactiveReads, 1)
+        XCTAssertEqual(keychain.plainReads, 0)
+    }
+
+    func testUnavailableKeychainThrowsStoreUnreadableWithoutFallingBackToAPrompt() {
+        // An item Runway isn't (yet) authorized to read surfaces the friendly store-unreadable
+        // error; it must not silently vanish into "not logged in" and must not prompt.
+        let store = AntigravityAuthStore(keychain: UnavailableKeychain(), files: FakeFiles())
+
+        XCTAssertThrowsError(try store.loadKeychainToken()) { error in
+            XCTAssertEqual(error as? AntigravityError, .credentialStoreUnreadable)
+        }
+    }
+
     func testLoadCachedTokenAppliesRefreshBuffer() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         func store(expiresInSeconds: Double) -> AntigravityAuthStore {
@@ -466,5 +492,17 @@ private final class Counter: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         defer { value += 1 }
         return value
+    }
+}
+
+/// A Keychain whose non-interactive reads report `.unavailable` (item present but not authorized).
+private final class UnavailableKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
     }
 }

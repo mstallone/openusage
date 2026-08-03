@@ -44,15 +44,24 @@ struct CopilotAuthStore: Sendable {
     }
 
     /// First non-empty source wins. Blocking (Keychain) — call off the main actor.
-    func loadToken() -> CopilotToken? {
-        loadFromEditorConfig() ?? loadFromGhConfig() ?? loadFromGhKeychain()
+    /// `allowKeychainInteraction` is true only for a manual refresh: that read may raise the macOS
+    /// approval prompt once, for Runway itself; automatic refreshes and launch detection never
+    /// prompt.
+    func loadToken(allowKeychainInteraction: Bool = false) -> CopilotToken? {
+        loadFromEditorConfig()
+            ?? loadFromGhConfig()
+            ?? loadFromGhKeychain(allowKeychainInteraction: allowKeychainInteraction)
     }
 
     /// Tokens suitable for public GitHub billing APIs, with the GitHub CLI credential first.
     /// Editor OAuth tokens remain useful fallbacks, but commonly have only the private Copilot
     /// endpoint's permissions. Blocking (Keychain) — call off the main actor.
-    func loadBillingTokenCandidates(usageToken: CopilotToken) -> [CopilotToken] {
-        let ghToken = loadFromGhConfig() ?? loadFromGhKeychain()
+    func loadBillingTokenCandidates(
+        usageToken: CopilotToken,
+        allowKeychainInteraction: Bool = false
+    ) -> [CopilotToken] {
+        let ghToken = loadFromGhConfig()
+            ?? loadFromGhKeychain(allowKeychainInteraction: allowKeychainInteraction)
         var seen: Set<CopilotToken> = []
         return [ghToken, usageToken].compactMap { token in
             guard let token, seen.insert(token).inserted else { return nil }
@@ -85,8 +94,8 @@ struct CopilotAuthStore: Sendable {
         return CopilotToken(value: token)
     }
 
-    func loadFromGhKeychain() -> CopilotToken? {
-        guard let raw = readGhKeychainRaw(),
+    func loadFromGhKeychain(allowKeychainInteraction: Bool = false) -> CopilotToken? {
+        guard let raw = readGhKeychainRaw(allowInteraction: allowKeychainInteraction),
               let token = ProviderParse.unwrapGoKeyring(raw)
         else {
             return nil
@@ -94,14 +103,40 @@ struct CopilotAuthStore: Sendable {
         return CopilotToken(value: token)
     }
 
-    private func readGhKeychainRaw() -> String? {
-        // `gh` stores its Keychain item under the GitHub username as the account. Read it scoped to that
-        // account when we can recover it from hosts.yml; otherwise fall back to a service-only lookup.
-        if let account = ghUsername(),
-           let raw = try? keychain.readGenericPassword(service: Self.ghKeychainService, account: account) {
-            return raw
+    /// `gh` stores its Keychain item under the GitHub username as the account. Read it scoped to that
+    /// account when we can recover it from hosts.yml; otherwise fall back to a service-only lookup.
+    /// Both reads are in-process — never the `/usr/bin/security` subprocess, whose prompts authorize
+    /// the helper binary instead of Runway and fueled the 2026-08-03 prompt loop.
+    private func readGhKeychainRaw(allowInteraction: Bool) -> String? {
+        let account = ghUsername()
+        guard allowInteraction else {
+            if let account,
+               case .value(let raw) = keychain.readGenericPasswordWithoutUserInteraction(
+                   service: Self.ghKeychainService, account: account
+               ) {
+                return raw
+            }
+            if case .value(let raw) = keychain.readGenericPasswordWithoutUserInteraction(
+                service: Self.ghKeychainService
+            ) {
+                return raw
+            }
+            return nil
         }
-        return try? keychain.readGenericPassword(service: Self.ghKeychainService)
+        if let account {
+            do {
+                if let raw = try keychain.readGenericPasswordAllowingUserInteraction(
+                    service: Self.ghKeychainService, account: account
+                ) {
+                    return raw
+                }
+            } catch {
+                // The user denied (or the read failed) on the exact item; a broader service-only
+                // lookup would just repeat the same prompt.
+                return nil
+            }
+        }
+        return try? keychain.readGenericPasswordAllowingUserInteraction(service: Self.ghKeychainService)
     }
 
     private func ghUsername() -> String? {

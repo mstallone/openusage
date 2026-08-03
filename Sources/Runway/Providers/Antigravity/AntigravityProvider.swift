@@ -217,7 +217,12 @@ final class AntigravityProvider: ProviderRuntime {
 
     private func probeCloudCode() async throws -> StrategyResult {
         let authStore = self.authStore
-        let keychainToken = try await loadOffMainActor { try authStore.loadKeychainToken() }
+        // A manual refresh may raise the Keychain approval prompt (once, for Runway itself);
+        // automatic refreshes stay prompt-free.
+        let allowInteraction = ProviderRefreshContext.isManual
+        let keychainToken = try await loadOffMainActor {
+            try authStore.loadKeychainToken(allowKeychainInteraction: allowInteraction)
+        }
 
         guard let keychainToken else {
             // Proven logout invalidates the derived cache. A Keychain read failure throws above and

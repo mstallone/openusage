@@ -44,6 +44,23 @@ final class CopilotAuthStoreTests: XCTestCase {
         XCTAssertEqual(token?.value, "gho_keychain")
     }
 
+    func testAutomaticLoadUsesOnlyPromptFreeKeychainReadsAndManualLoadMayPrompt() {
+        // Regression for the 2026-08-03 prompt loop: the gh keychain item must never be read through
+        // a prompt-capable path on an automatic refresh or at launch. Only a manual refresh may use
+        // the interactive read (which prompts once, for Runway itself).
+        let keychain = ReadModeTrackingKeychain(value: "gho_keychain")
+        let store = CopilotAuthStore(files: FakeFiles(), keychain: keychain)
+
+        XCTAssertEqual(store.loadToken()?.value, "gho_keychain")
+        XCTAssertEqual(keychain.interactiveReads, 0)
+        XCTAssertGreaterThan(keychain.nonInteractiveReads, 0)
+        XCTAssertEqual(keychain.plainReads, 0, "the subprocess-style read path must not be used")
+
+        XCTAssertEqual(store.loadToken(allowKeychainInteraction: true)?.value, "gho_keychain")
+        XCTAssertGreaterThan(keychain.interactiveReads, 0)
+        XCTAssertEqual(keychain.plainReads, 0)
+    }
+
     func testEditorConfigWinsOverKeychain() {
         let store = CopilotAuthStore(
             files: FakeFiles([
@@ -1949,4 +1966,62 @@ private func countValue(_ lines: [MetricLine], _ label: String) -> Double? {
         return nil
     }
     return values.first?.number
+}
+
+/// Records which read mode each Keychain call used, so tests can prove automatic loads stay on the
+/// prompt-free in-process path and only manual loads use the prompt-capable one.
+final class ReadModeTrackingKeychain: KeychainReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let value: String
+    private var plain = 0
+    private var nonInteractive = 0
+    private var interactive = 0
+
+    init(value: String) {
+        self.value = value
+    }
+
+    var plainReads: Int { lock.withLock { plain } }
+    var nonInteractiveReads: Int { lock.withLock { nonInteractive } }
+    var interactiveReads: Int { lock.withLock { interactive } }
+
+    func readGenericPassword(service: String) throws -> String? {
+        lock.withLock { plain += 1 }
+        return value
+    }
+
+    func readGenericPassword(service: String, account: String) throws -> String? {
+        lock.withLock { plain += 1 }
+        return value
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { nonInteractive += 1 }
+        return .value(value)
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        lock.withLock { nonInteractive += 1 }
+        return .value(value)
+    }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { nonInteractive += 1 }
+        return .value(value)
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        return value
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String, account: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        return value
+    }
+
+    func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        return value
+    }
 }

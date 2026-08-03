@@ -50,6 +50,9 @@ Checked in this order (prompt-free files first, Keychain last):
 1. Copilot editor token: `~/.config/github-copilot/apps.json` (older `hosts.json`) — written by the VS Code / JetBrains / Neovim Copilot plugins.
 2. GitHub CLI config: `~/.config/gh/hosts.yml` (`oauth_token`), when `gh` stores its token in a file.
 3. GitHub CLI Keychain item (service `gh:github.com`), when `gh` stores its token in the system keyring.
+   Automatic refreshes read it silently and never open a macOS password dialog. If access hasn't been
+   approved yet, refresh manually once and choose **Always Allow** when macOS asks — later reads stay
+   silent.
 
 The editor token stays preferred for the Copilot quota endpoint. For organization and enterprise
 billing, Runway tries the GitHub CLI credential first when Copilot identifies the seat organization,

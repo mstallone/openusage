@@ -85,7 +85,12 @@ final class CopilotProvider: ProviderRuntime {
     }
 
     func refresh() async -> ProviderSnapshot {
-        let token = await loadOffMainActor { [authStore] in authStore.loadToken() }
+        // A manual refresh may raise the Keychain approval prompt (once, for Runway itself);
+        // automatic refreshes stay prompt-free.
+        let allowInteraction = ProviderRefreshContext.isManual
+        let token = await loadOffMainActor { [authStore] in
+            authStore.loadToken(allowKeychainInteraction: allowInteraction)
+        }
         guard let token else {
             return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.notLoggedIn)
         }
@@ -116,7 +121,10 @@ final class CopilotProvider: ProviderRuntime {
                     billingTokens = [token]
                 } else {
                     billingTokens = await loadOffMainActor { [authStore] in
-                        authStore.loadBillingTokenCandidates(usageToken: token)
+                        authStore.loadBillingTokenCandidates(
+                            usageToken: token,
+                            allowKeychainInteraction: allowInteraction
+                        )
                     }
                 }
                 switch await orgBillingLookup(

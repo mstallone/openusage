@@ -34,17 +34,35 @@ struct AntigravityAuthStore: Sendable {
         self.now = now
     }
 
-    /// Blocking keychain read — call off the main actor.
-    func loadKeychainToken() throws -> AntigravityKeychainToken? {
+    /// Blocking keychain read — call off the main actor. Reads are in-process, never the
+    /// `/usr/bin/security` subprocess: automatic refreshes use the prompt-free form, and only a
+    /// manual refresh (`allowKeychainInteraction`) may raise the approval prompt — once, for Runway
+    /// itself.
+    func loadKeychainToken(allowKeychainInteraction: Bool = false) throws -> AntigravityKeychainToken? {
         let raw: String?
-        do {
-            raw = try keychain.readGenericPassword(
+        if allowKeychainInteraction {
+            do {
+                raw = try keychain.readGenericPasswordAllowingUserInteraction(
+                    service: Self.keychainService,
+                    account: Self.keychainAccount
+                )
+            } catch {
+                AppLog.error(LogTag.auth("antigravity"), "keychain credential read failed")
+                throw AntigravityError.credentialStoreUnreadable
+            }
+        } else {
+            switch keychain.readGenericPasswordWithoutUserInteraction(
                 service: Self.keychainService,
                 account: Self.keychainAccount
-            )
-        } catch {
-            AppLog.error(LogTag.auth("antigravity"), "keychain credential read failed")
-            throw AntigravityError.credentialStoreUnreadable
+            ) {
+            case .value(let value):
+                raw = value
+            case .missing:
+                raw = nil
+            case .unavailable:
+                AppLog.error(LogTag.auth("antigravity"), "keychain credential unavailable without interaction; refresh manually to approve access")
+                throw AntigravityError.credentialStoreUnreadable
+            }
         }
         guard let raw else { return nil }
         guard let token = Self.extractToken(fromKeychainRaw: raw) else {

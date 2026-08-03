@@ -176,6 +176,12 @@ protocol KeychainReading: Sendable {
     /// item under a known account name (e.g. Antigravity's `agy` token under service `gemini`,
     /// account `antigravity`) rather than the current user.
     func readGenericPassword(service: String, account: String) throws -> String?
+    /// Account-scoped variants of the non-interactive / explicit-user-action reads, for foreign
+    /// items stored under a known account name. Automatic refreshes use the non-interactive form
+    /// (never a prompt); the interactive form runs only on a manual refresh and authorizes Runway
+    /// itself, not a helper process.
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead
+    func readGenericPasswordAllowingUserInteraction(service: String, account: String) throws -> String?
     /// Attributes-only existence probes. Keeping both overloads as protocol requirements is essential:
     /// callers hold `any KeychainReading`, so an extension-only service overload would statically call
     /// the fallback secret read instead of production's prompt-free Security.framework implementation.
@@ -232,6 +238,22 @@ extension KeychainReading {
     /// `SecurityKeychainAccessor` overrides this to pass `-a <account>`.
     func readGenericPassword(service: String, account: String) throws -> String? {
         try readGenericPassword(service: service)
+    }
+
+    /// Defaults for mocks: route the account-scoped modes through the plain account read, mirroring
+    /// the service-only defaults above. Production overrides these with prompt-free / prompt-capable
+    /// in-process queries.
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        do {
+            return try readGenericPassword(service: service, account: account)
+                .map(NonInteractiveKeychainRead.value) ?? .missing
+        } catch {
+            return .unavailable
+        }
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String, account: String) throws -> String? {
+        try readGenericPassword(service: service, account: account)
     }
 
     /// Whether an item exists for `service`, without reading its secret. `nil` means the probe
@@ -408,6 +430,10 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         try readGenericPasswordAllowingUserInteraction(service: service, account: currentUserAccount())
     }
 
+    func readGenericPasswordAllowingUserInteraction(service: String, account: String) throws -> String? {
+        try readGenericPasswordAllowingUserInteraction(service: service, account: account as String?)
+    }
+
     private func readGenericPasswordAllowingUserInteraction(
         service: String,
         account: String?
@@ -461,6 +487,10 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
         readGenericPasswordWithoutUserInteraction(service: service, account: currentUserAccount())
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        readGenericPasswordWithoutUserInteraction(service: service, account: account as String?)
     }
 
     private func readGenericPasswordWithoutUserInteraction(
