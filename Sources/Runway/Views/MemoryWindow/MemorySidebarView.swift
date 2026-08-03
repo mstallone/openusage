@@ -16,6 +16,13 @@ struct MemorySidebarView: View {
     /// expanded, everything else collapsed — the exceptions announce themselves via badge alone).
     @State private var expansionOverrides: [String: Bool] = [:]
 
+    /// False until the first non-empty inventory has rendered. The initial population must land in
+    /// one frame — animating it lays the row spacing out immediately while the row content is still
+    /// fading in, so the sidebar reads as headers over blank gaps. Only later diffs (re-scans,
+    /// creates, deletes) animate. Flipped in `onChange`, which runs after the populating update has
+    /// committed, so that first diff still sees the nil animation.
+    @State private var animatesListDiffs = false
+
     var body: some View {
         @Bindable var store = store
         List(selection: $store.selectedDocumentID) {
@@ -46,8 +53,12 @@ struct MemorySidebarView: View {
         // — no second material panel behind them.
         .scrollContentBackground(.hidden)
         // Re-scans, deletes, and creates animate as list diffs (rows slide/fade into place)
-        // instead of the whole sidebar snapping to its new contents.
-        .animation(Motion.snappy, value: store.sources)
+        // instead of the whole sidebar snapping to its new contents. The initial population is
+        // exempt — see `animatesListDiffs`.
+        .animation(animatesListDiffs ? Motion.snappy : nil, value: store.sources)
+        .onChange(of: store.sources) { _, newSources in
+            if !newSources.isEmpty { animatesListDiffs = true }
+        }
         .sheet(item: $newFactProject) { project in
             MemoryNewFactSheet(project: project)
         }

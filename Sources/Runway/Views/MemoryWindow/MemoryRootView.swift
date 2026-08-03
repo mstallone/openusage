@@ -168,8 +168,12 @@ struct MemoryRootView: View {
     }
 
     private var detailState: DetailState {
-        if store.isLoading && store.sources.isEmpty { return .scanning }
-        if store.sources.isEmpty { return .nothingFound }
+        if store.sources.isEmpty {
+            // Before the initial scan completes, an empty inventory means the scan just hasn't
+            // finished (the window renders before `.task` even starts it) — flashing the empty
+            // state and then swapping it out reads as the whole card jumping around.
+            return store.isLoading || !store.hasCompletedInitialScan ? .scanning : .nothingFound
+        }
         return .editor
     }
 

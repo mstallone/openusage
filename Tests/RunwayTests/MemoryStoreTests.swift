@@ -153,6 +153,25 @@ final class MemoryStoreTests: XCTestCase {
         XCTAssertNotNil(store.scanWarning, "a truncated scan must not present itself as complete")
     }
 
+    /// Regression: the window renders before its `.task` starts the first scan, and the detail pane
+    /// keys "empty inventory + initial scan not yet complete" to the scanning state. A store that
+    /// reported completion early (or never) would flash "No Agent Memory Found" on every cold open.
+    func testHasCompletedInitialScanFlipsOnlyAfterTheFirstReload() async throws {
+        let store = makeStore(files: claudeProjectFixture(), subdirectories: claudeSubdirectories)
+        XCTAssertFalse(store.hasCompletedInitialScan, "a fresh store has not scanned yet")
+
+        await store.reload()
+
+        XCTAssertTrue(store.hasCompletedInitialScan)
+
+        // A scan that finds nothing still counts as completed — that is exactly when the UI is
+        // allowed to show the genuine empty state.
+        let emptyMachine = makeStore(files: RecordingFiles([:]), subdirectories: [])
+        await emptyMachine.reload()
+        XCTAssertTrue(emptyMachine.hasCompletedInitialScan)
+        XCTAssertTrue(emptyMachine.sources.isEmpty)
+    }
+
     func testCreateInstructionFileDoesNotClobberAFileThatAppearedSinceTheScan() async throws {
         let files = RecordingFiles([:])
         let store = makeStore(files: files, subdirectories: ["\(home)/.gemini"])
