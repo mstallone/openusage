@@ -21,7 +21,7 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
         case .notLoggedIn:
             return "Not logged in. Sign in via Cursor app or run `agent login`."
         case .loginRenewalRequired:
-            return "Cursor login needs renewal. Open the Cursor app, then refresh Runway."
+            return "Cursor login needs renewal. Open the Cursor app (or run `agent login`), then refresh Runway."
         case .keychainPermissionRequired:
             return "Cursor login found in Keychain. Refresh manually and choose Always Allow to connect it."
         }

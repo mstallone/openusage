@@ -48,16 +48,18 @@ way and doesn't need to know provider-specific details. To add one, see
 ### Credential ownership
 
 The app that owns a credential is the only app allowed to change it. Provider credentials belong to
-the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …), and Runway is
-strictly a reader of them: it never calls a provider's OAuth token endpoint and never writes a
-provider's credential store, because two apps rotating the same login can trip the server's
-token-reuse protection and sign the user out. The type system enforces this — every credential store
-holds the read-only `KeychainReading`, and no Keychain write API exists in the app outside
-`RunwayOwnedKeychainStore`, the store for Runway's own secrets (currently the iCloud-sync device
-id). When a provider's token lapses, the card shows a renewal notice naming the owning app; Runway
-never renews it. Automatic Keychain reads are in-process and prompt-free; only a user's manual
-refresh may raise the approval dialog — once per protected item, and a denial stops the pass instead
-of chaining further prompts.
+the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …), and for
+Claude, Codex, Cursor, Copilot, and Antigravity Runway is strictly a reader: it never calls their
+OAuth token endpoints and never writes their credential stores, because two apps rotating the same
+login can trip the server's token-reuse protection and sign the user out. The type system enforces
+this — every credential store holds the read-only `KeychainReading`, and no Keychain write API
+exists in the app outside `RunwayOwnedKeychainStore`, the store for Runway's own secrets (currently
+the iCloud-sync device id). When one of these providers' tokens lapses, the card shows a renewal
+notice naming the owning app; Runway never renews it. Automatic Keychain reads are in-process and
+prompt-free; only a user's manual refresh may raise the approval dialog — once per protected item,
+and a denial stops the pass instead of chaining further prompts. Grok and Kimi still refresh their
+own file-based logins (no Keychain involved); moving them to the same read-only model is the
+remaining ownership follow-up.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,
