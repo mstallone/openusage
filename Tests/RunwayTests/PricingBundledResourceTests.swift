@@ -102,8 +102,10 @@ final class PricingBundledResourceTests: XCTestCase {
         XCTAssertEqual(sonnet5, canonical)
     }
 
-    /// Claude Opus 5: standard Opus-tier rates from the supplement (no public catalog lists it yet),
-    /// with the `[1m]`, thinking/effort, and fast slug variants resolving to the right entry.
+    /// Claude Opus 5: launch rates come from LiteLLM (the supplement deliberately carries no entry —
+    /// a published supplement entry would shadow LiteLLM on released decoders that drop the fast
+    /// multiplier), with the `[1m]`, thinking/effort, and fast slug variants resolving to the right
+    /// rates via the supplement alias rules.
     func testClaudeOpus5PricingAndAliases() throws {
         let pricing = Self.pricing
         let opus5 = try XCTUnwrap(pricing.resolve(model: "claude-opus-5"))
@@ -125,7 +127,8 @@ final class PricingBundledResourceTests: XCTestCase {
     }
 
     /// Claude logs signal fast mode with a `speed` field while the model stays `claude-opus-5`, so
-    /// the base entry itself must carry the 2x multiplier — the `-fast` slug is never involved.
+    /// the base entry itself must carry the 2x multiplier (LiteLLM's `fast` field) — the `-fast`
+    /// slug is never involved.
     func testClaudeOpus5FastModeBillsAtTwiceBaseRate() throws {
         let pricing = Self.pricing
         let opus5 = try XCTUnwrap(pricing.resolve(model: "claude-opus-5"))
