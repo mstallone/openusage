@@ -26,25 +26,6 @@ final class KeychainAccessorTests: XCTestCase {
         }
     }
 
-    private final class CountingRunner: ProcessRunning, @unchecked Sendable {
-        private let lock = NSLock()
-        private var invocations = 0
-
-        var invocationCount: Int {
-            lock.withLock { invocations }
-        }
-
-        func run(
-            executable: String,
-            arguments: [String],
-            environment: [String: String],
-            timeout: TimeInterval
-        ) throws -> ProcessResult {
-            lock.withLock { invocations += 1 }
-            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
-        }
-    }
-
     func testItemNotFoundExitReturnsNil() throws {
         // Exit 44 (errSecItemNotFound) is the legitimate "no credential stored" case → nil.
         let accessor = SecurityKeychainAccessor(processRunner: StubRunner(
@@ -165,19 +146,4 @@ final class KeychainAccessorTests: XCTestCase {
         XCTAssertTrue(allowed.boolValue, "the process-global UI switch must be restored after reads")
     }
 
-    func testInProcessUpdateNeverInvokesSecurityHelper() {
-        let runner = CountingRunner()
-        let accessor = SecurityKeychainAccessor(processRunner: runner)
-
-        XCTAssertThrowsError(try accessor.updateGenericPassword(
-            service: "RunwayTests.missing.\(UUID().uuidString)",
-            value: "rotated-token",
-            allowUserInteraction: false
-        )) { error in
-            guard case KeychainError.writeFailed = error else {
-                return XCTFail("expected KeychainError.writeFailed, got \(error)")
-            }
-        }
-        XCTAssertEqual(runner.invocationCount, 0)
-    }
 }

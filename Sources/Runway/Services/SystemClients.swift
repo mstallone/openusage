@@ -166,18 +166,6 @@ protocol KeychainAccessing: Sendable {
     /// grants access to Runway itself, not to the `/usr/bin/security` helper process.
     func readGenericPasswordAllowingUserInteraction(service: String) throws -> String?
     func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String?
-    /// Updates an existing item through Security.framework under the caller's identity. Claude uses
-    /// these after OAuth rotation so a background save cannot delegate to a prompting helper process.
-    func updateGenericPassword(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws
-    func updateGenericPasswordForCurrentUser(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws
     /// Reads a service-level item only when access is already authorized. Production forbids UI;
     /// `.unavailable` means validation would require interaction or the keychain could not be read.
     func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead
@@ -216,22 +204,6 @@ extension KeychainAccessing {
 
     func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
         try readGenericPasswordForCurrentUser(service: service)
-    }
-
-    func updateGenericPassword(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws {
-        try writeGenericPassword(service: service, value: value)
-    }
-
-    func updateGenericPasswordForCurrentUser(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws {
-        try writeGenericPasswordForCurrentUser(service: service, value: value)
     }
 
     func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
@@ -416,110 +388,6 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
         try readGenericPasswordAllowingUserInteraction(service: service, account: currentUserAccount())
-    }
-
-    func updateGenericPassword(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws {
-        try updateGenericPassword(
-            service: service,
-            account: nil,
-            value: value,
-            allowUserInteraction: allowUserInteraction
-        )
-    }
-
-    func updateGenericPasswordForCurrentUser(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws {
-        try updateGenericPassword(
-            service: service,
-            account: currentUserAccount(),
-            value: value,
-            allowUserInteraction: allowUserInteraction
-        )
-    }
-
-    /// Resolves one exact item before updating it. A service-only legacy lookup can match multiple
-    /// accounts, so updating by service alone could overwrite all of them; the persistent reference
-    /// preserves the same one-match semantics as the corresponding read.
-    private func updateGenericPassword(
-        service: String,
-        account: String?,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws {
-        let authentication: [String: Any] = allowUserInteraction
-            ? [:]
-            : [kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext()]
-        let itemQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecReturnPersistentRef as String: true,
-        ]
-        .merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
-        .merging(authentication) { current, _ in current }
-
-        try Self.performing(allowUserInteraction: allowUserInteraction) {
-            var item: CFTypeRef?
-            let lookupStatus = SecItemCopyMatching(itemQuery as CFDictionary, &item)
-            guard lookupStatus == errSecSuccess, let persistentRef = item as? Data else {
-                throw keychainWriteError(
-                    status: lookupStatus,
-                    service: service,
-                    operation: "resolve item for in-process update"
-                )
-            }
-
-            let updateQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecUseItemList as String: [persistentRef],
-            ].merging(authentication) { current, _ in current }
-            let updateStatus = SecItemUpdate(
-                updateQuery as CFDictionary,
-                [kSecValueData as String: Data(value.utf8)] as CFDictionary
-            )
-            guard updateStatus == errSecSuccess else {
-                throw keychainWriteError(
-                    status: updateStatus,
-                    service: service,
-                    operation: "in-process update"
-                )
-            }
-        }
-    }
-
-    /// Routes one Security.framework operation through the process-global UI gate: forbidden-UI
-    /// callers run inside the suppression scope (the classic ACL dialog fails with `errSecAuthFailed`
-    /// instead of appearing); interactive callers hold the gate for their whole duration so a racing
-    /// background read can't flip the process-wide flag under an open approval dialog. If suppression
-    /// could not actually engage, the non-interactive operation fails instead of running prompt-capable.
-    private static func performing<T>(allowUserInteraction: Bool, _ body: () throws -> T) throws -> T {
-        if allowUserInteraction {
-            return try KeychainUISuppression.withUIAllowed(body)
-        }
-        return try KeychainUISuppression.withUISuppressed { isSuppressed in
-            guard isSuppressed else {
-                throw KeychainError.writeFailed("Keychain UI could not be suppressed for a background update.")
-            }
-            return try body()
-        }
-    }
-
-    private func keychainWriteError(
-        status: OSStatus,
-        service: String,
-        operation: String
-    ) -> KeychainError {
-        let message = SecCopyErrorMessageString(status, nil) as String?
-            ?? "Keychain write failed with status \(status)."
-        AppLog.warn(.keychain, "\(operation) failed for service '\(service)' (status \(status))")
-        return .writeFailed(message)
     }
 
     /// Runs the approval query inside Runway. Keychain access-control decisions, including

@@ -275,28 +275,6 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(fixture.keyReader.calls, [false])
     }
 
-    func testDesktopCredentialsAreNeverSaved() throws {
-        let files = FakeFiles()
-        let keychain = FakeKeychain()
-        let fixture = try makeFixture(
-            activeOrganization: organization,
-            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
-        )
-        let now = now
-        let authStore = ClaudeAuthStore(
-            environment: FakeEnvironment(),
-            files: files,
-            keychain: keychain,
-            desktop: fixture.store,
-            now: { now }
-        )
-        let state = authStore.loadCredentialCandidates().first!
-
-        XCTAssertFalse(try authStore.save(state, ifUnchanged: ClaudeCredentialGeneration([state])))
-        XCTAssertTrue(files.files.isEmpty)
-        XCTAssertNil(keychain.value)
-    }
-
     @MainActor
     func testDesktop401NeverAttemptsRefreshTokenExchange() async throws {
         let fixture = try makeFixture(
@@ -326,7 +304,8 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             await provider.refresh()
         }
 
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.desktopTokenExpired.localizedDescription)
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.desktopTokenExpired.localizedDescription)
         XCTAssertEqual(httpClient.requests.count, 1)
     }
 
@@ -449,7 +428,8 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             await provider.refresh()
         }
 
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.tokenExpired.localizedDescription)
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.loginRenewalRequired.localizedDescription)
         XCTAssertEqual(httpClient.requests.count, 1)
     }
 

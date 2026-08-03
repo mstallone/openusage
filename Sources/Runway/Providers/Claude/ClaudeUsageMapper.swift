@@ -15,7 +15,7 @@ enum ClaudeUsageMapper {
     static func mapUsageResponse(_ response: HTTPResponse, credentials: ClaudeOAuth, now: Date = Date()) throws -> ClaudeMappedUsage {
         try ProviderAuthRetry.requireSuccess(
             response,
-            authExpired: ClaudeAuthError.tokenExpired,
+            authExpired: ClaudeAuthError.loginRenewalRequired,
             requestFailed: { ClaudeUsageError.requestFailed($0) }
         )
 

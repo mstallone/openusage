@@ -58,64 +58,12 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         XCTAssertEqual(status(switched)?.hasPrefix("Rate limited"), true)
     }
 
-    func testValidatedTokenRotationKeepsSameLoginCache() async {
-        let fixture = makeFixture(
-            credentials: credentials(access: "old-access", refresh: "old-refresh", plan: "pro")
-        ) { request in
-            if request.url.absoluteString.hasSuffix("/v1/oauth/token") {
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#.utf8)
-                )
-            }
-            if request.headers["Authorization"] == "Bearer old-access" {
-                return Self.usageResponse(percent: 25)
-            }
-            return HTTPResponse(statusCode: 429, headers: ["retry-after": "600"], body: Data())
-        }
 
-        let initial = await fixture.provider.refresh()
-        XCTAssertEqual(sessionUsage(initial), 25)
-        fixture.files.files[path] = credentials(
-            access: "old-access", refresh: "old-refresh", plan: "pro", expiresAt: 1
-        )
-
-        let rotated = await fixture.provider.refresh()
-
-        XCTAssertEqual(sessionUsage(rotated), 25)
-        XCTAssertTrue(fixture.files.files[path]?.contains("new-refresh") == true)
-    }
-
-    func testReloginDuringTokenRotationCannotBeOverwrittenOrPublished() async {
-        let accountA = credentials(
-            access: "account-a", refresh: "refresh-a", plan: "pro", expiresAt: 1
-        )
-        let accountB = credentials(access: "account-b", refresh: "refresh-b", plan: "max")
-        let files = FakeFiles([path: accountA])
-        let fixture = makeFixture(files: files) { [path] request in
-            if request.url.absoluteString.hasSuffix("/v1/oauth/token") {
-                files.files[path] = accountB
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"access_token":"account-a2","refresh_token":"refresh-a2","expires_in":3600}"#.utf8)
-                )
-            }
-            XCTAssertEqual(request.headers["Authorization"], "Bearer account-b")
-            return Self.usageResponse(percent: 75)
-        }
-
-        let snapshot = await fixture.provider.refresh()
-
-        XCTAssertEqual(sessionUsage(snapshot), 75)
-        XCTAssertEqual(fixture.files.files[path], accountB)
-        XCTAssertFalse(fixture.http.requests.contains {
-            $0.headers["Authorization"] == "Bearer account-a2"
-        })
-    }
-
-    func testReloginDuringUsageRequestReloadsBeforePublishing() async {
+    func testReloginDuringUsageRequestIsPickedUpOnTheNextRefresh() async {
+        // A re-login landing while account A's usage request is in flight publishes A's result for
+        // this one cycle (each refresh reads credentials exactly once — no mid-flight reload), and
+        // the next refresh switches to account B with a clean cache. The one-cycle lag is the
+        // accepted cost of Runway being a strictly read-only credential consumer.
         let accountA = credentials(access: "account-a", refresh: "refresh-a", plan: "pro")
         let accountB = credentials(access: "account-b", refresh: "refresh-b", plan: "max")
         let files = FakeFiles([path: accountA])
@@ -127,75 +75,18 @@ final class ClaudeAccountIsolationTests: XCTestCase {
             return Self.usageResponse(percent: 75)
         }
 
-        let snapshot = await fixture.provider.refresh()
+        let first = await fixture.provider.refresh()
+        XCTAssertEqual(first.plan, "Pro")
+        XCTAssertEqual(sessionUsage(first), 25)
+        XCTAssertEqual(usageRequests(fixture.http).count, 1)
 
-        XCTAssertEqual(snapshot.plan, "Max")
-        XCTAssertEqual(sessionUsage(snapshot), 75)
+        let second = await fixture.provider.refresh()
+        XCTAssertEqual(second.plan, "Max")
+        XCTAssertEqual(sessionUsage(second), 75, "account A usage must not survive into account B")
         XCTAssertEqual(usageRequests(fixture.http).count, 2)
     }
 
-    func testHigherPriorityLoginAddedDuringUsageRequestWins() async {
-        let accountA = credentials(access: "account-a", refresh: "refresh-a", plan: "pro")
-        let accountB = credentials(access: "account-b", refresh: "refresh-b", plan: "max")
-        let files = FakeFiles([path: accountA])
-        let keychain = ServiceKeychain()
-        let store = ClaudeAuthStore(
-            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
-            files: files,
-            keychain: keychain
-        )
-        let service = store.keychainServiceCandidates().first!
-        let fixture = makeFixture(files: files, keychain: keychain) { request in
-            if request.headers["Authorization"] == "Bearer account-a" {
-                keychain.currentUserValues[service] = accountB
-                return Self.usageResponse(percent: 25)
-            }
-            return Self.usageResponse(percent: 75)
-        }
-
-        let snapshot = await fixture.provider.refresh()
-
-        XCTAssertEqual(snapshot.plan, "Max")
-        XCTAssertEqual(sessionUsage(snapshot), 75)
-        XCTAssertEqual(usageRequests(fixture.http).count, 2)
-    }
-
-    func testHigherPriorityLoginAddedDuringTokenRotationPreventsOldWriteAndQuery() async {
-        let accountA = credentials(
-            access: "account-a", refresh: "refresh-a", plan: "pro", expiresAt: 1
-        )
-        let accountB = credentials(access: "account-b", refresh: "refresh-b", plan: "max")
-        let files = FakeFiles([path: accountA])
-        let keychain = ServiceKeychain()
-        let store = ClaudeAuthStore(
-            environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
-            files: files,
-            keychain: keychain
-        )
-        let service = store.keychainServiceCandidates().first!
-        let fixture = makeFixture(files: files, keychain: keychain) { request in
-            if request.url.absoluteString.hasSuffix("/v1/oauth/token") {
-                keychain.currentUserValues[service] = accountB
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"access_token":"account-a2","refresh_token":"refresh-a2","expires_in":3600}"#.utf8)
-                )
-            }
-            XCTAssertEqual(request.headers["Authorization"], "Bearer account-b")
-            return Self.usageResponse(percent: 75)
-        }
-
-        let snapshot = await fixture.provider.refresh()
-
-        XCTAssertEqual(sessionUsage(snapshot), 75)
-        XCTAssertEqual(files.files[path], accountA)
-        XCTAssertFalse(fixture.http.requests.contains {
-            $0.headers["Authorization"] == "Bearer account-a2"
-        })
-    }
-
-    func testEarlierCandidateRotationStillAllowsFallbackToNextSource() async {
+    func testRejectedKeychainCandidateFallsBackToNextSourceWithoutARefreshAttempt() async {
         let fileAccount = credentials(access: "file-b", refresh: "file-refresh", plan: "pro")
         let keychainAccount = credentials(
             access: "keychain-a", refresh: "keychain-refresh", plan: "max"
@@ -210,13 +101,10 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         let service = store.keychainServiceCandidates().first!
         keychain.currentUserValues[service] = keychainAccount
         let fixture = makeFixture(files: files, keychain: keychain) { request in
-            if request.url.absoluteString.hasSuffix("/v1/oauth/token") {
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"access_token":"keychain-a2","refresh_token":"keychain-refresh-2","expires_in":3600}"#.utf8)
-                )
-            }
+            XCTAssertTrue(
+                request.url.absoluteString.hasSuffix("/api/oauth/usage"),
+                "a rejected token must fall through to the next source, never to the token endpoint"
+            )
             if request.headers["Authorization"] == "Bearer file-b" {
                 return Self.usageResponse(percent: 75)
             }
@@ -228,7 +116,7 @@ final class ClaudeAccountIsolationTests: XCTestCase {
         XCTAssertEqual(sessionUsage(snapshot), 75)
         XCTAssertEqual(
             usageRequests(fixture.http).compactMap { $0.headers["Authorization"] },
-            ["Bearer keychain-a", "Bearer keychain-a2", "Bearer file-b"]
+            ["Bearer keychain-a", "Bearer file-b"]
         )
     }
 

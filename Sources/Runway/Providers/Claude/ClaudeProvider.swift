@@ -80,17 +80,10 @@ final class ClaudeProvider: ProviderRuntime {
     }
 
     func refresh() async -> ProviderSnapshot {
-        await refresh(
-            credentialReloadsRemaining: 1,
-            forceDesktopFallback: false,
-            previousFallbackError: nil
-        )
+        await refresh(forceDesktopFallback: false, previousFallbackError: nil)
     }
 
-    /// Claude Code can replace a login while a request is in flight. Reload once when that happens so
-    /// the older account cannot reach the dashboard or cache; bound the retry for a changing source.
     private func refresh(
-        credentialReloadsRemaining: Int,
         forceDesktopFallback: Bool,
         previousFallbackError: ClaudeAuthError?
     ) async -> ProviderSnapshot {
@@ -124,7 +117,10 @@ final class ClaudeProvider: ProviderRuntime {
                 return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopPermissionRequired)
             case .stale, .invalid, .notFound:
                 if let previousFallbackError {
-                    return ProviderSnapshot.error(provider: provider, error: previousFallbackError)
+                    return await failureSnapshot(
+                        previousFallbackError,
+                        renewalState: storedCandidates.first(where: \.hasUsableAccessToken)
+                    )
                 }
             case .notChecked, .available:
                 break
@@ -162,9 +158,8 @@ final class ClaudeProvider: ProviderRuntime {
             return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.notLoggedIn)
         }
 
-        // Per-source diagnostics at info level (token-free: source kind + refresh-token-present + expired
-        // booleans) so a "token expired" report is diagnosable from a default log without a debug build —
-        // e.g. all sources showing `refresh=no` explains why an expiry can never self-heal (issue #738).
+        // Per-source diagnostics at info level (token-free: source kind + expired boolean) so a
+        // "token expired" report is diagnosable from a default log without a debug build.
         let sources = candidates.map { $0.diagnosticsLabel(now: now()) }.joined(separator: ", ")
         AppLog.info(LogTag.plugin("claude"), "refresh start (\(candidates.count) source\(candidates.count == 1 ? "" : "s"): \(sources))")
         let start = Date()
@@ -173,10 +168,6 @@ final class ClaudeProvider: ProviderRuntime {
         // through to the next rather than failing the whole refresh; any non-auth error (rate limit,
         // request/transport failure) surfaces immediately so a real outage is never masked as a retry.
         var lastFallbackError: ClaudeAuthError?
-        var credentialGeneration = ClaudeCredentialGeneration(
-            storedCandidates,
-            keychainAccessStatus: credentialLoad.keychainAccessStatus
-        )
         for state in candidates {
             // The environment token cannot read subscription usage. If a CLI login was rejected, try
             // Desktop before this spend-only fallback can turn the refresh into a false success.
@@ -185,28 +176,12 @@ final class ClaudeProvider: ProviderRuntime {
                credentialLoad.desktopStatus == .notChecked,
                authStore.liveUsageAvailability(state) == .inferenceOnlyToken
             {
-                return await refresh(
-                    credentialReloadsRemaining: credentialReloadsRemaining,
-                    forceDesktopFallback: true,
-                    previousFallbackError: lastFallbackError
-                )
+                return await refresh(forceDesktopFallback: true, previousFallbackError: lastFallbackError)
             }
             do {
-                let snapshot = try await probe(
-                    state: state,
-                    credentialGeneration: &credentialGeneration,
-                    fallbackWarning: desktopFallbackWarning,
-                    allowKeychainInteraction: allowInteraction
-                )
+                let snapshot = try await probe(state: state, fallbackWarning: desktopFallbackWarning)
                 AppLog.info(LogTag.plugin("claude"), "refresh end (\(Int(Date().timeIntervalSince(start) * 1000))ms)")
                 return snapshot
-            } catch ClaudeAuthError.credentialsChanged where credentialReloadsRemaining > 0 {
-                AppLog.info(LogTag.auth("claude"), "credential source changed during refresh; reloading current login")
-                return await refresh(
-                    credentialReloadsRemaining: credentialReloadsRemaining - 1,
-                    forceDesktopFallback: forceDesktopFallback,
-                    previousFallbackError: previousFallbackError
-                )
             } catch let error as ClaudeAuthError where error.allowsAuthFallback {
                 AppLog.warn(LogTag.auth("claude"), "\(state.source.label) failed (\(error)); falling back to next source if any")
                 lastFallbackError = error
@@ -220,25 +195,39 @@ final class ClaudeProvider: ProviderRuntime {
            credentialLoad.desktopStatus == .notChecked
         {
             AppLog.info(LogTag.auth("claude"), "stored Claude login failed; trying Claude Desktop")
-            return await refresh(
-                credentialReloadsRemaining: credentialReloadsRemaining,
-                forceDesktopFallback: true,
-                previousFallbackError: lastFallbackError
-            )
+            return await refresh(forceDesktopFallback: true, previousFallbackError: lastFallbackError)
         }
-        return ProviderSnapshot.error(
-            provider: provider,
-            error: lastFallbackError ?? ClaudeAuthError.notLoggedIn
+        return await failureSnapshot(
+            lastFallbackError ?? ClaudeAuthError.notLoggedIn,
+            renewalState: candidates.first
         )
     }
 
+    /// Terminal failure handling: a lapsed login (`isLoginRenewal`) degrades to the local spend tiles
+    /// under a renewal notice — the data is still trustworthy and the fix belongs to the owning Claude
+    /// app — while every other failure stays a hard error card.
+    private func failureSnapshot(
+        _ error: ClaudeAuthError,
+        renewalState: ClaudeCredentialState?
+    ) async -> ProviderSnapshot {
+        guard error.isLoginRenewal, let state = renewalState else {
+            return ProviderSnapshot.error(provider: provider, error: error)
+        }
+        AppLog.info(LogTag.auth("claude"), "login needs renewal; serving local usage with a renewal notice")
+        let mapped = ClaudeMappedUsage(
+            plan: ClaudeUsageMapper.formatPlan(
+                subscriptionType: state.displayOAuth.subscriptionType,
+                rateLimitTier: state.displayOAuth.rateLimitTier
+            ),
+            lines: []
+        )
+        return await localUsageSnapshot(mapped: mapped, warning: error.localizedDescription)
+    }
+
     private func probe(
-        state initialState: ClaudeCredentialState,
-        credentialGeneration: inout ClaudeCredentialGeneration,
-        fallbackWarning: String?,
-        allowKeychainInteraction: Bool
+        state: ClaudeCredentialState,
+        fallbackWarning: String?
     ) async throws -> ProviderSnapshot {
-        var state = initialState
         var mapped = ClaudeMappedUsage(
             plan: ClaudeUsageMapper.formatPlan(
                 subscriptionType: state.displayOAuth.subscriptionType,
@@ -250,11 +239,7 @@ final class ClaudeProvider: ProviderRuntime {
         var warning: String?
         switch authStore.liveUsageAvailability(state) {
         case .available:
-            mapped = try await fetchLiveUsage(
-                state: &state,
-                credentialGeneration: &credentialGeneration,
-                allowKeychainInteraction: allowKeychainInteraction
-            )
+            mapped = try await fetchLiveUsage(state: state)
             // A rate-limited fetch rides its "Updates blocked by Anthropic" notice on the mapped usage so
             // it reaches the header triangle even when the badge/note lines aren't in the user's layout.
             warning = mapped.warning
@@ -274,7 +259,16 @@ final class ClaudeProvider: ProviderRuntime {
         if let fallbackWarning {
             warning = fallbackWarning
         }
+        return await localUsageSnapshot(mapped: mapped, warning: warning)
+    }
 
+    /// Assembles the published snapshot from whatever live usage is available plus the always-local
+    /// spend tiles and trend.
+    private func localUsageSnapshot(
+        mapped initialMapped: ClaudeMappedUsage,
+        warning: String?
+    ) async -> ProviderSnapshot {
+        var mapped = initialMapped
         // Local spend tiles, scanned natively from Claude Code's session logs and priced through the
         // shared pricing store, merged with Claude usage that happened inside pi (attributed back here).
         // Both scans run on their scanner actors, off the main actor.
@@ -313,13 +307,12 @@ final class ClaudeProvider: ProviderRuntime {
         )
     }
 
-    private func fetchLiveUsage(
-        state: inout ClaudeCredentialState,
-        credentialGeneration: inout ClaudeCredentialGeneration,
-        allowKeychainInteraction: Bool
-    ) async throws -> ClaudeMappedUsage {
-        var expectedGeneration = credentialGeneration
-        defer { credentialGeneration = expectedGeneration }
+    /// Fetch live usage with the token exactly as Claude stored it. Runway is a read-only consumer of
+    /// Claude's credentials: it never calls the OAuth token endpoint and never writes a credential
+    /// store. A second process rotating Claude's refresh token can trip the server's reuse detection
+    /// and revoke the user's whole session — so a lapsed token is Claude Code's to renew, and Runway
+    /// only reports that renewal is needed.
+    private func fetchLiveUsage(state: ClaudeCredentialState) async throws -> ClaudeMappedUsage {
         activateLiveUsageCache(for: state.oauth)
 
         // Inside an active rate-limit cooldown, skip the live call and serve the last-good usage so a
@@ -329,68 +322,46 @@ final class ClaudeProvider: ProviderRuntime {
             return rateLimitedSnapshot(credentials: state.displayOAuth, retryAfterSeconds: Int(until.timeIntervalSince(now()).rounded(.up)))
         }
 
-        if authStore.needsRefresh(state.oauth),
-           let refreshToken = state.oauth.refreshToken,
-           !refreshToken.isEmpty {
-            let refreshed = try await refreshAccessToken(
-                state: &state,
-                refreshToken: refreshToken,
-                expectedGeneration: expectedGeneration,
-                allowKeychainInteraction: allowKeychainInteraction
-            )
-            state.oauth.accessToken = refreshed.accessToken
-            if refreshed.persisted { expectedGeneration = expectedGeneration.replacing(state) }
+        // An expired stamp means the call below is doomed; skip the network round trip.
+        guard !authStore.isExpired(state.oauth) else {
+            AppLog.info(LogTag.auth("claude"), "\(state.source.label) token expired; renewal belongs to Claude")
+            throw renewalError(for: state)
         }
 
-        var working = state
-        defer { state = working }
-        let response = try await ProviderAuthRetry.fetch(
-            token: working.oauth.accessToken ?? "",
-            attempt: { try await self.usageClient.fetchUsage(accessToken: $0, config: self.authStore.oauthConfig()) },
-            refreshAccessToken: {
-                if working.source == .desktop {
-                    throw ClaudeAuthError.desktopTokenExpired
-                }
-                guard let refreshToken = working.oauth.refreshToken, !refreshToken.isEmpty else {
-                    throw ClaudeAuthError.tokenExpired
-                }
-                let refreshed = try await self.refreshAccessToken(
-                    state: &working,
-                    refreshToken: refreshToken,
-                    expectedGeneration: expectedGeneration,
-                    allowKeychainInteraction: allowKeychainInteraction
-                )
-                if refreshed.persisted {
-                    expectedGeneration = expectedGeneration.replacing(working)
-                }
-                return refreshed.accessToken
-            },
-            connectionFailed: ClaudeUsageError.connectionFailed,
-            authExpired: ClaudeAuthError.tokenExpired
-        )
-
-        let forceDesktopGeneration = working.source == .desktop
-        let currentGeneration = await loadOffMainActor { [authStore] in
-            authStore.credentialGeneration(
-                allowKeychainInteraction: allowKeychainInteraction,
-                forceDesktopFallback: forceDesktopGeneration
+        let usageURL = try authStore.usageEndpoint()
+        let response: HTTPResponse
+        do {
+            response = try await usageClient.fetchUsage(
+                accessToken: state.oauth.accessToken ?? "",
+                usageURL: usageURL
             )
+        } catch {
+            throw ClaudeUsageError.connectionFailed
         }
-        guard currentGeneration == expectedGeneration else { throw ClaudeAuthError.credentialsChanged }
 
-        // 429 can come back from either attempt; the helper hands both through unchanged. Start a cooldown
-        // (respecting Retry-After) and serve the last-good usage rather than a bare badge.
+        if ProviderAuthRetry.isAuthFailure(response) {
+            AppLog.warn(LogTag.auth("claude"), "\(state.source.label) unauthorized (\(response.statusCode)); renewal belongs to Claude")
+            throw renewalError(for: state)
+        }
+
+        // On a 429, start a cooldown (respecting Retry-After) and serve the last-good usage rather
+        // than a bare badge.
         if response.statusCode == 429 {
             let retryAfterSeconds = ClaudeUsageMapper.parseRetryAfterSeconds(response, now: now())
             rateLimitedUntil = now().addingTimeInterval(TimeInterval(retryAfterSeconds ?? Int(Self.rateLimitCooldown)))
             AppLog.info(LogTag.plugin("claude"), "rate-limited (serving \(lastGoodUsage == nil ? "badge" : "last-good usage"))")
-            return rateLimitedSnapshot(credentials: working.displayOAuth, retryAfterSeconds: retryAfterSeconds)
+            return rateLimitedSnapshot(credentials: state.displayOAuth, retryAfterSeconds: retryAfterSeconds)
         }
 
-        let mapped = try ClaudeUsageMapper.mapUsageResponse(response, credentials: working.displayOAuth, now: now())
+        let mapped = try ClaudeUsageMapper.mapUsageResponse(response, credentials: state.displayOAuth, now: now())
         lastGoodUsage = mapped
         rateLimitedUntil = nil
         return mapped
+    }
+
+    /// The renewal error for a lapsed credential, named after the app that owns it.
+    private func renewalError(for state: ClaudeCredentialState) -> ClaudeAuthError {
+        state.source == .desktop ? .desktopTokenExpired : .loginRenewalRequired
     }
 
     /// Last-good usage with an appended staleness note when we have it; otherwise the plain rate-limited
@@ -428,73 +399,6 @@ final class ClaudeProvider: ProviderRuntime {
         var pair = Data(SHA256.hash(data: access))
         pair.append(contentsOf: SHA256.hash(data: refresh))
         return Data(SHA256.hash(data: pair))
-    }
-
-    private struct RefreshedAccess {
-        var accessToken: String
-        var persisted: Bool
-    }
-
-    private func refreshAccessToken(
-        state: inout ClaudeCredentialState,
-        refreshToken: String,
-        expectedGeneration: ClaudeCredentialGeneration,
-        allowKeychainInteraction: Bool
-    ) async throws -> RefreshedAccess {
-        AppLog.info(LogTag.auth("claude"), "token refresh attempt")
-        let response = try await usageClient.refreshToken(refreshToken, config: authStore.oauthConfig())
-        if response.statusCode == 400 || response.statusCode == 401 {
-            let body = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
-            let errorCode = body?["error"] as? String ?? body?["error_description"] as? String
-            if errorCode == "invalid_grant" {
-                AppLog.warn(LogTag.auth("claude"), "session expired (invalid_grant)")
-                throw ClaudeAuthError.sessionExpired
-            }
-            // A 400/401 without a recognized OAuth error code isn't necessarily an expired token — it
-            // can be an HTML proxy/WAF page or a gateway error. Surface the HTTP status rather than
-            // telling the user to re-login (which can't fix a transport/infra failure).
-            throw ClaudeUsageError.requestFailed(response.statusCode)
-        }
-        guard (200..<300).contains(response.statusCode) else {
-            throw ClaudeUsageError.requestFailed(response.statusCode)
-        }
-        // NEVER log decoded.accessToken / refreshToken — only the fact that a rotation happened.
-        let decoded = try JSONDecoder().decode(ClaudeRefreshResponse.self, from: response.body)
-        let previousOAuth = state.oauth
-        state.oauth.accessToken = decoded.accessToken
-        if let refreshToken = decoded.refreshToken {
-            state.oauth.refreshToken = refreshToken
-        }
-        if let expiresIn = decoded.expiresIn {
-            state.oauth.expiresAt = now().timeIntervalSince1970 * 1000 + expiresIn * 1000
-        }
-        // Fail loudly: a swallowed save leaves the OLD refresh token on disk after a rotation, so the
-        // next launch refreshes with a server-invalidated token and the user sees a misleading
-        // "session expired". The refreshed token still works for this session, so we log and continue
-        // rather than fail the live fetch.
-        let persisted: Bool
-        do {
-            guard try await Task.detached(priority: .utility, operation: { [authStore, state] in
-                try authStore.save(
-                    state,
-                    ifUnchanged: expectedGeneration,
-                    allowKeychainInteraction: allowKeychainInteraction
-                )
-            }).value else {
-                throw ClaudeAuthError.credentialsChanged
-            }
-            persisted = true
-        } catch let error as ClaudeAuthError where error == .credentialsChanged {
-            throw error
-        } catch {
-            AppLog.error(LogTag.auth("claude"), "failed to persist rotated credentials; using the refreshed token for this session only: \(error.localizedDescription)")
-            persisted = false
-        }
-        if cachedCredentialFingerprint == Self.credentialFingerprint(previousOAuth) {
-            cachedCredentialFingerprint = Self.credentialFingerprint(state.oauth)
-        }
-        AppLog.info(LogTag.auth("claude"), "token refresh ok (rotated)")
-        return RefreshedAccess(accessToken: decoded.accessToken, persisted: persisted)
     }
 
 }
