@@ -131,16 +131,19 @@ struct CopilotAuthStore: Sendable {
     func loadFromGhKeychain(allowKeychainInteraction: Bool = false) -> CopilotCredentialLoad {
         let account = ghUsername()
         guard allowKeychainInteraction else {
+            // Account-scoped first, and the broad service-only lookup only when it is actually
+            // needed — a successful scoped read must not also read (and cache) an arbitrary
+            // `gh:github.com` secret or wait on a wedged broad query.
             var unavailable = false
-            var reads = [keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService)]
+            var reads = [{ keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService) }]
             if let account {
                 reads.insert(
-                    keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService, account: account),
+                    { keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService, account: account) },
                     at: 0
                 )
             }
             for read in reads {
-                switch read {
+                switch read() {
                 case .value(let raw):
                     return credentialLoad(fromKeychainRaw: raw)
                 case .missing:
