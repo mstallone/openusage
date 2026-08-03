@@ -81,12 +81,18 @@ struct CursorAuthStore: Sendable {
         let sqliteRefreshToken = stateValues[Self.refreshTokenKey]
         let sqliteMembershipType = stateValues[Self.membershipTypeKey]?.lowercased()
 
-        let accessRead = readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainInteraction)
-        let refreshRead = readKeychainValue(Self.keychainRefreshTokenService, allowInteraction: allowKeychainInteraction)
+        let hasSQLiteAuth = sqliteAccessToken != nil || sqliteRefreshToken != nil
+
+        // Prompt only when the keychain can actually win source selection: a paid SQLite login is
+        // returned unconditionally below, so a manual refresh must not raise approval dialogs for
+        // stale `agent` keychain entries it would then ignore.
+        let keychainCanWin = !hasSQLiteAuth || sqliteMembershipType == "free"
+        let allowKeychainPrompt = allowKeychainInteraction && keychainCanWin
+        let accessRead = readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainPrompt)
+        let refreshRead = readKeychainValue(Self.keychainRefreshTokenService, allowInteraction: allowKeychainPrompt)
         let keychainAccessToken = accessRead.trimmedValue
         let keychainRefreshToken = refreshRead.trimmedValue
 
-        let hasSQLiteAuth = sqliteAccessToken != nil || sqliteRefreshToken != nil
         let hasKeychainAuth = keychainAccessToken != nil || keychainRefreshToken != nil
 
         // Whether an item is confirmed present but unreadable without approval — checked per item,

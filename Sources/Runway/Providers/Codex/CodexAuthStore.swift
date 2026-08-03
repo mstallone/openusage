@@ -244,7 +244,10 @@ struct CodexAuthStore: Sendable {
         case .missing:
             return .none
         case .unavailable:
-            return keychain.genericPasswordExists(service: Self.keychainService) == true
+            // `nil` from the probe means "cannot check" (locked keychain), not "absent" — treating
+            // it as logged-out would silently swallow an access problem. Only a confirmed-absent
+            // item reports none.
+            return keychain.genericPasswordExists(service: Self.keychainService) != false
                 ? .permissionRequired
                 : .none
         }

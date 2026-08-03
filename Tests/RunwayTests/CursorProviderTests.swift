@@ -362,6 +362,22 @@ final class CursorKeychainReadModeTests: XCTestCase {
         XCTAssertEqual(paid.loadCredentials().state?.accessToken, "sqlite-pro-token")
     }
 
+    func testManualRefreshWithAPaidSQLiteLoginNeverPromptsForStaleKeychainEntries() {
+        // A paid SQLite login is returned unconditionally, so a manual refresh must not raise
+        // approval dialogs for keychain entries it would then ignore.
+        let sqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: "sqlite-pro-token",
+            CursorAuthStore.membershipTypeKey: "pro"
+        ])
+        let keychain = ReadModeTrackingKeychain(value: "stale-agent-token")
+        let store = CursorAuthStore(sqlite: sqlite, keychain: keychain)
+
+        let state = store.loadCredentials(allowKeychainInteraction: true).state
+
+        XCTAssertEqual(state?.accessToken, "sqlite-pro-token")
+        XCTAssertEqual(keychain.interactiveReads, 0, "keychain entries that cannot win must not prompt")
+    }
+
     func testHalfApprovedKeychainPairSurfacesTheRemainingApprovalNotAPartialLogin() {
         // Access approved, refresh still protected: a partial login would work until the access
         // token expires and then fail as a misleading "token expired". The remaining approval is
