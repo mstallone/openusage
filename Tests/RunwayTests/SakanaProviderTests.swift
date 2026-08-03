@@ -229,7 +229,7 @@ final class SakanaProviderTests: XCTestCase {
             now: { current }
         )
 
-        let snapshot = await provider.refresh()
+        _ = await provider.refresh()
 
         XCTAssertEqual(http.requests.count, 1)
     }

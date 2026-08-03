@@ -63,7 +63,7 @@ struct WidgetGroupedListView: View {
             container(group)
         }
         .opacity(activeProviderID == group.provider.id ? 0 : 1)
-        .reorderFrame(id: group.provider.id, in: .named(reorderSpaceName), store: rowFrames)
+        .reorderFrame(id: group.provider.id, in: reorderSpaceName, store: rowFrames)
     }
 
     private func header(_ group: ProviderGroup) -> some View {
@@ -310,7 +310,7 @@ struct WidgetGroupedListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .reorderFrame(id: expandedDividerID(for: providerID), in: .named(reorderSpaceName), store: rowFrames)
+        .reorderFrame(id: expandedDividerID(for: providerID), in: reorderSpaceName, store: rowFrames)
         .accessibilityLabel(isExpanded ? "Show less" : "Show more")
     }
 
@@ -351,7 +351,7 @@ struct WidgetGroupedListView: View {
             .opacity(isActive ? 0 : 1)
             .highPriorityGesture(metricDragGesture(for: descriptor, providerID: providerID))
             .contextMenu { rowMenu(descriptor, providerID: providerID) }
-            .reorderFrame(id: descriptor.id, in: .named(reorderSpaceName), store: rowFrames)
+            .reorderFrame(id: descriptor.id, in: reorderSpaceName, store: rowFrames)
     }
 
     /// Desktop-native management for a single metric: hide it, pin/unpin it, refresh its provider, or jump

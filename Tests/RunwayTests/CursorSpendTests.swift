@@ -94,7 +94,7 @@ final class CursorSpendRangeTests: XCTestCase {
         ]
 
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
 
         // Tokens come from Cursor; dollars are calculated locally and marked as estimated.
         XCTAssertEqual(values(lines, "Today"), [MetricValue(number: 1.00, kind: .dollars, estimated: true), MetricValue(number: 100, kind: .count, label: "tokens")])
@@ -105,7 +105,7 @@ final class CursorSpendRangeTests: XCTestCase {
 
     func testZeroActivityLeavesTilesUnbacked() {
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: [], now: Date(), pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: [], now: Date(), pricing: TestPricing.bundled, to: &lines)
 
         // The export fetched but had no rows: every period is idle, so no spend tile is appended and the
         // tiles fall back to "No data" — not a fabricated "$0.00 · 0 tokens" ("No data" is also what a
@@ -124,7 +124,7 @@ final class CursorSpendRangeTests: XCTestCase {
         ]
 
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
 
         guard case .chart(let label, let points, let note) = lines.first(where: { $0.label == "Usage Trend" }) else {
             return XCTFail("expected a Usage Trend chart line")
@@ -141,7 +141,7 @@ final class CursorSpendRangeTests: XCTestCase {
         // A fetched-but-empty export leaves the spend tiles unbacked and gives the trend nothing to draw,
         // so no chart line is appended (the row falls back to "No data").
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: [], now: Date(), pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: [], now: Date(), pricing: TestPricing.bundled, to: &lines)
         XCTAssertNil(lines.first(where: { $0.label == "Usage Trend" }))
     }
 
@@ -156,7 +156,7 @@ final class CursorSpendRangeTests: XCTestCase {
         ]
 
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
 
         // Today carries its own unknown model; a fully-priced Yesterday stays clean; Last 30 Days carries
         // the de-duplicated, sorted union across the whole window.
@@ -176,7 +176,7 @@ final class CursorSpendRangeTests: XCTestCase {
         ]
 
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
 
         XCTAssertNotNil(values(lines, "Today"), "the priced row keeps the tile present")
         XCTAssertEqual(unknown(lines, "Today"), [])
@@ -192,7 +192,7 @@ final class CursorSpendRangeTests: XCTestCase {
         ]
 
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
 
         // The unpriced row is excluded from the tile's tokens and the breakdown alike — it surfaces
         // only through the unknown-model warning.
@@ -219,7 +219,7 @@ final class CursorSpendRangeTests: XCTestCase {
         ]
 
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
 
         let breakdown = try XCTUnwrap(modelBreakdown(lines, "Today"))
         XCTAssertEqual(breakdown.models.map(\.model), ["claude-opus-4-8", "gpt-5.5"])
@@ -246,7 +246,7 @@ final class CursorSpendRangeTests: XCTestCase {
         ]
 
         var lines: [MetricLine] = []
-        CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
+        _ = CursorUsageMapper.appendSpendLines(rows: rows, now: now, pricing: TestPricing.bundled, to: &lines)
 
         XCTAssertNil(values(lines, "Today"))
         XCTAssertNil(values(lines, "Last 30 Days"))

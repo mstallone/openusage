@@ -167,28 +167,35 @@ extension View {
     /// frame — measured at ~30% of each morph frame's render time. `onGeometryChange` delivers the
     /// same rect straight to the plain box: no preference propagation, no host invalidation, and
     /// the write is a dictionary assignment.
+    /// Takes the named space's `String` name rather than a `CoordinateSpace`: the geometry
+    /// transform closure is `@Sendable`, and `CoordinateSpace` isn't — every caller uses a named
+    /// space anyway, and the name crosses the isolation boundary cleanly.
     func reorderFrame(
         id: String,
-        in coordinateSpace: CoordinateSpace,
+        in spaceName: String,
         store: ReorderFrameStore,
         yOutset: CGFloat = 0
     ) -> some View {
-        modifier(ReorderFrameModifier(id: id, coordinateSpace: coordinateSpace, store: store, yOutset: yOutset))
+        modifier(ReorderFrameModifier(id: id, spaceName: spaceName, store: store, yOutset: yOutset))
     }
 }
 
 private struct ReorderFrameModifier: ViewModifier {
     let id: String
-    let coordinateSpace: CoordinateSpace
+    let spaceName: String
     let store: ReorderFrameStore
     let yOutset: CGFloat
     /// This instance's identity for the store's ownership check — see `ReorderFrameStore.owners`.
     @State private var token = UUID()
 
     func body(content: Content) -> some View {
-        content
+        // Captured as locals so the `@Sendable` transform closure doesn't reach through
+        // main-actor-isolated `self`.
+        let spaceName = spaceName
+        let yOutset = yOutset
+        return content
             .onGeometryChange(for: CGRect.self) { proxy in
-                proxy.frame(in: coordinateSpace).insetBy(dx: 0, dy: -yOutset)
+                proxy.frame(in: .named(spaceName)).insetBy(dx: 0, dy: -yOutset)
             } action: { frame in
                 store.record(id: id, frame: frame, owner: token)
             }

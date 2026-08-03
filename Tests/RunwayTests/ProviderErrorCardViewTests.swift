@@ -1,6 +1,7 @@
 import XCTest
 @testable import Runway
 
+@MainActor
 final class ProviderErrorCardViewTests: XCTestCase {
     func testTwoSentenceMessagesSplitIntoTitleCasedTitleAndGuidance() {
         // Provider error strings follow "Short statement. Guidance." — the statement becomes the
