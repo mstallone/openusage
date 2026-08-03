@@ -5,8 +5,12 @@
 # composer-*, github_bugbot), fast multipliers, and model alias rules in the field within ~a day —
 # no tag, no release, no Sparkle involvement.
 #
-# Shares the release workflow's concurrency group: both publish to update-feed with keep_files, so
-# serializing them prevents lost updates from concurrent pushes to the branch.
+# Shares the release workflow's concurrency group: all publishers push to update-feed with
+# keep_files, so serializing them prevents lost updates from concurrent pushes to the branch.
+# GitHub keeps only one PENDING run per concurrency group — a newer queued publisher silently
+# replaces an older pending one even with cancel-in-progress: false. To make that supersession
+# lossless, this workflow and Publish Landing Page each publish the UNION of the main-branch
+# content (the validated supplement plus website/), so whichever run survives ships both.
 name: Publish Pricing Supplement
 
 on:
@@ -60,6 +64,7 @@ jobs:
       - name: Assemble update feed
         run: |
           mkdir -p public
+          cp -R website/. public/
           cp Sources/Runway/Resources/pricing_supplement.json public/pricing_supplement.json
 
       - name: Publish update feed branch
