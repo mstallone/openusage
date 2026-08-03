@@ -408,7 +408,7 @@ final class StatusItemController: NSObject {
         menu.addItem(ClosureMenuItem(title: "Settings", systemSymbol: "gearshape", keyEquivalent: ",") { [weak self] in
             self?.openSettings()
         })
-        menu.addItem(ClosureMenuItem(title: "Memory", systemSymbol: "brain") { [weak self] in
+        menu.addItem(ClosureMenuItem(title: "Memory", systemSymbol: "brain", keyEquivalent: "m") { [weak self] in
             self?.openMemory()
         })
         menu.addItem(.separator())
