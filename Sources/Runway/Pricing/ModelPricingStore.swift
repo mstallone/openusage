@@ -7,6 +7,11 @@ import Foundation
 actor ModelPricingStore {
     static let shared = ModelPricingStore()
 
+    /// The default pricing source for provider runtimes. A named constant instead of an inline
+    /// default-argument closure because the compiler mis-analyzes `await` inside default-argument
+    /// expressions and emits a spurious "no 'async' operations occur within 'await'" warning.
+    static let livePricing: @Sendable () async -> ModelPricing = { await shared.current() }
+
     /// Refetch a source this long after its last success.
     private static let refreshInterval: TimeInterval = 60 * 60
     /// Retry a failed source after this long (keeps failure logs from repeating every provider pass).

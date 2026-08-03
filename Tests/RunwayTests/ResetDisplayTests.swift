@@ -4,6 +4,7 @@ import XCTest
 /// Covers the relative/absolute reset display: the shared `Formatters.deadlineLabel` (one helper for
 /// every "<verb> + when" string), its absolute day buckets, and `WidgetData` honoring the global
 /// mode for the trailing label, the opposite-format tooltip, and the "Limit in …" run-out projection.
+@MainActor
 final class ResetDisplayTests: XCTestCase {
     private func utcCalendar() -> Calendar {
         var calendar = Calendar(identifier: .gregorian)

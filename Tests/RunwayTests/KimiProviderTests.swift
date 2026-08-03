@@ -269,7 +269,7 @@ final class KimiProviderTests: XCTestCase {
         }
         let provider = makeKimiProvider(http: http, files: files)
 
-        let snapshot = await provider.refresh()
+        _ = await provider.refresh()
 
         XCTAssertEqual(http.requests.map(\.method), ["POST", "GET"])
         let saved = try JSONDecoder().decode(
@@ -296,7 +296,7 @@ final class KimiProviderTests: XCTestCase {
         }
         let provider = makeKimiProvider(http: http, files: files)
 
-        let snapshot = await provider.refresh()
+        _ = await provider.refresh()
 
         XCTAssertEqual(http.requests.count, 2)
     }

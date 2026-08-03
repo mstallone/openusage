@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import Runway
 
@@ -166,12 +167,13 @@ private extension LoginShellEnvironment {
     /// refuses to spawn on the main thread.
     func ensureCapturedForTesting() -> Bool {
         let done = DispatchSemaphore(value: 0)
-        var result = false
+        let result = OSAllocatedUnfairLock(initialState: false)
         DispatchQueue.global().async {
-            result = self.ensureCaptured()
+            let captured = self.ensureCaptured()
+            result.withLock { $0 = captured }
             done.signal()
         }
         done.wait()
-        return result
+        return result.withLock { $0 }
     }
 }
