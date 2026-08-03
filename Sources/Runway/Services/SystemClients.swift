@@ -367,9 +367,16 @@ enum KeychainUISuppression {
 
 struct SecurityKeychainAccessor: KeychainAccessing {
     let processRunner: ProcessRunning
+    /// Gates every in-process secret read: change-gated caching, single-flight per item, and a
+    /// circuit breaker after denials. See `KeychainReadCoordinator`.
+    let coordinator: KeychainReadCoordinator
 
-    init(processRunner: ProcessRunning = SystemProcessRunner()) {
+    init(
+        processRunner: ProcessRunning = SystemProcessRunner(),
+        coordinator: KeychainReadCoordinator = .shared
+    ) {
         self.processRunner = processRunner
+        self.coordinator = coordinator
     }
 
     // `security find-generic-password` exits 44 (errSecItemNotFound) when no item matches — the
@@ -390,10 +397,22 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         try readGenericPasswordAllowingUserInteraction(service: service, account: currentUserAccount())
     }
 
+    private func readGenericPasswordAllowingUserInteraction(
+        service: String,
+        account: String?
+    ) throws -> String? {
+        try coordinator.interactiveRead(
+            service: service,
+            account: account,
+            fingerprint: { attributeFingerprint(service: service, account: account) },
+            read: { try performInteractiveRead(service: service, account: account) }
+        )
+    }
+
     /// Runs the approval query inside Runway. Keychain access-control decisions, including
     /// "Always Allow", are attached to the requesting executable, so routing this through the
     /// `security` command would authorize that helper rather than the app's later silent reads.
-    private func readGenericPasswordAllowingUserInteraction(
+    private func performInteractiveRead(
         service: String,
         account: String?
     ) throws -> String? {
@@ -434,6 +453,18 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     }
 
     private func readGenericPasswordWithoutUserInteraction(
+        service: String,
+        account: String?
+    ) -> NonInteractiveKeychainRead {
+        coordinator.nonInteractiveRead(
+            service: service,
+            account: account,
+            fingerprint: { attributeFingerprint(service: service, account: account) },
+            read: { performNonInteractiveRead(service: service, account: account) }
+        )
+    }
+
+    private func performNonInteractiveRead(
         service: String,
         account: String?
     ) -> NonInteractiveKeychainRead {
@@ -536,14 +567,20 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     }
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
+        attributeFingerprint(service: service, account: account)
+    }
+
+    /// Attributes-only fingerprint (no `kSecReturnData`, so the item's ACL is never evaluated):
+    /// prompt-free, in-process, microseconds. `nil` means the item is absent or the probe failed —
+    /// the coordinator treats both as "cannot cache".
+    private func attributeFingerprint(service: String, account: String?) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnAttributes as String: true,
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
-        ]
+        ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
         let status = KeychainUISuppression.withUISuppressed { isSuppressed in
             isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed

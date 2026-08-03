@@ -146,4 +146,51 @@ final class KeychainAccessorTests: XCTestCase {
         XCTAssertTrue(allowed.boolValue, "the process-global UI switch must be restored after reads")
     }
 
+    func testChangeGatedReadObservesAnItemUpdateThroughItsFingerprint() throws {
+        // End-to-end over a real login-keychain item: the coordinator serves the cached secret while
+        // the item is unchanged, and a `SecItemUpdate` (what an external credential rotation does)
+        // moves the attribute fingerprint so the next read returns the fresh secret.
+        let accessor = SecurityKeychainAccessor()
+        let service = "RunwayTests.keychain-fingerprint.\(UUID().uuidString)"
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "runway-tests",
+            kSecValueData as String: Data("first-secret".utf8),
+        ]
+        let addStatus = SecItemAdd(add as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw XCTSkip("cannot create a login-keychain item in this environment (status \(addStatus))")
+        }
+        defer {
+            _ = SecItemDelete([
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+            ] as CFDictionary)
+        }
+
+        XCTAssertEqual(
+            accessor.readGenericPasswordWithoutUserInteraction(service: service),
+            .value("first-secret")
+        )
+
+        let update: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+        ]
+        // The label attribute changes alongside the secret, so the fingerprint must move even if the
+        // modification date's resolution is coarse.
+        let changes: [String: Any] = [
+            kSecValueData as String: Data("second-secret".utf8),
+            kSecAttrLabel as String: "rotated",
+        ]
+        XCTAssertEqual(SecItemUpdate(update as CFDictionary, changes as CFDictionary), errSecSuccess)
+
+        XCTAssertEqual(
+            accessor.readGenericPasswordWithoutUserInteraction(service: service),
+            .value("second-secret"),
+            "an updated item must not be served from the stale cache"
+        )
+    }
+
 }
