@@ -1,6 +1,6 @@
-# Deploys the update-feed branch content (appcast.xml, pricing_supplement.json) to the live update
-# endpoint. GitHub Pages is the transport, but the workflow and backing branch use product-focused
-# names.
+# Deploys the update-feed branch content (appcast.xml, pricing_supplement.json, and the landing
+# page) to the live update endpoint. GitHub Pages is the transport, but the workflow and backing
+# branch use product-focused names.
 #
 # The repo's Pages source is "GitHub Actions", not "Deploy from a branch": GitHub's legacy
 # branch-deploy pipeline repeatedly failed server-side ("Deployment failed, try again later",
@@ -22,7 +22,7 @@ name: Deploy Update Feed
 
 on:
   workflow_run:
-    workflows: ["Release", "Publish Pricing Supplement"]
+    workflows: ["Release", "Publish Pricing Supplement", "Publish Landing Page"]
     types: [completed]
   workflow_dispatch:
 

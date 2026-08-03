@@ -1,0 +1,39 @@
+# Publishes the landing page to the update feed whenever it changes on main.
+#
+# The site lives at https://mstallone.github.io/runway/ — the same GitHub Pages origin that serves
+# appcast.xml and pricing_supplement.json from the update-feed branch. This workflow copies
+# website/ onto that branch with keep_files, so the page coexists with the feed files and a merge
+# to main is all it takes to update the live site.
+#
+# Shares the release workflow's concurrency group: everything that pushes to update-feed does so
+# with keep_files, so serializing the publishers prevents lost updates from concurrent pushes.
+name: Publish Landing Page
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - website/**
+      - .github/workflows/landing-page.yml
+  workflow_dispatch:
+
+concurrency:
+  group: update-feed-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Publish update feed branch
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.0.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: update-feed
+          publish_dir: ./website
+          keep_files: true

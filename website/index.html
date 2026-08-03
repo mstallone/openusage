@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runway — Track all your AI usage from the macOS menu bar</title>
+<meta name="description" content="Session, weekly, and spend meters for Claude, Codex, Cursor, Grok, and eight more, live in the macOS menu bar. Open source; nothing leaves your Mac.">
+<link rel="canonical" href="https://mstallone.github.io/runway/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Runway — Track all your AI usage from the macOS menu bar">
+<meta property="og:description" content="Session, weekly, and spend meters for Claude, Codex, Cursor, Grok, and eight more, live in the macOS menu bar.">
+<meta property="og:url" content="https://mstallone.github.io/runway/">
+<meta property="og:image" content="https://mstallone.github.io/runway/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#FAF8F2">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1B1C1F">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23C4622C'%3E%3Cg transform='rotate(38 12 12)'%3E%3Cpath d='M12 1.5c.86 0 1.55.7 1.55 1.55v5.02l7.35 4.46v1.92l-7.35-2.14v5.08l2.48 1.88v1.54L12 19.66l-4.03 1.15v-1.54l2.48-1.88v-5.08L3.1 14.45v-1.92l7.35-4.46V3.05c0-.86.69-1.55 1.55-1.55Z'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+/* ---------- Tokens ---------- */
+:root {
+  --bg: #FAF8F2;
+  --ink: #21201C;
+  --ink-2: #6F6B62;
+  --ink-3: #9A948A;
+  --accent: #C4622C;
+  --accent-ink: #FFF6EA;
+  --hairline: rgb(33 32 28 / 0.10);
+
+  /* dashboard mock */
+  --panel: #FCFCFC;
+  --panel-card: #F3F3F1;
+  --panel-ink: #1D1D1F;
+  --panel-ink-2: #7A7A7E;
+  --panel-track: rgb(0 0 0 / 0.10);
+  --panel-hairline: rgb(0 0 0 / 0.09);
+  --picker-track: #EAEAE8;
+  --picker-pill: #FFFFFF;
+  --menubar: rgb(252 251 247 / 0.85);
+  --menubar-ink: #1D1D1F;
+  --donut-cursor: #13120A;
+  --donut-grok: #8E8E93;
+
+  --meter-ok: #007AFF;
+  --meter-warn: #E7B800;
+  --meter-crit: #FF3B30;
+
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1B1C1F;
+    --ink: #F0EEE7;
+    --ink-2: #979593;
+    --ink-3: #7B7B7E;
+    --accent: #E0813F;
+    --accent-ink: #211508;
+    --hairline: rgb(240 238 231 / 0.12);
+
+    --panel: #28292C;
+    --panel-card: #313236;
+    --panel-ink: #F2F2F3;
+    --panel-ink-2: #9C9CA1;
+    --panel-track: rgb(255 255 255 / 0.14);
+    --panel-hairline: rgb(255 255 255 / 0.10);
+    --picker-track: rgb(255 255 255 / 0.09);
+    --picker-pill: #46474C;
+    --menubar: #2D2E31;
+    --menubar-ink: #EDEDEF;
+    --donut-cursor: #F5F5F7;
+    --donut-grok: #98989D;
+  }
+}
+
+/* ---------- Base ---------- */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a { color: inherit; }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.num { font-variant-numeric: tabular-nums; }
+.mono.as-is { text-transform: none; }
+
+/* ---------- Header ---------- */
+header { padding: 28px 0; }
+header .wrap { display: flex; align-items: center; justify-content: space-between; }
+.wordmark { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 650; text-decoration: none; }
+.wordmark svg { width: 22px; height: 22px; color: var(--accent); }
+.gh-link { font-size: 14px; font-weight: 500; color: var(--ink-2); text-decoration: none; }
+.gh-link:hover { color: var(--ink); }
+
+/* ---------- Hero ---------- */
+.hero { padding: 72px 0 0; }
+.hero .wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 64px;
+  align-items: center;
+}
+.hero h1 {
+  font-size: clamp(44px, 5.5vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  font-weight: 750;
+}
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero .sub {
+  margin-top: 24px;
+  font-size: 18px;
+  line-height: 1.65;
+  color: var(--ink-2);
+  max-width: 46ch;
+}
+.cta-row { display: flex; align-items: center; gap: 22px; margin-top: 36px; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: 15px; font-weight: 600;
+  padding: 12px 22px; border-radius: 999px;
+  text-decoration: none;
+  transition: filter 0.15s ease;
+}
+.btn:hover { filter: brightness(1.06); }
+.btn svg { width: 15px; height: 15px; }
+.link-quiet { font-size: 15px; font-weight: 550; color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--hairline); padding-bottom: 1px; }
+.link-quiet:hover { color: var(--ink); border-color: var(--ink-2); }
+
+/* ---------- Dashboard mock ---------- */
+.stage { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.menubar {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--menubar); color: var(--menubar-ink);
+  border-radius: 10px;
+  padding: 7px 14px;
+  font-size: 13px; font-weight: 700;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.14);
+}
+.menubar .seg { display: flex; align-items: center; gap: 5px; }
+.menubar svg { width: 14px; height: 14px; opacity: 0.85; }
+.menubar .div { width: 1px; height: 14px; background: currentColor; opacity: 0.22; }
+.menubar .clock { font-weight: 600; opacity: 0.9; }
+
+.panel {
+  width: 320px;
+  background: var(--panel);
+  color: var(--panel-ink);
+  border-radius: 13px;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.16), 0 2px 8px rgb(0 0 0 / 0.08);
+  padding-top: 12px;
+  font-size: 12px;
+}
+.panel .inner { padding: 0 14px; }
+
+.p-header { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px; font-size: 13px; font-weight: 600; }
+.p-header .badge { font-size: 10px; font-weight: 400; color: var(--panel-ink-2); }
+.p-header svg.mark { width: 14px; height: 14px; color: var(--panel-ink-2); }
+.p-header svg.chev { width: 9px; height: 9px; color: var(--panel-ink-2); margin-top: 1px; }
+
+.card { background: var(--panel-card); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+
+/* segmented picker */
+.picker { display: flex; gap: 2px; background: var(--picker-track); border-radius: 999px; padding: 3px; width: max-content; margin: 0 auto 14px; }
+.picker span { font-size: 11px; font-weight: 500; color: var(--panel-ink-2); padding: 4px 12px; border-radius: 999px; }
+.picker .on { background: var(--picker-pill); color: var(--panel-ink); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+
+/* donut + legend */
+.spend { display: flex; align-items: center; gap: 18px; }
+.donut { position: relative; width: 104px; height: 104px; flex: none; }
+.donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.donut circle { fill: none; stroke-width: 20; }
+.donut .c-claude { stroke: #DE7356; }
+.donut .c-codex { stroke: #10A37F; }
+.donut .c-cursor { stroke: var(--donut-cursor); }
+.donut .c-grok { stroke: var(--donut-grok); }
+.donut .center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.donut .center b { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.donut .center i { font-style: normal; font-size: 9px; font-weight: 500; color: var(--panel-ink-2); }
+.legend { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+.legend div { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.legend i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.legend b { font-weight: 500; }
+.legend em { font-style: normal; margin-left: auto; color: var(--panel-ink-2); font-variant-numeric: tabular-nums; }
+
+/* metric rows */
+.row { padding: 5px 0; }
+.row + .row { padding-top: 9px; }
+.row .top, .row .bottom { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.row .top b { font-size: 12px; font-weight: 600; }
+.row .top span { font-size: 11px; color: var(--panel-ink-2); }
+.row .flame { display: inline-flex; align-items: center; gap: 4px; }
+.row .flame svg { width: 9px; height: 11px; color: var(--meter-crit); align-self: center; }
+.row .bottom { margin-top: 3px; font-size: 11px; }
+.row .bottom span { color: var(--panel-ink-2); font-variant-numeric: tabular-nums; }
+.row .bottom b { font-weight: 400; font-variant-numeric: tabular-nums; }
+
+.meter { position: relative; height: 4px; border-radius: 999px; background: var(--panel-track); margin: 6px 0 0; }
+.meter i {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: var(--w);
+  border-radius: 999px;
+  min-width: 4px;
+}
+.meter .tick {
+  position: absolute; top: -2px;
+  left: var(--t);
+  width: 2px; height: 8px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--panel-ink) 55%, transparent);
+}
+.meter .ok { background: var(--meter-ok); }
+.meter .warn { background: var(--meter-warn); }
+.meter .crit { background: var(--meter-crit); }
+@media (prefers-reduced-motion: no-preference) {
+  .meter i { animation: fill 0.9s cubic-bezier(0.25, 1, 0.4, 1) backwards; }
+  @keyframes fill { from { width: 4px; } }
+}
+
+.caret { display: flex; justify-content: center; padding-top: 2px; margin-top: 4px; }
+.caret svg { width: 10px; height: 10px; color: var(--panel-ink-2); }
+
+.p-footer {
+  margin-top: 4px;
+  border-top: 1px solid var(--panel-hairline);
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px 8px 14px;
+  font-size: 11px; color: var(--panel-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.p-footer .refresh { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+.p-footer .refresh svg { width: 10px; height: 10px; }
+.p-footer .gear {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--panel-card);
+  display: flex; align-items: center; justify-content: center;
+}
+.p-footer .gear svg { width: 13px; height: 13px; }
+
+/* ---------- Features ---------- */
+.features { padding: 128px 0 0; }
+.features .grid {
+  margin-top: 36px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 44px 56px;
+}
+.feature h3 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.feature p { margin-top: 8px; font-size: 14px; line-height: 1.65; color: var(--ink-2); }
+
+/* ---------- Sections ---------- */
+.section { padding: 128px 0 0; }
+.section h2 { margin-top: 12px; font-size: clamp(24px, 3vw, 32px); letter-spacing: -0.02em; font-weight: 700; }
+.section .lead { margin-top: 14px; font-size: 16px; line-height: 1.65; color: var(--ink-2); max-width: 58ch; }
+
+/* performance table */
+.perf { margin-top: 26px; width: 100%; max-width: 760px; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.perf + h2 { margin-top: 40px; }
+.section .lead a { color: var(--ink-2); }
+.perf th { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3); text-align: right; padding: 0 0 10px; }
+.perf th:first-child { text-align: left; }
+.perf td { padding: 11px 0; border-top: 1px solid var(--hairline); }
+.perf td + td { text-align: right; padding-left: 24px; white-space: nowrap; }
+.perf .old { color: var(--ink-2); }
+.perf .new { font-weight: 650; }
+.perf .ratio { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+/* menu bar pins mock */
+.menubar.big { font-size: 15px; gap: 16px; padding: 11px 18px; border-radius: 12px; }
+.menubar.big svg { width: 17px; height: 17px; }
+.menubar.big .div { height: 17px; }
+.mbars { width: 19px; display: flex; flex-direction: column; gap: 3px; }
+.mbars i { position: relative; height: 4px; border-radius: 2px; background: color-mix(in srgb, currentColor 18%, transparent); overflow: hidden; }
+.mbars i b { position: absolute; inset: 0; width: var(--w); background: currentColor; border-radius: 2px; }
+
+/* split rows (memory, iphone) */
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 72px; align-items: center; }
+.split .lead { max-width: none; }
+
+/* ios widgets mock */
+.widgets { display: flex; gap: 12px; justify-content: center; align-items: stretch; flex-wrap: wrap; }
+.widget {
+  background: var(--panel);
+  color: var(--panel-ink);
+  border-radius: 20px;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.14), 0 2px 6px rgb(0 0 0 / 0.07);
+  padding: 13px 14px;
+  width: 136px; height: 136px;
+  display: flex; flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
+.widget.med { width: 284px; }
+.w-head { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--panel-ink-2); }
+.w-head svg { width: 11px; height: 11px; }
+.w-cap { display: block; font-size: 10px; line-height: 1.3; color: var(--panel-ink-2); }
+.w-big { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+.w-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: auto; }
+.w-row .w-cap { display: inline; }
+.w-row b { font-size: 12px; font-weight: 600; }
+.w-cols { display: flex; gap: 14px; margin-top: 6px; flex: 1; min-height: 0; }
+.w-stack { display: flex; flex-direction: column; justify-content: space-between; }
+.w-stack span { display: block; }
+.w-stack b { font-size: 12.5px; font-weight: 650; display: block; line-height: 1.25; }
+.w-chart { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.w-bars { flex: 1; display: flex; align-items: flex-end; gap: 3px; }
+.w-bars i { flex: 1; border-radius: 2px; background: var(--meter-ok); height: var(--h); }
+.w-updated { font-size: 9px; color: var(--panel-ink-2); text-align: right; margin-top: 5px; }
+
+/* memory window mock */
+.memwin {
+  width: min(500px, 100%);
+  margin: 0 auto;
+  background: var(--panel);
+  color: var(--panel-ink);
+  border-radius: 13px;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 0.16), 0 2px 8px rgb(0 0 0 / 0.08);
+  overflow: hidden;
+  font-size: 12px;
+}
+.memwin .titlebar { display: flex; align-items: center; gap: 7px; padding: 12px 14px; }
+.memwin .titlebar i { width: 11px; height: 11px; border-radius: 50%; }
+.memwin .titlebar .t { margin: 0 auto; transform: translateX(-24px); font-size: 12px; font-weight: 600; color: var(--panel-ink-2); }
+.memwin .cols { display: grid; grid-template-columns: 152px 1fr; border-top: 1px solid var(--panel-hairline); }
+.memwin .side { background: var(--panel-card); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+.memwin .side .lbl { font-family: var(--mono); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--panel-ink-2); padding: 0 9px 6px; }
+.memwin .side div { display: flex; justify-content: space-between; align-items: center; padding: 6px 9px; border-radius: 6px; font-size: 11.5px; }
+.memwin .side div.on { background: color-mix(in srgb, var(--panel-ink) 9%, transparent); font-weight: 600; }
+.memwin .side em { font-style: normal; font-size: 9px; color: var(--panel-ink-2); font-variant-numeric: tabular-nums; background: var(--panel-track); border-radius: 999px; padding: 1px 6px; }
+.memwin .file { padding: 13px 16px 17px; }
+.memwin .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.memwin .tab { font-family: var(--mono); font-size: 10px; color: var(--panel-ink-2); padding: 3px 9px; border-radius: 6px; }
+.memwin .tab.on { background: var(--panel-card); color: var(--panel-ink); font-weight: 600; }
+.memwin .code { font-family: var(--mono); font-size: 10.5px; line-height: 2; color: var(--panel-ink-2); white-space: nowrap; overflow: hidden; }
+.memwin .code .h { color: var(--panel-ink); font-weight: 600; }
+.memwin .code .h + .h-gap { margin-top: 8px; }
+
+/* ---------- Download ---------- */
+.download { padding: 140px 0 150px; text-align: center; }
+.download img {
+  width: 108px; height: 108px;
+  border-radius: 24.5%; /* the macOS squircle is applied by the OS; approximate it here */
+  box-shadow: 0 10px 26px rgb(0 0 0 / 0.16), 0 1px 3px rgb(0 0 0 / 0.10);
+}
+.download h2 { margin-top: 10px; font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.02em; font-weight: 720; }
+.download .sub { margin-top: 10px; font-size: 16px; color: var(--ink-2); }
+.download .btn { margin-top: 26px; }
+
+/* ---------- Footer ---------- */
+footer { border-top: 1px solid var(--hairline); padding: 26px 0 40px; }
+footer .wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
+footer .wordmark { font-size: 14px; }
+footer .wordmark svg { width: 16px; height: 16px; }
+footer a { color: var(--ink-2); text-decoration: none; }
+footer a:hover { color: var(--ink); }
+footer .push { margin-left: auto; }
+
+/* ---------- Responsive ---------- */
+@media (max-width: 920px) {
+  .hero .wrap { grid-template-columns: 1fr; gap: 64px; }
+  .hero-copy { text-align: center; }
+  .hero .sub { margin-left: auto; margin-right: auto; }
+  .cta-row { justify-content: center; }
+  .features .grid { grid-template-columns: repeat(2, 1fr); }
+  .split { grid-template-columns: 1fr; gap: 44px; }
+}
+@media (min-width: 921px) {
+  .split.flip > :first-child { order: 2; }
+  .split.flip > :last-child { order: 1; }
+}
+@media (max-width: 600px) {
+  .hero h1 { font-size: clamp(40px, 11vw, 52px); }
+  .features .grid { grid-template-columns: 1fr; }
+  .perf td + td { padding-left: 12px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <a class="wordmark" href="#">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><g transform="rotate(38 12 12)"><path d="M12 1.5c.86 0 1.55.7 1.55 1.55v5.02l7.35 4.46v1.92l-7.35-2.14v5.08l2.48 1.88v1.54L12 19.66l-4.03 1.15v-1.54l2.48-1.88v-5.08L3.1 14.45v-1.92l7.35-4.46V3.05c0-.86.69-1.55 1.55-1.55Z"/></g></svg>
+      Runway
+    </a>
+    <a class="gh-link" href="https://github.com/mstallone/runway">GitHub</a>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-copy">
+      <h1>Track all your<br><em>AI usage.</em></h1>
+      <p class="sub">Session, weekly, and spend meters for Claude, Codex, Cursor, Grok, and eight more, live in the macOS menu bar. Runway reads the credentials already on your Mac, so there is nothing to log into.</p>
+      <div class="cta-row">
+        <a class="btn" href="https://github.com/mstallone/runway/releases/latest">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.94l2.47-2.47a.75.75 0 1 1 1.06 1.06l-3.75 3.75a.75.75 0 0 1-1.06 0L3.72 7.28a.75.75 0 0 1 1.06-1.06l2.47 2.47V1.75A.75.75 0 0 1 8 1ZM2 11.25a.75.75 0 0 1 1.5 0v1.5c0 .41.34.75.75.75h7.5c.41 0 .75-.34.75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A2.25 2.25 0 0 1 11.75 15h-7.5A2.25 2.25 0 0 1 2 12.75Z"/></svg>
+          Download for macOS
+        </a>
+        <a class="link-quiet" href="https://github.com/mstallone/runway">View on GitHub</a>
+      </div>
+    </div>
+
+    <!-- CSS recreation of the real app: menu-bar pins + dashboard popover -->
+    <div class="stage" aria-hidden="true">
+      <div class="panel">
+        <div class="inner">
+          <div class="p-header">
+            Total Spend
+            <svg class="chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+          </div>
+          <div class="card">
+            <div class="picker">
+              <span>Today</span><span>Yesterday</span><span class="on">30 Days</span>
+            </div>
+            <div class="spend">
+              <div class="donut">
+                <svg viewBox="0 0 104 104">
+                  <circle class="c-claude" cx="52" cy="52" r="42" stroke-dasharray="116.28 263.89" stroke-dashoffset="-1.5"/>
+                  <circle class="c-codex"  cx="52" cy="52" r="42" stroke-dasharray="72.74 263.89"  stroke-dashoffset="-120.78"/>
+                  <circle class="c-cursor" cx="52" cy="52" r="42" stroke-dasharray="44.50 263.89"  stroke-dashoffset="-196.52"/>
+                  <circle class="c-grok"   cx="52" cy="52" r="42" stroke-dasharray="18.38 263.89"  stroke-dashoffset="-244.02"/>
+                </svg>
+                <div class="center"><b>$412.06</b><i>30 days</i></div>
+              </div>
+              <div class="legend num">
+                <div><i style="background:#DE7356"></i><b>Claude</b><em>$186.20</em></div>
+                <div><i style="background:#10A37F"></i><b>Codex</b><em>$118.44</em></div>
+                <div><i style="background:var(--donut-cursor)"></i><b>Cursor</b><em>$74.10</em></div>
+                <div><i style="background:var(--donut-grok)"></i><b>Grok</b><em>$33.32</em></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-header">
+            <svg class="mark" viewBox="0 0 100 100" fill="currentColor"><path d="M25.7146 63.2153L41.4393 54.3917L41.7025 53.6226L41.4393 53.1976H40.6705L38.0394 53.0359L29.054 52.7929L21.2624 52.4691L13.7134 52.0644L11.8111 51.6594L10.0303 49.3118L10.2123 48.138L11.8111 47.0657L14.0981 47.2681L19.1574 47.6119L26.7467 48.138L32.2516 48.4618L40.4073 49.3118H41.7025L41.8846 48.7857L41.4393 48.4618L41.0955 48.138L33.243 42.8155L24.7432 37.1894L20.2909 33.9513L17.8824 32.3119L16.6684 30.774L16.1422 27.4147L18.328 25.0062L21.2624 25.2088L22.0112 25.4112L24.9861 27.6979L31.3407 32.616L39.6381 38.7273L40.8525 39.7391L41.3381 39.395L41.399 39.1523L40.8525 38.2415L36.3394 30.0858L31.5227 21.7883L29.3775 18.3478L28.811 16.2837C28.6087 15.4334 28.4669 14.7252 28.4669 13.8549L30.9563 10.4753L32.3321 10.0303L35.6515 10.4756L37.0479 11.6897L39.112 16.4052L42.4513 23.8327L47.6321 33.9313L49.15 36.9265L49.9594 39.6991L50.2632 40.5491H50.7894V40.0632L51.2141 34.3766L52.0035 27.3944L52.7726 18.4087L53.0358 15.8793L54.2905 12.8435L56.7795 11.2041L58.7224 12.135L60.3212 14.422L60.0986 15.899L59.1474 22.0718L57.2857 31.7458L56.0713 38.2218H56.7795L57.5892 37.4121L60.8677 33.061L66.3723 26.18L68.801 23.448L71.6342 20.4325L73.4556 18.9957H76.8962L79.4255 22.7601L78.2926 26.6456L74.7509 31.1384L71.8163 34.943L67.607 40.6097L64.9758 45.1431L65.2188 45.5072L65.8464 45.4466L75.358 43.4228L80.4984 42.4917L86.6304 41.4393L89.4033 42.7346L89.7065 44.0502L88.6135 46.7419L82.0566 48.3607L74.3662 49.8989L62.9118 52.6109L62.77 52.7121L62.9321 52.9144L68.0925 53.4L70.2987 53.5214H75.7021L85.7601 54.2702L88.3912 56.0108L89.9697 58.1358L89.7065 59.7545L85.6589 61.8189L80.1949 60.5236L67.4452 57.4881L63.0735 56.3952H62.4665V56.7596L66.1093 60.3213L72.7877 66.3523L81.1461 74.1236L81.5707 76.0462L80.4984 77.5638L79.3649 77.4021L72.0186 71.8772L69.1854 69.3879L62.77 63.9844H62.3453V64.5509L63.8223 66.7164L71.6342 78.4544L72.0389 82.0567L71.4725 83.2308L69.4487 83.939L67.2222 83.534L62.6485 77.1189L57.9333 69.8937L54.1284 63.4177L53.6631 63.6809L51.4167 87.8651L50.3644 89.0995L47.9356 90.0303L45.9121 88.4924L44.8392 86.0031L45.9118 81.0852L47.2071 74.6701L48.2594 69.5699L49.2106 63.2356L49.7773 61.131L49.7367 60.9892L49.2715 61.0498L44.4954 67.607L37.23 77.4224L31.4825 83.5746L30.1063 84.1211L27.7181 82.8864L27.9408 80.6805L29.2763 78.7177L37.2297 68.5988L42.026 62.3248L45.1227 58.7025L45.1024 58.176H44.9204L23.7917 71.8975L20.0274 72.3831L18.4083 70.8655L18.6106 68.3761L19.3798 67.5664L25.7343 63.195L25.7146 63.2153Z"/></svg>
+            Claude
+            <span class="badge">Max 20&times;</span>
+          </div>
+          <div class="card">
+            <div class="row">
+              <div class="top"><b>Session</b><span class="num">~41% left at reset</span></div>
+              <div class="meter"><i class="ok" style="--w:62%"></i><span class="tick" style="--t:59%"></span></div>
+              <div class="bottom num"><b>38% left</b><span>Resets in 2h 14m</span></div>
+            </div>
+            <div class="row">
+              <div class="top"><b>Weekly</b><span class="num">~4% spare</span></div>
+              <div class="meter"><i class="warn" style="--w:88%; animation-delay:0.08s"></i><span class="tick" style="--t:95%"></span></div>
+              <div class="bottom num"><b>12% left</b><span>Resets in 1d 6h</span></div>
+            </div>
+            <div class="caret">
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+            </div>
+          </div>
+
+          <div class="p-header">
+            <svg class="mark" viewBox="0 0 100 100" fill="currentColor"><path d="M83.7733 42.8087C84.6678 40.1149 84.9771 37.2613 84.6807 34.4385C84.3843 31.6156 83.489 28.8885 82.0544 26.4394C77.6908 18.8436 68.9203 14.9365 60.3548 16.7725C57.9831 14.1344 54.9591 12.1668 51.5864 11.0673C48.2137 9.96772 44.611 9.77498 41.1402 10.5084C37.6694 11.2418 34.4527 12.8755 31.8132 15.2455C29.1736 17.6155 27.204 20.6383 26.1024 24.0103C23.3212 24.5806 20.6938 25.738 18.3958 27.405C16.0977 29.0721 14.1819 31.2104 12.7765 33.6772C8.36538 41.2609 9.3669 50.8267 15.2527 57.3327C14.3549 60.0251 14.0424 62.8782 14.3361 65.7012C14.6298 68.5241 15.523 71.2518 16.9558 73.7017C21.325 81.3002 30.1011 85.207 38.6712 83.3686C40.5554 85.4904 42.8707 87.1858 45.4623 88.3416C48.0539 89.4975 50.8622 90.0871 53.6999 90.0713C62.4793 90.079 70.2575 84.4114 72.9393 76.0515C75.7201 75.4802 78.347 74.3225 80.6449 72.6555C82.9427 70.9886 84.8587 68.8507 86.2649 66.3846C90.6227 58.8145 89.6172 49.3005 83.7733 42.8087ZM53.6999 84.8356C50.1955 84.8411 46.801 83.6129 44.1116 81.3661L44.5848 81.098L60.5123 71.9043C60.9087 71.6718 61.2379 71.3402 61.4674 70.942C61.6969 70.5439 61.8189 70.0929 61.8215 69.6333V47.1769L68.5553 51.072C68.6225 51.1063 68.6694 51.1707 68.6814 51.2456V69.854C68.6641 78.1208 61.9667 84.8183 53.6999 84.8356ZM21.4977 71.0843C19.7402 68.0497 19.1092 64.4925 19.7156 61.0386L20.1885 61.3225L36.1321 70.5165C36.5266 70.748 36.9757 70.87 37.4331 70.87C37.8905 70.87 38.3396 70.748 38.7341 70.5165L58.21 59.2883V67.0628C58.2081 67.1031 58.1973 67.1424 58.1782 67.1779C58.1591 67.2134 58.1322 67.2441 58.0996 67.2678L41.9671 76.5722C34.798 80.7022 25.6388 78.2463 21.4977 71.0843ZM17.3026 36.3898C19.0723 33.3357 21.8655 31.0062 25.1878 29.8138V48.7376C25.1818 49.1949 25.2986 49.6453 25.5261 50.042C25.7535 50.4387 26.0833 50.7671 26.4809 50.9928L45.8622 62.1739L39.1283 66.069C39.0919 66.0883 39.0513 66.0984 39.0101 66.0984C38.9689 66.0984 38.9283 66.0883 38.8919 66.069L22.7908 56.7809C15.6359 52.6337 13.1822 43.4816 17.3026 36.3112V36.3898ZM72.624 49.2426L53.1792 37.9512L59.8976 34.0718C59.9341 34.0524 59.9747 34.0423 60.016 34.0423C60.0573 34.0423 60.0979 34.0524 60.1344 34.0718L76.2355 43.3761C78.6973 44.7966 80.7043 46.8882 82.0221 49.4065C83.3398 51.9249 83.914 54.7661 83.6775 57.5985C83.4411 60.431 82.4038 63.1377 80.6867 65.4027C78.9696 67.6677 76.6436 69.3975 73.9803 70.3901V51.466C73.9663 51.0096 73.834 50.5647 73.5962 50.1749C73.3584 49.7851 73.0234 49.4638 72.624 49.2426ZM79.3261 39.1657L78.8529 38.8815L62.9411 29.6089C62.5442 29.376 62.0924 29.2532 61.6322 29.2532C61.172 29.2532 60.7202 29.376 60.3233 29.6089L40.8629 40.8374V33.0628C40.8587 33.0233 40.8654 32.9834 40.882 32.9473C40.8987 32.9113 40.9248 32.8803 40.9575 32.8579L57.0586 23.5692C59.5263 22.1476 62.3478 21.458 65.193 21.5811C68.0382 21.7042 70.7896 22.6348 73.1253 24.2642C75.461 25.8936 77.2845 28.1543 78.3825 30.782C79.4806 33.4097 79.8077 36.2957 79.3257 39.1025V39.1657H79.3261ZM37.1888 52.9484L30.455 49.069C30.4213 49.0487 30.3925 49.0212 30.3707 48.9884C30.3488 48.9557 30.3345 48.9186 30.3286 48.8797V30.3188C30.3323 27.4714 31.1466 24.6839 32.6761 22.2822C34.2057 19.8805 36.3874 17.9639 38.9661 16.7564C41.5448 15.549 44.4139 15.1005 47.2381 15.4636C50.0622 15.8267 52.7247 16.9862 54.9141 18.8067L54.4409 19.0748L38.5134 28.2686C38.117 28.5011 37.7879 28.8327 37.5584 29.2308C37.329 29.629 37.207 30.0799 37.2045 30.5395L37.1888 52.9487V52.9484ZM40.8472 45.0632L49.5209 40.0643L58.21 45.0635V55.0615L49.5523 60.0608L40.8632 55.0615L40.8472 45.0632Z"/></svg>
+            Codex
+            <span class="badge">Pro</span>
+          </div>
+          <div class="card">
+            <div class="row">
+              <div class="top">
+                <b>Weekly</b>
+                <span class="flame num">
+                  <svg viewBox="0 0 12 14" fill="currentColor"><path d="M6.9.3c.2 2-0.6 3.3-1.6 4.4C4.2 5.9 3 7.2 3 9.2 3 11.8 4.9 14 6 14c-.5-1-.7-2.4.2-3.5.3 1 .8 1.6 1.5 2 .4-.7.5-1.6.3-2.5 1.2 1 1.9 2.4 1.3 4 2-1.1 2.7-3 2.7-4.8C12 5.4 9.4 3.6 9 1.6 8.4 2 8.1 2.8 8.2 3.6 7.5 2.7 6.9 1.6 6.9.3Z"/></svg>
+                  Limit in 3h 45m
+                </span>
+              </div>
+              <div class="meter"><i class="crit" style="--w:97%; animation-delay:0.16s"></i></div>
+              <div class="bottom num"><b>3% left</b><span>Resets in 2d 1h</span></div>
+            </div>
+            <div class="caret">
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l4 4 4-4"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-footer num">
+          Runway 0.8.6
+          <span class="refresh">
+            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7a5 5 0 1 1-1.7-3.75M12 1.5v2.8h-2.8"/></svg>
+            4m
+          </span>
+          <span class="gear">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8M3.3 3.3l1.3 1.3M11.4 11.4l1.3 1.3M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3"/></svg>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap split">
+    <div>
+      <p class="mono">Menu Bar</p>
+      <h2>Pin what you watch.</h2>
+      <p class="lead">Star up to two metrics per provider and they stay in the menu bar: the provider's mark next to a bare number, or tiny stacked bars. The dashboard is one click away for everything else.</p>
+    </div>
+    <div class="stage" aria-hidden="true">
+      <div class="menubar big num">
+        <span class="seg">
+          <svg viewBox="0 0 100 100" fill="currentColor"><path d="M25.7146 63.2153L41.4393 54.3917L41.7025 53.6226L41.4393 53.1976H40.6705L38.0394 53.0359L29.054 52.7929L21.2624 52.4691L13.7134 52.0644L11.8111 51.6594L10.0303 49.3118L10.2123 48.138L11.8111 47.0657L14.0981 47.2681L19.1574 47.6119L26.7467 48.138L32.2516 48.4618L40.4073 49.3118H41.7025L41.8846 48.7857L41.4393 48.4618L41.0955 48.138L33.243 42.8155L24.7432 37.1894L20.2909 33.9513L17.8824 32.3119L16.6684 30.774L16.1422 27.4147L18.328 25.0062L21.2624 25.2088L22.0112 25.4112L24.9861 27.6979L31.3407 32.616L39.6381 38.7273L40.8525 39.7391L41.3381 39.395L41.399 39.1523L40.8525 38.2415L36.3394 30.0858L31.5227 21.7883L29.3775 18.3478L28.811 16.2837C28.6087 15.4334 28.4669 14.7252 28.4669 13.8549L30.9563 10.4753L32.3321 10.0303L35.6515 10.4756L37.0479 11.6897L39.112 16.4052L42.4513 23.8327L47.6321 33.9313L49.15 36.9265L49.9594 39.6991L50.2632 40.5491H50.7894V40.0632L51.2141 34.3766L52.0035 27.3944L52.7726 18.4087L53.0358 15.8793L54.2905 12.8435L56.7795 11.2041L58.7224 12.135L60.3212 14.422L60.0986 15.899L59.1474 22.0718L57.2857 31.7458L56.0713 38.2218H56.7795L57.5892 37.4121L60.8677 33.061L66.3723 26.18L68.801 23.448L71.6342 20.4325L73.4556 18.9957H76.8962L79.4255 22.7601L78.2926 26.6456L74.7509 31.1384L71.8163 34.943L67.607 40.6097L64.9758 45.1431L65.2188 45.5072L65.8464 45.4466L75.358 43.4228L80.4984 42.4917L86.6304 41.4393L89.4033 42.7346L89.7065 44.0502L88.6135 46.7419L82.0566 48.3607L74.3662 49.8989L62.9118 52.6109L62.77 52.7121L62.9321 52.9144L68.0925 53.4L70.2987 53.5214H75.7021L85.7601 54.2702L88.3912 56.0108L89.9697 58.1358L89.7065 59.7545L85.6589 61.8189L80.1949 60.5236L67.4452 57.4881L63.0735 56.3952H62.4665V56.7596L66.1093 60.3213L72.7877 66.3523L81.1461 74.1236L81.5707 76.0462L80.4984 77.5638L79.3649 77.4021L72.0186 71.8772L69.1854 69.3879L62.77 63.9844H62.3453V64.5509L63.8223 66.7164L71.6342 78.4544L72.0389 82.0567L71.4725 83.2308L69.4487 83.939L67.2222 83.534L62.6485 77.1189L57.9333 69.8937L54.1284 63.4177L53.6631 63.6809L51.4167 87.8651L50.3644 89.0995L47.9356 90.0303L45.9121 88.4924L44.8392 86.0031L45.9118 81.0852L47.2071 74.6701L48.2594 69.5699L49.2106 63.2356L49.7773 61.131L49.7367 60.9892L49.2715 61.0498L44.4954 67.607L37.23 77.4224L31.4825 83.5746L30.1063 84.1211L27.7181 82.8864L27.9408 80.6805L29.2763 78.7177L37.2297 68.5988L42.026 62.3248L45.1227 58.7025L45.1024 58.176H44.9204L23.7917 71.8975L20.0274 72.3831L18.4083 70.8655L18.6106 68.3761L19.3798 67.5664L25.7343 63.195L25.7146 63.2153Z"/></svg>
+          38%
+        </span>
+        <span class="seg">
+          <svg viewBox="0 0 100 100" fill="currentColor"><path d="M83.7733 42.8087C84.6678 40.1149 84.9771 37.2613 84.6807 34.4385C84.3843 31.6156 83.489 28.8885 82.0544 26.4394C77.6908 18.8436 68.9203 14.9365 60.3548 16.7725C57.9831 14.1344 54.9591 12.1668 51.5864 11.0673C48.2137 9.96772 44.611 9.77498 41.1402 10.5084C37.6694 11.2418 34.4527 12.8755 31.8132 15.2455C29.1736 17.6155 27.204 20.6383 26.1024 24.0103C23.3212 24.5806 20.6938 25.738 18.3958 27.405C16.0977 29.0721 14.1819 31.2104 12.7765 33.6772C8.36538 41.2609 9.3669 50.8267 15.2527 57.3327C14.3549 60.0251 14.0424 62.8782 14.3361 65.7012C14.6298 68.5241 15.523 71.2518 16.9558 73.7017C21.325 81.3002 30.1011 85.207 38.6712 83.3686C40.5554 85.4904 42.8707 87.1858 45.4623 88.3416C48.0539 89.4975 50.8622 90.0871 53.6999 90.0713C62.4793 90.079 70.2575 84.4114 72.9393 76.0515C75.7201 75.4802 78.347 74.3225 80.6449 72.6555C82.9427 70.9886 84.8587 68.8507 86.2649 66.3846C90.6227 58.8145 89.6172 49.3005 83.7733 42.8087ZM53.6999 84.8356C50.1955 84.8411 46.801 83.6129 44.1116 81.3661L44.5848 81.098L60.5123 71.9043C60.9087 71.6718 61.2379 71.3402 61.4674 70.942C61.6969 70.5439 61.8189 70.0929 61.8215 69.6333V47.1769L68.5553 51.072C68.6225 51.1063 68.6694 51.1707 68.6814 51.2456V69.854C68.6641 78.1208 61.9667 84.8183 53.6999 84.8356ZM21.4977 71.0843C19.7402 68.0497 19.1092 64.4925 19.7156 61.0386L20.1885 61.3225L36.1321 70.5165C36.5266 70.748 36.9757 70.87 37.4331 70.87C37.8905 70.87 38.3396 70.748 38.7341 70.5165L58.21 59.2883V67.0628C58.2081 67.1031 58.1973 67.1424 58.1782 67.1779C58.1591 67.2134 58.1322 67.2441 58.0996 67.2678L41.9671 76.5722C34.798 80.7022 25.6388 78.2463 21.4977 71.0843ZM17.3026 36.3898C19.0723 33.3357 21.8655 31.0062 25.1878 29.8138V48.7376C25.1818 49.1949 25.2986 49.6453 25.5261 50.042C25.7535 50.4387 26.0833 50.7671 26.4809 50.9928L45.8622 62.1739L39.1283 66.069C39.0919 66.0883 39.0513 66.0984 39.0101 66.0984C38.9689 66.0984 38.9283 66.0883 38.8919 66.069L22.7908 56.7809C15.6359 52.6337 13.1822 43.4816 17.3026 36.3112V36.3898ZM72.624 49.2426L53.1792 37.9512L59.8976 34.0718C59.9341 34.0524 59.9747 34.0423 60.016 34.0423C60.0573 34.0423 60.0979 34.0524 60.1344 34.0718L76.2355 43.3761C78.6973 44.7966 80.7043 46.8882 82.0221 49.4065C83.3398 51.9249 83.914 54.7661 83.6775 57.5985C83.4411 60.431 82.4038 63.1377 80.6867 65.4027C78.9696 67.6677 76.6436 69.3975 73.9803 70.3901V51.466C73.9663 51.0096 73.834 50.5647 73.5962 50.1749C73.3584 49.7851 73.0234 49.4638 72.624 49.2426ZM79.3261 39.1657L78.8529 38.8815L62.9411 29.6089C62.5442 29.376 62.0924 29.2532 61.6322 29.2532C61.172 29.2532 60.7202 29.376 60.3233 29.6089L40.8629 40.8374V33.0628C40.8587 33.0233 40.8654 32.9834 40.882 32.9473C40.8987 32.9113 40.9248 32.8803 40.9575 32.8579L57.0586 23.5692C59.5263 22.1476 62.3478 21.458 65.193 21.5811C68.0382 21.7042 70.7896 22.6348 73.1253 24.2642C75.461 25.8936 77.2845 28.1543 78.3825 30.782C79.4806 33.4097 79.8077 36.2957 79.3257 39.1025V39.1657H79.3261ZM37.1888 52.9484L30.455 49.069C30.4213 49.0487 30.3925 49.0212 30.3707 48.9884C30.3488 48.9557 30.3345 48.9186 30.3286 48.8797V30.3188C30.3323 27.4714 31.1466 24.6839 32.6761 22.2822C34.2057 19.8805 36.3874 17.9639 38.9661 16.7564C41.5448 15.549 44.4139 15.1005 47.2381 15.4636C50.0622 15.8267 52.7247 16.9862 54.9141 18.8067L54.4409 19.0748L38.5134 28.2686C38.117 28.5011 37.7879 28.8327 37.5584 29.2308C37.329 29.629 37.207 30.0799 37.2045 30.5395L37.1888 52.9487V52.9484ZM40.8472 45.0632L49.5209 40.0643L58.21 45.0635V55.0615L49.5523 60.0608L40.8632 55.0615L40.8472 45.0632Z"/></svg>
+          82%
+        </span>
+        <span class="seg">
+          <span class="mbars"><i><b style="--w:62%"></b></i><i><b style="--w:35%"></b></i></span>
+        </span>
+        <span class="div"></span>
+        <span class="clock">9:41</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap split flip">
+    <div>
+      <p class="mono">Agent Memory</p>
+      <h2>Manage and share your agents' memory.</h2>
+      <p class="lead">Claude Code, Codex, Gemini, and Grok keep memory and instruction files scattered across your disk. Runway's Memory window finds every one of them, global and per project, and lets you read, edit, create, and delete the files directly. Everything stays on your Mac.</p>
+    </div>
+    <div class="memwin" aria-hidden="true">
+      <div class="titlebar">
+        <i style="background:#FF5F57"></i><i style="background:#FEBC2E"></i><i style="background:#28C840"></i>
+        <span class="t">Memory</span>
+      </div>
+      <div class="cols">
+        <div class="side">
+          <span class="lbl">Agents</span>
+          <div class="on">Claude Code <em>14</em></div>
+          <div>Codex <em>9</em></div>
+          <div>Gemini <em>5</em></div>
+          <div>Grok <em>2</em></div>
+        </div>
+        <div class="file">
+          <div class="tabs">
+            <span class="tab on">CLAUDE.md</span>
+            <span class="tab">MEMORY.md</span>
+            <span class="tab">memories/</span>
+          </div>
+          <div class="code">
+            <div class="h"># Instructions</div>
+            <div>- Do not amend commits. Never force push.</div>
+            <div>- Keep files under 500 lines.</div>
+            <div>- Add a regression test for every bug fix.</div>
+            <div class="h" style="margin-top:8px"># Style</div>
+            <div>- Short sentences. Active voice.</div>
+            <div>- Match the existing design language.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap split">
+    <div>
+      <p class="mono as-is">iPhone</p>
+      <h2>Spend on your lock screen.</h2>
+      <p class="lead">The iOS companion syncs usage from your Macs through your private iCloud and shows it in lock screen and home screen widgets. Pick up your phone and today's spend is already there.</p>
+      <p class="lead"><a class="link-quiet" href="https://testflight.apple.com/join/uA4aHUEx">Get the beta on TestFlight</a></p>
+    </div>
+    <div class="widgets" aria-hidden="true">
+      <div class="widget">
+        <div class="w-head">
+          <svg viewBox="0 0 24 24" fill="currentColor"><g transform="rotate(38 12 12)"><path d="M12 1.5c.86 0 1.55.7 1.55 1.55v5.02l7.35 4.46v1.92l-7.35-2.14v5.08l2.48 1.88v1.54L12 19.66l-4.03 1.15v-1.54l2.48-1.88v-5.08L3.1 14.45v-1.92l7.35-4.46V3.05c0-.86.69-1.55 1.55-1.55Z"/></g></svg>
+          Runway
+        </div>
+        <div class="w-cap" style="margin-top:9px">Today</div>
+        <div class="w-big">$12.84</div>
+        <div class="w-cap">58.3K tokens</div>
+        <div class="w-row"><span class="w-cap">30 Days</span><b>$412.06</b></div>
+      </div>
+      <div class="widget med">
+        <div class="w-head">
+          <svg viewBox="0 0 24 24" fill="currentColor"><g transform="rotate(38 12 12)"><path d="M12 1.5c.86 0 1.55.7 1.55 1.55v5.02l7.35 4.46v1.92l-7.35-2.14v5.08l2.48 1.88v1.54L12 19.66l-4.03 1.15v-1.54l2.48-1.88v-5.08L3.1 14.45v-1.92l7.35-4.46V3.05c0-.86.69-1.55 1.55-1.55Z"/></g></svg>
+          Runway
+        </div>
+        <div class="w-cols">
+          <div class="w-stack">
+            <span><span class="w-cap">Today</span><b>$12.84</b></span>
+            <span><span class="w-cap">Yesterday</span><b>$24.10</b></span>
+            <span><span class="w-cap">30 Days</span><b>$412.06</b></span>
+          </div>
+          <div class="w-chart">
+            <div class="w-bars">
+              <i style="--h:38%"></i><i style="--h:62%"></i><i style="--h:30%"></i><i style="--h:58%"></i><i style="--h:46%"></i><i style="--h:76%"></i><i style="--h:36%"></i><i style="--h:54%"></i><i style="--h:70%"></i><i style="--h:33%"></i><i style="--h:50%"></i><i style="--h:26%"></i>
+            </div>
+            <div class="w-updated">Updated 2m ago</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <p class="mono">Performance</p>
+    <h2>Rebuilt for speed.</h2>
+    <p class="lead">Runway is a fork of OpenUsage rebuilt for speed. We measured both on the same machine, with the same providers and the same 27&nbsp;GB session-log corpus.</p>
+    <table class="perf">
+      <thead>
+        <tr><th></th><th>OpenUsage</th><th>Runway</th><th></th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Launch to menu bar icon</td><td class="old">5.4 s</td><td class="new">0.29 s</td><td class="ratio">18×</td></tr>
+        <tr><td>First open after launch</td><td class="old">2.59 s</td><td class="new">44 ms</td><td class="ratio">59×</td></tr>
+        <tr><td>Warm popup open</td><td class="old">61 ms</td><td class="new">23 ms</td><td class="ratio">2.7×</td></tr>
+        <tr><td>One refresh pass</td><td class="old">8.6 s</td><td class="new">2.3 s</td><td class="ratio">3.7×</td></tr>
+        <tr><td>Memory, steady state</td><td class="old">1.09 GB</td><td class="new">238 MB</td><td class="ratio">4.6×</td></tr>
+      </tbody>
+    </table>
+    <p class="lead"><a href="https://github.com/mstallone/runway/blob/main/docs/performance.md">Methodology and full numbers</a>.</p>
+  </div>
+</section>
+
+<section class="features">
+  <div class="wrap">
+    <p class="mono">More features</p>
+    <div class="grid">
+      <div class="feature">
+        <h3>Screen Share Privacy</h3>
+        <p>While your screen is shared or recorded, the menu bar shows only the Runway mark. Your numbers come back when it ends.</p>
+      </div>
+      <div class="feature">
+        <h3>Pace Ticks</h3>
+        <p>A tick on every meter marks where usage should be right now. Run ahead of it and the bar turns yellow, then red, before you hit the limit.</p>
+      </div>
+      <div class="feature">
+        <h3>Local Spend</h3>
+        <p>Runway prices the session logs already on your disk, per model, and totals them for today, yesterday, and the last 30 days.</p>
+      </div>
+      <div class="feature">
+        <h3>No Setup</h3>
+        <p>It reads the same keychain items and auth files your CLIs already use. Install it, and every provider you are signed into shows up.</p>
+      </div>
+      <div class="feature">
+        <h3>Nothing Leaves Your Mac</h3>
+        <p>No analytics, no accounts, no middleman server. Requests go from your Mac to each provider and nowhere else. The code is MIT-licensed.</p>
+      </div>
+      <div class="feature">
+        <h3>Native Swift</h3>
+        <p>Launches in 0.3 seconds, opens the panel in a frame, and sits around 240 MB of memory. It refreshes in the background every five minutes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="download">
+  <div class="wrap">
+    <img src="app-icon.png" alt="Runway app icon" width="108" height="108">
+    <h2>Get Runway</h2>
+    <p class="sub">Download the DMG and drag it to Applications.</p>
+    <a class="btn" href="https://github.com/mstallone/runway/releases/latest">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v6.94l2.47-2.47a.75.75 0 1 1 1.06 1.06l-3.75 3.75a.75.75 0 0 1-1.06 0L3.72 7.28a.75.75 0 0 1 1.06-1.06l2.47 2.47V1.75A.75.75 0 0 1 8 1ZM2 11.25a.75.75 0 0 1 1.5 0v1.5c0 .41.34.75.75.75h7.5c.41 0 .75-.34.75-.75v-1.5a.75.75 0 0 1 1.5 0v1.5A2.25 2.25 0 0 1 11.75 15h-7.5A2.25 2.25 0 0 1 2 12.75Z"/></svg>
+      Download for macOS
+    </a>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="wordmark">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><g transform="rotate(38 12 12)"><path d="M12 1.5c.86 0 1.55.7 1.55 1.55v5.02l7.35 4.46v1.92l-7.35-2.14v5.08l2.48 1.88v1.54L12 19.66l-4.03 1.15v-1.54l2.48-1.88v-5.08L3.1 14.45v-1.92l7.35-4.46V3.05c0-.86.69-1.55 1.55-1.55Z"/></g></svg>
+      Runway
+    </span>
+    <a class="push" href="https://github.com/mstallone/runway">GitHub</a>
+    <a href="https://github.com/mstallone/runway/blob/main/LICENSE">MIT License</a>
+  </div>
+</footer>
+
+</body>
+</html>
