@@ -21,6 +21,7 @@ on:
     branches: [main]
     paths:
       - website/**
+      - script/stamp_website_version.sh
       - .github/workflows/landing-page.yml
   workflow_dispatch:
 
