@@ -415,11 +415,18 @@ enum KeychainUISuppression {
         // Interactive operations are EXCLUSIVE of one another, not just of suppressed ones. A
         // Refresh All starts every provider at once, so without this a single click could put
         // several macOS approval dialogs on screen together — the prompt storm this gate exists to
-        // prevent. Unbounded on purpose: the holder is showing the user a dialog, and giving up
-        // early would produce exactly those concurrent prompts. The suppressed side is the one that
-        // must not block indefinitely, and it already has its own deadline.
-        while interactiveInFlight {
-            condition.wait()
+        // prevent. The wait is bounded because an approval dialog can be abandoned: waiting forever
+        // would hang every other provider's manual refresh behind an unrelated dialog. Past the
+        // deadline the caller is told UI is unavailable, so it reports "keychain busy" instead of
+        // either hanging or opening a second dialog next to the first.
+        let peerDeadline = Date().addingTimeInterval(interactiveGateWait)
+        while interactiveInFlight, Date() < peerDeadline {
+            condition.wait(until: peerDeadline)
+        }
+        guard !interactiveInFlight else {
+            condition.unlock()
+            AppLog.warn(.keychain, "interactive keychain operation skipped: another approval dialog is still open")
+            return try body(false)
         }
         interactiveInFlight = true
         interactiveCount += 1
