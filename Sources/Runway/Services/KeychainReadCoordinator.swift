@@ -162,6 +162,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         if acquired {
             inFlight.insert(key)
         }
+        let epoch = epochs[key, default: 0]
         condition.unlock()
 
         defer {
@@ -183,12 +184,18 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         do {
             let value = try read()
             condition.lock()
-            store(key: key, fingerprint: fingerprint, value: value.map(NonInteractiveKeychainRead.value) ?? .missing, tripped: false)
+            storeIfCurrent(
+                key: key,
+                epoch: epoch,
+                fingerprint: fingerprint,
+                value: value.map(NonInteractiveKeychainRead.value) ?? .missing,
+                tripped: false
+            )
             condition.unlock()
             return value
         } catch {
             condition.lock()
-            store(key: key, fingerprint: fingerprint, value: nil, tripped: true)
+            storeIfCurrent(key: key, epoch: epoch, fingerprint: fingerprint, value: nil, tripped: true)
             condition.unlock()
             throw error
         }
@@ -254,10 +261,17 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     }
 
     /// Must be called under `condition`'s lock. Drops the write when a newer one already landed —
-    /// a stuck read finishing after a successful manual recovery must not re-trip the breaker.
-    private func storeIfCurrent(key: Key, epoch: Int, value: NonInteractiveKeychainRead?, tripped: Bool) {
+    /// a stuck read finishing after a successful recovery must not re-trip the breaker. Every path
+    /// (background, interactive, external) goes through this for that reason.
+    private func storeIfCurrent(
+        key: Key,
+        epoch: Int,
+        fingerprint: String? = nil,
+        value: NonInteractiveKeychainRead?,
+        tripped: Bool
+    ) {
         guard epochs[key, default: 0] == epoch else { return }
-        store(key: key, fingerprint: nil, value: value, tripped: tripped)
+        store(key: key, fingerprint: fingerprint, value: value, tripped: tripped)
     }
 
     /// Bounded, single-flighted metadata query (existence or fingerprint probes). Such probes are
