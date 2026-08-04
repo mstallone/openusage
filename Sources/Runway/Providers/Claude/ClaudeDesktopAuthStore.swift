@@ -56,7 +56,7 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             // Replays the original category: approving Safe Storage cannot fix an
             // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
             unavailable: { denied in denied ? ClaudeDesktopCredentialError.permissionRequired : ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable)) }
-        ) { () -> OSStatus in
+        ) { ticket -> OSStatus in
             var gateEngaged = true
             let status = allowInteraction
                 ? KeychainUISuppression.withUIAllowed { ui -> OSStatus in
@@ -76,7 +76,7 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
                 // The read never reached a prompt, so this says nothing about the item's ACL:
                 // reporting a denial would tell the user to approve an item nobody asked about, and
                 // tripping the breaker would lock out an item that was never really attempted.
-                KeychainReadCoordinator.shared.recordContention(service: Self.service, account: Self.account)
+                KeychainReadCoordinator.shared.recordContention(ticket)
                 throw ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable))
             }
             // EVERY failure throws from inside the flight so the breaker records it — a returning
@@ -89,12 +89,12 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
                 // Remember WHY, so the breaker's later replays keep giving the same advice instead
                 // of degrading a real denial into a generic "couldn't be read".
                 KeychainReadCoordinator.shared.recordFailureCategory(
-                    service: Self.service, account: Self.account, permissionDenied: true
+                    ticket, permissionDenied: true
                 )
                 throw ClaudeDesktopCredentialError.permissionRequired
             default:
                 KeychainReadCoordinator.shared.recordFailureCategory(
-                    service: Self.service, account: Self.account, permissionDenied: false
+                    ticket, permissionDenied: false
                 )
                 throw ClaudeDesktopCredentialError.keychainFailure(Int(status))
             }
