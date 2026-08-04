@@ -1039,6 +1039,13 @@ private final class DenyingInteractiveKeychain: KeychainReading, @unchecked Send
         throw KeychainError.readFailed("denied")
     }
 
+    /// The user answered the dialog and refused, which the production accessor records from the
+    /// resulting `errSecAuthFailed`/`errSecUserCanceled`. Without this the fake would model a read
+    /// that never reached a prompt at all — a different outcome with different advice.
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        true
+    }
+
     func genericPasswordExists(service: String) -> Bool? {
         true
     }

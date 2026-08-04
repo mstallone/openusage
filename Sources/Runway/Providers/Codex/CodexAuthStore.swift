@@ -222,10 +222,13 @@ struct CodexAuthStore: Sendable {
                 // same failure can also be a locked keychain, which approval cannot fix, so report
                 // whichever the read's own status recorded.
                 if allowKeychainInteraction {
+                    // Only a recorded denial asks for approval. No verdict means the read never
+                    // reached one — UI-gate contention leaves none by design — so an unexamined
+                    // item must not be reported as denied.
                     return keychain.lastReadWasPermissionDenied(
                         service: Self.keychainService,
                         account: account
-                    ) == false ? .unreadable : .permissionRequired
+                    ) == true ? .permissionRequired : .unreadable
                 }
                 // Approval only helps when the ACL was the problem. The read's own status is
                 // the evidence; a later probe cannot answer this, because the failed read tripped
