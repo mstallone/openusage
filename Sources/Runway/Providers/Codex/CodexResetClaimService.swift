@@ -30,6 +30,7 @@ final class CodexResetClaimService {
     private let usageClient: CodexUsageClient
     private let credentialCandidates: (_ allowKeychainInteraction: Bool) async -> [Credentials]
     private let refreshAfterClaim: () async -> Void
+    private let interactiveCredentialTimeout: TimeInterval
     /// The credit id each idempotency key was matched to, kept for the key's retries: if a consume
     /// succeeded but its response was lost, the credit is gone from a re-fetched list — a fresh match
     /// would misread the retry as "no longer available" instead of replaying the POST and letting the
@@ -41,11 +42,14 @@ final class CodexResetClaimService {
     init(
         usageClient: CodexUsageClient,
         credentialCandidates: @escaping (_ allowKeychainInteraction: Bool) async -> [Credentials],
-        refreshAfterClaim: @escaping () async -> Void = {}
+        refreshAfterClaim: @escaping () async -> Void = {},
+        interactiveCredentialTimeout: TimeInterval = WidgetDataStore.defaultProviderRefreshTimeout
     ) {
+        precondition(interactiveCredentialTimeout > 0)
         self.usageClient = usageClient
         self.credentialCandidates = credentialCandidates
         self.refreshAfterClaim = refreshAfterClaim
+        self.interactiveCredentialTimeout = interactiveCredentialTimeout
     }
 
     /// Production wiring: shares the Codex provider's auth store and usage client, so credential
@@ -121,7 +125,14 @@ final class CodexResetClaimService {
         // Every local credential was refused. A file token can be structurally fine and still be
         // dead, and the protected keyring item may hold the live one — so for this explicit user
         // action, ask for approval and try once more with whatever that adds.
-        let approved = await credentialCandidates(true)
+        guard let approved = await interactiveCredentialCandidates() else {
+            AppLog.warn(
+                LogTag.plugin("codex"),
+                "reset claim: timed out waiting for interactive Keychain credentials after "
+                    + "\(Int(interactiveCredentialTimeout * 1000))ms"
+            )
+            return .failed
+        }
         let seen = Set(candidates.map { "\($0.accessToken)|\($0.accountID ?? "")" })
         let fresh = approved.filter { !seen.contains("\($0.accessToken)|\($0.accountID ?? "")") }
         guard !fresh.isEmpty else { return attempt.outcome }
@@ -131,6 +142,36 @@ final class CodexResetClaimService {
             redeemRequestID: redeemRequestID,
             candidates: fresh
         ).outcome
+    }
+
+    /// A claim is not owned by `WidgetDataStore`'s provider watchdog. Give its interactive
+    /// credential read the same ceiling so a claim queued behind an abandoned approval dialog
+    /// cannot leave the reset row pinned forever. The credential task is deliberately not awaited
+    /// after losing the race: cancellation reaches `loadOffMainActor`, which removes a queued
+    /// Keychain read without touching Security.framework; an already-active system dialog remains
+    /// the one exclusive dialog and finishes harmlessly into the discarded task.
+    private func interactiveCredentialCandidates() async -> [Credentials]? {
+        await withCheckedContinuation { continuation in
+            final class RaceState {
+                var resumed = false
+                var watchdog: Task<Void, Never>?
+            }
+            let state = RaceState()
+            let credentialTask = Task {
+                let candidates = await credentialCandidates(true)
+                guard !state.resumed else { return }
+                state.resumed = true
+                state.watchdog?.cancel()
+                continuation.resume(returning: candidates)
+            }
+            state.watchdog = Task { [interactiveCredentialTimeout] in
+                try? await Task.sleep(for: .seconds(interactiveCredentialTimeout))
+                guard !state.resumed, !Task.isCancelled else { return }
+                state.resumed = true
+                credentialTask.cancel()
+                continuation.resume(returning: nil)
+            }
+        }
     }
 
     /// `allRejected` is true only when every credential was refused as unauthenticated — the sole

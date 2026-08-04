@@ -75,9 +75,10 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// keychain itself could not be read. Captured from the read's own `OSStatus`, because a second
     /// attributes probe cannot recover it — the breaker answers those locally once tripped.
     private var lastFailureDenied: [Key: Bool] = [:]
-    /// Reads that never reached securityd because another provider's approval dialog held the
-    /// process-wide UI gate. Keyed by READ, not by item: two reads of the same item overlap
-    /// routinely, and one read's contention must never excuse another read's genuine failure.
+    /// Reads that never reached securityd because the process-wide UI gate was unavailable (for
+    /// example, a stuck suppression scope or a refresh cancelled while queued). Keyed by READ, not
+    /// by item: two reads of the same item overlap routinely, and one read's contention must never
+    /// excuse another read's genuine failure.
     private var contendedSequences: Set<Int> = []
     /// Failure categories reported by a read that has not stored its outcome yet, keyed the same
     /// way and for the same reason — a category belongs to the read that observed the status.

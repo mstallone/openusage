@@ -16,6 +16,60 @@ private final class Locked<Value>: @unchecked Sendable {
     }
 }
 
+private final class ManualRefreshApprovalProbe: @unchecked Sendable {
+    struct State {
+        var active = 0
+        var maximumActive = 0
+        var readAttempts = 0
+        var promptedProviderIDs: Set<String> = []
+        var unavailableProviderIDs: Set<String> = []
+    }
+
+    let state = Locked(State())
+
+    func read(providerID: String) {
+        state.withLock { $0.readAttempts += 1 }
+        KeychainUISuppression.withUIAllowed { ui in
+            guard case .available = ui else {
+                _ = state.withLock { $0.unavailableProviderIDs.insert(providerID) }
+                return
+            }
+            let holdFor = state.withLock {
+                let isFirstPrompt = $0.promptedProviderIDs.isEmpty
+                $0.active += 1
+                $0.maximumActive = max($0.maximumActive, $0.active)
+                $0.promptedProviderIDs.insert(providerID)
+                return isFirstPrompt ? 2.2 : 0.05
+            }
+            Thread.sleep(forTimeInterval: holdFor)
+            state.withLock { $0.active -= 1 }
+        }
+    }
+}
+
+@MainActor
+private final class KeychainApprovalRuntime: ProviderRuntime {
+    let provider: Provider
+    let widgetDescriptors: [WidgetDescriptor] = []
+    private let probe: ManualRefreshApprovalProbe
+
+    init(provider: Provider, probe: ManualRefreshApprovalProbe) {
+        self.provider = provider
+        self.probe = probe
+    }
+
+    func refresh() async -> ProviderSnapshot {
+        if ProviderRefreshContext.isManual {
+            let providerID = provider.id
+            let probe = probe
+            await loadOffMainActor {
+                probe.read(providerID: providerID)
+            }
+        }
+        return ProviderSnapshot(providerID: provider.id, displayName: provider.displayName, lines: [])
+    }
+}
+
 final class KeychainAccessorTests: XCTestCase {
     func testMissingItemReadsNilAndAnUnreadableOneThrows() throws {
         // The plain throwing read must keep "no credential stored" (nil) apart from "couldn't be
@@ -56,34 +110,54 @@ final class KeychainAccessorTests: XCTestCase {
         )
     }
 
-    func testTwoInteractiveOperationsNeverOverlap() {
-        // A Refresh All starts every provider at once, so without exclusivity one click could put
-        // several macOS approval dialogs on screen together — the storm this gate exists to stop.
-        let overlapped = Locked(false)
-        let active = Locked(0)
-        let bothDone = expectation(description: "both interactive operations finished")
-        bothDone.expectedFulfillmentCount = 2
-
-        for _ in 0..<2 {
-            Thread {
-                KeychainUISuppression.withUIAllowed { _ in
-                    let concurrent = active.withLock { $0 += 1; return $0 }
-                    if concurrent > 1 { overlapped.withLock { $0 = true } }
-                    Thread.sleep(forTimeInterval: 0.15)
-                    active.withLock { $0 -= 1 }
-                }
-                bothDone.fulfill()
-            }.start()
+    @MainActor
+    func testManualRefreshAllQueuesThreeApprovalProvidersAndForcedAutomaticRefreshStaysPromptFree() async {
+        // A manual Refresh All starts every provider at once. Whichever provider reaches the gate
+        // first holds it beyond the old two-second `.peerBusy` deadline: the other two must stay
+        // queued, then both receive a real turn. Then run the CLI/automatic shape (`force`, but not
+        // `interactive`) and prove it makes no additional prompt-capable reads.
+        let providers = ["provider-a", "provider-b", "provider-c"].map {
+            Provider(id: $0, displayName: $0, icon: .providerMark("codex"))
         }
+        let probe = ManualRefreshApprovalProbe()
+        let runtimes = providers.map { KeychainApprovalRuntime(provider: $0, probe: probe) }
+        let suiteName = "RunwayTests.keychain-refresh-all.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: providers, descriptors: []),
+            providers: runtimes,
+            defaults: defaults
+        )
 
-        wait(for: [bothDone], timeout: 5)
-        XCTAssertFalse(overlapped.withLock { $0 }, "only one approval dialog may be open at a time")
+        await store.refreshAll(force: true, interactive: true)
+
+        let afterManual = probe.state.withLock { $0 }
+        XCTAssertEqual(
+            afterManual.promptedProviderIDs,
+            Set(providers.map(\.id)),
+            "every protected provider must receive its turn in the same manual refresh"
+        )
+        XCTAssertTrue(afterManual.unavailableProviderIDs.isEmpty, "no provider may time out as peer-busy")
+        XCTAssertEqual(afterManual.readAttempts, providers.count)
+        XCTAssertEqual(afterManual.maximumActive, 1, "only one approval dialog may be open at a time")
+
+        await store.refreshAll(force: true)
+
+        let afterForcedNonInteractive = probe.state.withLock { $0 }
+        XCTAssertEqual(afterForcedNonInteractive.promptedProviderIDs, afterManual.promptedProviderIDs)
+        XCTAssertEqual(
+            afterForcedNonInteractive.readAttempts,
+            afterManual.readAttempts,
+            "a forced automatic/CLI-style refresh must not attempt an interactive read"
+        )
+        XCTAssertEqual(afterForcedNonInteractive.maximumActive, 1)
     }
 
-    func testAnAbandonedDialogDoesNotBlockAnotherProviderForever() {
-        // Refresh All starts providers concurrently, so an abandoned approval dialog must not hang
-        // every later provider's manual refresh behind it. Past the deadline the caller is told UI
-        // is unavailable — it reports "busy" rather than hanging or opening a second dialog.
+    func testCancelledProviderLeavesAnAbandonedDialogQueueWithoutBlockingTheNextProvider() {
+        // The active Security call cannot be dismissed by cancellation, but a provider still queued
+        // behind an abandoned dialog can be cancelled by its refresh watchdog. It must leave the
+        // FIFO promptly, and a later provider must acquire the gate once the active dialog closes.
         let held = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
         let holderDone = expectation(description: "abandoned dialog released")
@@ -97,18 +171,53 @@ final class KeychainAccessorTests: XCTestCase {
         }
         holder.start()
         XCTAssertEqual(held.wait(timeout: .now() + 5), .success)
+        var holderReleased = false
+        var holderFinished = false
+        defer {
+            if !holderReleased { release.signal() }
+            if !holderFinished { wait(for: [holderDone], timeout: 5) }
+        }
 
-        let start = Date()
-        let ui = KeychainUISuppression.withUIAllowed { $0 }
-        let elapsed = Date().timeIntervalSince(start)
+        let cancelledResult = Locked<KeychainUISuppression.InteractiveUI?>(nil)
+        let cancelledDone = DispatchSemaphore(value: 0)
+        let queuedStarted = DispatchSemaphore(value: 0)
+        let queued = Task {
+            await loadOffMainActor {
+                queuedStarted.signal()
+                let ui = KeychainUISuppression.withUIAllowed { $0 }
+                cancelledResult.withLock { $0 = ui }
+                cancelledDone.signal()
+            }
+        }
+        XCTAssertEqual(queuedStarted.wait(timeout: .now() + 2), .success)
+        Thread.sleep(forTimeInterval: 0.2)
+        queued.cancel()
+        XCTAssertEqual(
+            cancelledDone.wait(timeout: .now() + 2),
+            .success,
+            "a cancelled queued provider must not remain trapped behind an abandoned dialog"
+        )
+        guard case .cancelled? = cancelledResult.withLock({ $0 }) else {
+            return XCTFail("the cancelled provider must be told not to touch Security.framework")
+        }
 
+        let nextEntered = DispatchSemaphore(value: 0)
+        let nextDone = expectation(description: "next provider completed")
+        Thread {
+            KeychainUISuppression.withUIAllowed { ui in
+                guard case .available = ui else { return }
+                nextEntered.signal()
+            }
+            nextDone.fulfill()
+        }.start()
+        XCTAssertEqual(nextEntered.wait(timeout: .now() + 0.2), .timedOut)
+
+        holderReleased = true
         release.signal()
         wait(for: [holderDone], timeout: 5)
-
-        // `.peerBusy` specifically, not just "not available": UI is still ENABLED here, so the body
-        // must skip its query entirely rather than open a second dialog beside the first.
-        XCTAssertEqual(ui, .peerBusy, "a caller that gave up must be told a peer holds the gate")
-        XCTAssertLessThan(elapsed, 5, "it must not wait on the open dialog indefinitely")
+        holderFinished = true
+        XCTAssertEqual(nextEntered.wait(timeout: .now() + 5), .success)
+        wait(for: [nextDone], timeout: 5)
     }
 
     func testSuppressedEntrantWaitsOutAnInteractiveOperation() {
