@@ -77,6 +77,7 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
     case usageAPIKey
     case invalidAuthPayload
     case keychainPermissionRequired
+    case credentialStoreUnreadable
 
     var errorDescription: String? {
         switch self {
@@ -96,6 +97,8 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
             return "Codex auth data is invalid."
         case .keychainPermissionRequired:
             return "Codex login found in Keychain. Refresh manually and choose Always Allow to connect it."
+        case .credentialStoreUnreadable:
+            return "Codex credentials couldn’t be read. Unlock your login keychain and refresh."
         }
     }
 
@@ -103,7 +106,8 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .sessionExpired, .tokenConflict, .tokenRevoked, .tokenExpired:
             return true
-        case .notLoggedIn, .usageAPIKey, .invalidAuthPayload, .keychainPermissionRequired:
+        case .notLoggedIn, .usageAPIKey, .invalidAuthPayload, .keychainPermissionRequired,
+             .credentialStoreUnreadable:
             return false
         }
     }
@@ -115,6 +119,9 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
 enum CodexKeychainLoad {
     case state(CodexAuthState)
     case permissionRequired
+    /// The item could not be read for a reason approval cannot fix — a locked login keychain, or
+    /// securityd failing. Kept apart from `permissionRequired` so the card gives advice that works.
+    case unreadable
     case none
 
     var state: CodexAuthState? {
@@ -204,6 +211,7 @@ struct CodexAuthStore: Sendable {
         // are still tried after a protected item — each read targets its own exact account, so
         // there is no cross-credential risk between them.
         var permissionRequired = false
+        var unreadable = false
         for home in credentialHomes() {
             let canonicalHome = Self.canonicalHome(home)
             let account = Self.keychainAccountName(forHome: canonicalHome)
@@ -223,10 +231,20 @@ struct CodexAuthStore: Sendable {
                 if allowKeychainInteraction {
                     return .permissionRequired
                 }
-                // This home's item exists but is protected (or the keychain can't be checked) —
-                // a real login footprint. The existence probe is attributes-only and prompt-free.
-                if keychain.genericPasswordExists(service: Self.keychainService, account: account) != false {
+                // Approval only helps when the ACL was the problem. The read's own status is
+                // the evidence; a later probe cannot answer this, because the failed read tripped
+                // the item's breaker and probes are then answered locally.
+                switch keychain.lastReadWasPermissionDenied(service: Self.keychainService, account: account) {
+                case true?:
                     permissionRequired = true
+                case false?:
+                    unreadable = true
+                case nil:
+                    // No category recorded (an older cached failure, or a fake in tests): fall back
+                    // to the prompt-free attributes probe, where nil still means "cannot check".
+                    if keychain.genericPasswordExists(service: Self.keychainService, account: account) != false {
+                        permissionRequired = true
+                    }
                 }
             case .missing:
                 continue
@@ -237,6 +255,11 @@ struct CodexAuthStore: Sendable {
         // scoped item provably does not exist.
         if permissionRequired {
             return .permissionRequired
+        }
+        // Same containment rule, different advice: an unreadable exact item must not be replaced
+        // by the broad service-only lookup either.
+        if unreadable {
+            return .unreadable
         }
 
         // Preserve the historical service-only fallback for the unresolved single card. A scoped
@@ -249,12 +272,20 @@ struct CodexAuthStore: Sendable {
         case .missing:
             return .none
         case .unavailable:
-            // `nil` from the probe means "cannot check" (locked keychain), not "absent" — treating
-            // it as logged-out would silently swallow an access problem. Only a confirmed-absent
-            // item reports none.
-            return keychain.genericPasswordExists(service: Self.keychainService) != false
-                ? .permissionRequired
-                : .none
+            // Same rule as the scoped path: the read's own status says whether approval is the fix.
+            switch keychain.lastReadWasPermissionDenied(service: Self.keychainService) {
+            case true?:
+                return .permissionRequired
+            case false?:
+                return .unreadable
+            case nil:
+                // `nil` from the probe means "cannot check" (locked keychain), not "absent" —
+                // treating it as logged-out would silently swallow an access problem. Only a
+                // confirmed-absent item reports none.
+                return keychain.genericPasswordExists(service: Self.keychainService) != false
+                    ? .permissionRequired
+                    : .none
+            }
         }
     }
 

@@ -85,7 +85,9 @@ final class CodexProvider: ProviderRuntime {
         switch await loadOffMainActor({ [authStore] in authStore.loadKeychainCredentials() }) {
         case .state(let state):
             return state.hasUsableAccessToken
-        case .permissionRequired:
+        case .permissionRequired, .unreadable:
+            // Both mean an item may well be there and Runway simply could not read it. Reporting
+            // "no credential" would hide the provider on first run over an access problem.
             return true
         case .none:
             return false
@@ -124,6 +126,9 @@ final class CodexProvider: ProviderRuntime {
             // truth in keyring mode), so approving it is the actionable fix — surface it over a
             // stale file candidate's token error.
             return ProviderSnapshot.error(provider: provider, error: CodexAuthError.keychainPermissionRequired)
+        case .unreadable:
+            // Approval cannot fix a locked keychain or a failing securityd, so don't ask for it.
+            return ProviderSnapshot.error(provider: provider, error: CodexAuthError.credentialStoreUnreadable)
         case .none:
             break
         }
