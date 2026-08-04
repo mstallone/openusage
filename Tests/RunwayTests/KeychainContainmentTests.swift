@@ -171,4 +171,56 @@ final class KeychainContentionTests: XCTestCase {
         XCTAssertEqual(second, .value("secret"))
         XCTAssertEqual(reads, 2, "an item that was never attempted must not be circuit-broken")
     }
+
+    /// The Safe Storage readers go through `externalRead`, which used to trip on every thrown
+    /// error — including the one the UI gate synthesizes when it turns a read away.
+    func testContentionDoesNotTripTheBreakerOnTheExternalPath() {
+        let coordinator = KeychainReadCoordinator()
+        struct Unreadable: Error {}
+        var reads = 0
+
+        coordinator.recordContention(service: "svc", account: nil)
+        XCTAssertThrowsError(
+            try coordinator.externalRead(
+                service: "svc", account: nil, interactive: false,
+                unavailable: { _ in Unreadable() },
+                read: { reads += 1; throw Unreadable() }
+            )
+        )
+
+        let recovered = try? coordinator.externalRead(
+            service: "svc", account: nil, interactive: false,
+            unavailable: { _ in Unreadable() },
+            read: { reads += 1; return "safe-storage-key" }
+        )
+        XCTAssertEqual(recovered, "safe-storage-key")
+        XCTAssertEqual(reads, 2, "the skipped read must not lock the item out")
+    }
+
+    /// The external path replays the recorded category, so it has to be recorded there too —
+    /// otherwise a real denial degrades into generic "couldn't be read" advice for 15 minutes.
+    func testExternalReadReplaysTheRecordedDenialCategory() {
+        let coordinator = KeychainReadCoordinator()
+        enum Failure: Error, Equatable { case denied, unreadable }
+
+        XCTAssertThrowsError(
+            try coordinator.externalRead(
+                service: "svc", account: nil, interactive: false,
+                unavailable: { $0 ? Failure.denied : Failure.unreadable },
+                read: {
+                    coordinator.recordFailureCategory(service: "svc", account: nil, permissionDenied: true)
+                    throw Failure.denied
+                }
+            )
+        )
+
+        // The breaker answers this one locally; it must still say "denied".
+        XCTAssertThrowsError(
+            try coordinator.externalRead(
+                service: "svc", account: nil, interactive: false,
+                unavailable: { $0 ? Failure.denied : Failure.unreadable },
+                read: { XCTFail("the breaker must answer without calling Security"); return "" }
+            )
+        ) { XCTAssertEqual($0 as? Failure, .denied) }
+    }
 }

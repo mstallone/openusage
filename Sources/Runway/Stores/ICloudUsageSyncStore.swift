@@ -194,6 +194,9 @@ final class ICloudUsageSyncStore {
     /// Completes an opt-out that couldn't identify this Mac earlier. No-op while the identity is
     /// still provisional — the flag stays set and the next launch tries again.
     private func retryPendingOptOutDeletion() async {
+        guard !isRetryingOptOut else { return }
+        isRetryingOptOut = true
+        defer { isRetryingOptOut = false }
         resolveProvisionalIdentityIfNeeded()
         guard !identityIsProvisional else { return }
         AppLog.info(.config, "retrying an iCloud opt-out that could not complete earlier")
@@ -209,7 +212,7 @@ final class ICloudUsageSyncStore {
                 await writeNow()
             }
         } catch {
-            AppLog.warn(.config, "iCloud opt-out retry failed: \(error.localizedDescription)")
+            report(error, .disable)
         }
     }
 
@@ -222,7 +225,15 @@ final class ICloudUsageSyncStore {
     }
 
     func scheduleWrite() {
-        guard enabled else { return }
+        guard enabled else {
+            // With sync off there is no polling and no write loop, so this callback is the only
+            // recurring signal left. Use it to finish an opt-out whose identity was unknowable
+            // earlier, instead of stranding the record until the next launch.
+            if pendingOptOutDeletion, !isRetryingOptOut {
+                Task { await retryPendingOptOutDeletion() }
+            }
+            return
+        }
         writeTask?.cancel()
         writeTask = Task { [weak self] in
             guard let self else { return }
@@ -381,6 +392,10 @@ final class ICloudUsageSyncStore {
         syncActivityCount -= 1
         isSyncing = syncActivityCount > 0
     }
+
+    /// Guards against a second retry starting while one is in flight — every local state change
+    /// calls `scheduleWrite`, and a slow CloudKit delete would otherwise stack up duplicates.
+    private var isRetryingOptOut = false
 
     private enum SyncOperation: String { case read, write, disable }
 

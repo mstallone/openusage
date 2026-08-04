@@ -512,6 +512,17 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         case errSecItemNotFound:
             return nil
         default:
+            // The user just answered the dialog, so a denial here is the strongest evidence about
+            // this item's ACL there is. Record it: this read trips the breaker, and every later
+            // probe is then answered locally with no status to classify.
+            coordinator.recordFailureCategory(
+                service: service,
+                account: account,
+                permissionDenied: status == errSecAuthFailed
+                    || status == errSecInteractionNotAllowed
+                    || status == errSecUserCanceled
+                    || status == errAuthorizationDenied
+            )
             let message = SecCopyErrorMessageString(status, nil) as String?
                 ?? "Keychain read failed with status \(status)."
             AppLog.warn(.keychain, "in-process read failed for service '\(service)' (status \(status))")
