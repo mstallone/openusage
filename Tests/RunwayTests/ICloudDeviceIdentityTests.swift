@@ -196,173 +196,6 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         )
     }
 
-    func testOptOutWithAProvisionalIdentityReportsThatNothingWasRemoved() async throws {
-        // Deleting the provisional UUID would remove nothing and quietly strand the record this Mac
-        // really published — and opting out also stops the retries that would resolve it.
-        let defaults = makeDefaults("provisional-opt-out")
-        let cloudStore = RecordingUsageCloudStore()
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: cloudStore,
-            deviceIDStore: KeychainICloudDeviceIDStore(
-                ownedStore: InMemoryOwnedSecretStore(),
-                legacyKeychain: IndeterminateProbeKeychain(),
-                bundleIdentifier: "com.mattstallone.runway"
-            ),
-            pollInterval: nil
-        )
-
-        sync.enabled = false
-        let deadline = Date().addingTimeInterval(2)
-        while sync.serviceError == nil, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-
-        let deleted = await cloudStore.deletedDeviceIDs
-        XCTAssertTrue(deleted.isEmpty, "a provisional id must not be used for the opt-out delete")
-        XCTAssertNotNil(sync.serviceError, "the user must be told the record wasn't removed")
-        XCTAssertNotNil(
-            sync.disabledStateWarning,
-            "Settings renders errors only while sync is on, so this one must survive the toggle"
-        )
-    }
-
-    func testPendingOptOutIsRetriedOnTheNextLaunch() async throws {
-        // Sync is off after a failed opt-out, so nothing else would ever come back for it. The
-        // intent is persisted and completed once the identity is knowable again.
-        let defaults = makeDefaults("pending-opt-out-retry")
-        defaults.set(false, forKey: "runway.icloudSync.enabled.v1")
-        defaults.set(true, forKey: "runway.icloudSync.pendingOptOutDeletion.v1")
-        defaults.set("cccccccc-1111-2222-3333-444444444444", forKey: "runway.icloudSync.deviceID.v1")
-        let cloudStore = RecordingUsageCloudStore()
-
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: cloudStore,
-            deviceIDStore: KeychainICloudDeviceIDStore(
-                ownedStore: InMemoryOwnedSecretStore(),
-                legacyKeychain: ServiceKeychain(),
-                bundleIdentifier: "com.mattstallone.runway"
-            ),
-            pollInterval: nil
-        )
-        XCTAssertFalse(sync.enabled)
-
-        let deadline = Date().addingTimeInterval(2)
-        while await cloudStore.deletedDeviceIDs.isEmpty, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-
-        let deleted = await cloudStore.deletedDeviceIDs
-        XCTAssertEqual(deleted, ["cccccccc-1111-2222-3333-444444444444"])
-        XCTAssertFalse(
-            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
-            "a completed opt-out must clear the pending flag"
-        )
-    }
-
-    func testFailedDeletionWithAResolvedIdentityIsAlsoRetriedAndVisible() async throws {
-        // The other stranding path: identity is fine, but the CloudKit delete throws. Sync is off,
-        // so nothing comes back for it — record and surface it like the provisional case.
-        let defaults = makeDefaults("failed-delete-retry")
-        let cloudStore = RecordingUsageCloudStore(unavailable: true)
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: cloudStore,
-            deviceIDStore: MemoryDeviceIDStore(),
-            pollInterval: nil
-        )
-
-        sync.enabled = false
-        let deadline = Date().addingTimeInterval(2)
-        while !defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"), Date() < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-
-        XCTAssertTrue(
-            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
-            "a failed deletion must be remembered for the next launch"
-        )
-        XCTAssertNotNil(sync.disabledStateWarning, "and stay visible while sync is off")
-    }
-
-    func testPendingOptOutCompletesWithinTheSameSessionOnceTheKeychainRecovers() async throws {
-        // With sync off there is no poll and no write loop, so a launch-time retry that finds the
-        // keychain still locked used to strand the record until the next relaunch.
-        let defaults = makeDefaults("pending-opt-out-in-session")
-        defaults.set(false, forKey: "runway.icloudSync.enabled.v1")
-        defaults.set(true, forKey: "runway.icloudSync.pendingOptOutDeletion.v1")
-        let recovering = RecoveringDeviceIDStore()
-        let cloudStore = RecordingUsageCloudStore()
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: cloudStore,
-            deviceIDStore: recovering,
-            pollInterval: nil
-        )
-
-        // The launch-time retry runs against a still-unreadable keychain and must delete nothing:
-        // the provisional UUID is not this Mac's CloudKit record.
-        try await Task.sleep(for: .milliseconds(120))
-        var deleted = await cloudStore.deletedDeviceIDs
-        XCTAssertTrue(deleted.isEmpty, "a provisional identity must never be used to delete")
-        XCTAssertTrue(defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"))
-
-        // The keychain comes back and a refresh reports local state; that is the only recurring
-        // signal left while sync is off, so the opt-out finishes there.
-        recovering.recover(as: "eeeeeeee-1111-2222-3333-444444444444")
-        sync.scheduleWrite()
-        let deadline = Date().addingTimeInterval(2)
-        while await cloudStore.deletedDeviceIDs.isEmpty, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-
-        deleted = await cloudStore.deletedDeviceIDs
-        XCTAssertEqual(deleted, ["eeeeeeee-1111-2222-3333-444444444444"])
-        XCTAssertFalse(
-            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
-            "the opt-out completed without a relaunch"
-        )
-    }
-
-    func testAStrandedOptOutRetriesWithoutAnyProviderActivity() async throws {
-        // The local-state callback only fires when a provider refreshed or failed, so a Mac with
-        // every provider disabled gave the retry no signal at all. The schedule must not depend on
-        // it: nothing here ever calls scheduleWrite().
-        let defaults = makeDefaults("pending-opt-out-independent")
-        defaults.set(false, forKey: "runway.icloudSync.enabled.v1")
-        defaults.set(true, forKey: "runway.icloudSync.pendingOptOutDeletion.v1")
-        let recovering = RecoveringDeviceIDStore()
-        let cloudStore = RecordingUsageCloudStore()
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: cloudStore,
-            deviceIDStore: recovering,
-            pollInterval: nil,
-            optOutRetryDelays: [.milliseconds(20), .milliseconds(20), .milliseconds(20)]
-        )
-
-        try await Task.sleep(for: .milliseconds(10))
-        let beforeRecovery = await cloudStore.deletedDeviceIDs
-        XCTAssertTrue(beforeRecovery.isEmpty, "a provisional identity must never be used to delete")
-
-        // The keychain comes back with no provider ever reporting anything.
-        recovering.recover(as: "ffffffff-1111-2222-3333-444444444444")
-        let deadline = Date().addingTimeInterval(3)
-        while await cloudStore.deletedDeviceIDs.isEmpty, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-
-        let deleted = await cloudStore.deletedDeviceIDs
-        XCTAssertEqual(deleted, ["ffffffff-1111-2222-3333-444444444444"])
-        XCTAssertFalse(sync.enabled, "no provider activity was ever reported")
-    }
-
     func testProvisionalIdentityRecoversWithinTheSameSession() async throws {
         // Reviewer-requested: once the keychain becomes readable, publishing resumes without a
         // relaunch.
@@ -418,27 +251,11 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         XCTAssertNil(try store.migrateLegacyDeviceID())
     }
 
-    private func makeDataStore(_ defaults: UserDefaults) -> WidgetDataStore {
-        WidgetDataStore(
-            registry: WidgetRegistry(providers: [], descriptors: []),
-            providers: [],
-            cache: ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots"),
-            defaults: defaults
-        )
-    }
-
     /// Sync ON by default, matching a real install — these tests must be able to prove that an
     /// unresolved identity publishes nothing even when sync is enabled.
-    private func makeDefaults(_ name: String, syncEnabled: Bool = true) -> UserDefaults {
-        let suite = "RunwayTests.ICloudIdentity.\(name).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        defaults.set(syncEnabled, forKey: "runway.icloudSync.enabled.v1")
-        return defaults
-    }
 }
 
-private final class InMemoryOwnedSecretStore: RunwayOwnedSecretStoring, @unchecked Sendable {
+final class InMemoryOwnedSecretStore: RunwayOwnedSecretStoring, @unchecked Sendable {
     var secrets: [String: String] = [:]
 
     func read(service: String) throws -> String? {
@@ -452,7 +269,7 @@ private final class InMemoryOwnedSecretStore: RunwayOwnedSecretStoring, @uncheck
 
 /// Fails the test on ANY read: proves a code path never consults the (prompt-capable) legacy
 /// Keychain.
-private final class TrappingKeychain: KeychainReading, @unchecked Sendable {
+final class TrappingKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the legacy Keychain path must not be consulted")
         return nil
@@ -462,7 +279,7 @@ private final class TrappingKeychain: KeychainReading, @unchecked Sendable {
 }
 
 /// Answers the prompt-free existence probe with "absent" and fails the test if any secret read runs.
-private final class ProbeOnlyKeychain: KeychainReading, @unchecked Sendable {
+final class ProbeOnlyKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("no secret read may run when the existence probe reports the item absent")
         return nil
@@ -477,7 +294,7 @@ private final class ProbeOnlyKeychain: KeychainReading, @unchecked Sendable {
 
 /// The legacy item's existence cannot be determined (locked keychain / suppressed probe), and any
 /// secret read would fail the test — the migration must stop at the probe.
-private final class IndeterminateProbeKeychain: KeychainReading, @unchecked Sendable {
+final class IndeterminateProbeKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("no secret read may run when existence is unknown")
         return nil
@@ -494,7 +311,7 @@ private final class IndeterminateProbeKeychain: KeychainReading, @unchecked Send
 
 /// Unresolvable until `recover` is called, then returns a real id — models a keychain that becomes
 /// readable during the session.
-private final class RecoveringDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
+final class RecoveringDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: String?
 
