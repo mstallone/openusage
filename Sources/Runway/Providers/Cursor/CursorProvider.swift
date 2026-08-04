@@ -95,7 +95,13 @@ final class CursorProvider: ProviderRuntime {
             AppLog.info(LogTag.auth("cursor"), "selected token rejected; retrying this account's other local credential")
             do {
                 return try await probe(authState: alternative)
+            } catch let alternativeError as CursorAuthError where alternativeError == .loginRenewalRequired {
+                // Both credentials for this account are dead: renewal really is the answer.
+                return ProviderSnapshot.error(provider: provider, error: alternativeError)
             } catch {
+                // The alternative may be perfectly valid and the problem is connectivity or Cursor
+                // itself. Reporting the original renewal notice here would tell the user to sign in
+                // again over a network blip, so surface what actually failed.
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
         } catch {

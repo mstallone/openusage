@@ -643,6 +643,44 @@ final class CursorRevokedTokenFallbackTests: XCTestCase {
         )
     }
 
+    func testAlternativeCredentialsNetworkFailureIsNotReportedAsRenewal() async {
+        // The selected token was rejected and the same-account alternative hit a server error.
+        // Telling the user to sign in again over a Cursor outage would send them down the wrong
+        // path — the alternative may be perfectly valid.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let revoked = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
+        let live = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
+        let http = RoutingHTTPClient { request in
+            guard request.headers["Authorization"]?.contains(live) == true else {
+                return HTTPResponse(statusCode: 401, headers: [:], body: Data())
+            }
+            return HTTPResponse(statusCode: 503, headers: [:], body: Data())
+        }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(
+                sqlite: FakeSQLite(values: [
+                    CursorAuthStore.accessTokenKey: revoked,
+                    CursorAuthStore.membershipTypeKey: "pro"
+                ]),
+                keychain: ServiceKeychain(values: [
+                    CursorAuthStore.keychainAccessTokenService: live
+                ]),
+                now: { now }
+            ),
+            usageClient: CursorUsageClient(http: http),
+            now: { now }
+        )
+
+        let snapshot = await provider.refresh()
+
+        let error = snapshot.lines.compactMap { line -> String? in
+            guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+            return text
+        }.first
+        XCTAssertEqual(error, ProviderUsageErrorText.requestFailed(statusCode: 503))
+        XCTAssertNotEqual(error, CursorAuthError.loginRenewalRequired.localizedDescription)
+    }
+
     func testServerRejectionDoesNotRetryADifferentAccountsToken() async {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let revoked = makeCursorJWT(sub: "auth0|user-a", exp: now.timeIntervalSince1970 + 3_600)
