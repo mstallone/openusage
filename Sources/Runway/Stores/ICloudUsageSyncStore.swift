@@ -147,6 +147,12 @@ final class ICloudUsageSyncStore {
     /// while sync is disabled — so Settings keeps showing it instead of appearing cleanly off.
     var disabledStateWarning: String? {
         guard !enabled, pendingOptOutDeletion else { return identityIsProvisional ? identityError : nil }
+        // A resolved identity means the deletion itself failed (iCloud offline, say). Blaming the
+        // login keychain there would send the user after the wrong thing entirely.
+        guard identityIsProvisional else {
+            return writeError
+                ?? "Runway couldn’t remove this Mac’s existing iCloud record yet. It will try again later."
+        }
         return "Runway couldn’t remove this Mac’s existing iCloud record yet. It will try again "
             + "while your login keychain is available."
     }
@@ -196,6 +202,12 @@ final class ICloudUsageSyncStore {
             defaults.set(false, forKey: Self.pendingOptOutKey)
             pendingOptOutDeletion = false
             AppLog.info(.config, "iCloud opt-out completed: this Mac's record was removed")
+            // The user can re-enable while this delete is in flight; without republishing, that
+            // late delete would leave an enabled Mac missing until some other change schedules a
+            // write. Same race the normal disable path already guards.
+            if enabled {
+                await writeNow()
+            }
         } catch {
             AppLog.warn(.config, "iCloud opt-out retry failed: \(error.localizedDescription)")
         }

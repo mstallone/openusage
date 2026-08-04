@@ -59,6 +59,9 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// keychain itself could not be read. Captured from the read's own `OSStatus`, because a second
     /// attributes probe cannot recover it — the breaker answers those locally once tripped.
     private var lastFailureDenied: [Key: Bool] = [:]
+    /// Items whose last read failed only because another provider's approval dialog held the
+    /// process-wide UI gate. That says nothing about this item, so it must not trip its breaker.
+    private var contendedKeys: Set<Key> = []
     private let inFlightWait: TimeInterval
     private let revalidateAfter: TimeInterval
     private let now: @Sendable () -> Date
@@ -141,8 +144,11 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         let result = read()
 
         condition.lock()
+        // Contention is not evidence about this item, so it never trips the breaker.
+        let wasContention = contendedKeys.remove(key) != nil
         if epochs[key, default: 0] == epoch {
-            store(key: key, fingerprint: fingerprint, value: result == .unavailable ? nil : result, tripped: result == .unavailable)
+            let failed = result == .unavailable && !wasContention
+            store(key: key, fingerprint: fingerprint, value: failed ? nil : (result == .unavailable ? nil : result), tripped: failed)
         }
         condition.unlock()
         return result
@@ -218,7 +224,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         service: String,
         account: String?,
         interactive: Bool,
-        unavailable: () -> Error,
+        unavailable: (_ permissionDenied: Bool) -> Error,
         read: () throws -> T
     ) throws -> T {
         let key = Key(service: service, account: account)
@@ -228,12 +234,15 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         if !acquired, !interactive {
             condition.unlock()
             AppLog.warn(.keychain, "keychain read skipped behind a stuck operation for one item; reporting unavailable")
-            throw unavailable()
+            throw unavailable(false)
         }
         if !interactive, let entry = entries[key], entry.tripped,
            now().timeIntervalSince(entry.updatedAt) < revalidateAfter {
+            // Replay the SAME failure category the original read produced: telling the user to
+            // approve Safe Storage would be wrong advice after, say, an errSecIO outage.
+            let denied = lastFailureDenied[key] ?? false
             condition.unlock()
-            throw unavailable()
+            throw unavailable(denied)
         }
         if acquired {
             inFlight.insert(key)
@@ -276,6 +285,16 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     ) {
         guard epochs[key, default: 0] == epoch else { return }
         store(key: key, fingerprint: fingerprint, value: value, tripped: tripped)
+    }
+
+    /// Marks the next stored outcome for this item as UI-gate contention rather than a real
+    /// failure: the read never reached securityd, so tripping the breaker would lock out an item
+    /// that was never attempted.
+    func recordContention(service: String, account: String?) {
+        let key = Key(service: service, account: account)
+        condition.lock()
+        contendedKeys.insert(key)
+        condition.unlock()
     }
 
     /// Records why a read failed, so callers can tell "not approved yet" from "couldn't be read"

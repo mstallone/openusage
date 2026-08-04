@@ -68,7 +68,9 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             service: service,
             account: nil,
             interactive: allowInteraction,
-            unavailable: { SakanaBrowserCredentialError.permissionRequired }
+            // Replays the original category: approving Safe Storage cannot fix an
+            // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
+            unavailable: { denied in denied ? SakanaBrowserCredentialError.permissionRequired : SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable)) }
         ) { () -> OSStatus in
             let status = allowInteraction
                 ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
