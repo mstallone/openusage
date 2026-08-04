@@ -312,12 +312,15 @@ extension KeychainReading {
 /// Suppressed calls only ever wait on a user-attended dialog, never on each other (they refcount),
 /// so background refreshes pause at most while the user is answering a prompt they asked for.
 enum KeychainUISuppression {
-    /// How long either side waits on the other before giving up. Both directions are bounded so a
-    /// wedged or abandoned operation degrades to a friendly local failure instead of a hang.
-    private static let interactiveGateWait: TimeInterval = 2
+    /// Background work never waits long on a user-attended dialog. Interactive work is different:
+    /// it queues until the preceding dialog closes, unless its owning refresh is cancelled.
+    private static let backgroundGateWait: TimeInterval = 2
+    private static let cancellationPollInterval: TimeInterval = 0.1
     private static let condition = NSCondition()
     nonisolated(unsafe) private static var suppressedDepth = 0
     nonisolated(unsafe) private static var interactiveCount = 0
+    nonisolated(unsafe) private static var nextInteractiveTicket: UInt64 = 0
+    nonisolated(unsafe) private static var interactiveQueue: [UInt64] = []
     /// Whether an interactive operation currently holds the gate. See `withUIAllowed`.
     nonisolated(unsafe) private static var interactiveInFlight = false
     /// Whether the outermost scope's disable call actually succeeded. The setter essentially never
@@ -333,12 +336,12 @@ enum KeychainUISuppression {
     /// and should report its non-interactive "unavailable" outcome instead.
     static func withUISuppressed<T>(_ body: (_ isSuppressed: Bool) throws -> T) rethrows -> T {
         condition.lock()
-        // Bounded, like the interactive side. An approval dialog can sit open for minutes — or be
-        // abandoned behind another window — and parking here forever would strand every concurrent
-        // refresh in exactly the contention this gate exists to prevent. Past the deadline the body
-        // runs with `isSuppressed: false`, which by contract means "do not issue a prompt-capable
-        // call": the caller reports its local unavailable outcome without touching Security.framework.
-        let deadline = Date().addingTimeInterval(interactiveGateWait)
+        // An approval dialog can sit open for minutes — or be abandoned behind another window — and
+        // parking background work forever would strand every automatic refresh in exactly the
+        // contention this gate exists to prevent. Past the deadline the body runs with
+        // `isSuppressed: false`, which by contract means "do not issue a prompt-capable call": the
+        // caller reports its local unavailable outcome without touching Security.framework.
+        let deadline = Date().addingTimeInterval(backgroundGateWait)
         while interactiveCount > 0, Date() < deadline {
             condition.wait(until: deadline)
         }
@@ -388,38 +391,55 @@ enum KeychainUISuppression {
     /// - `.suppressionStuck` — UI is still disabled by a wedged suppressed call. Running the query
     ///   is safe and worthwhile (an already-authorized item reads fine), but a FAILURE says nothing
     ///   about the item's ACL, because no prompt was possible.
-    /// - `.peerBusy` — another provider's approval dialog is open and UI is ENABLED. The query must
-    ///   NOT run: it would put a second dialog on screen beside the first, which is the storm this
-    ///   gate exists to prevent.
+    /// - `.cancelled` — the owning refresh ended while this operation was queued. The query must not
+    ///   run, or an abandoned Refresh All could surface a stale approval dialog much later.
     enum InteractiveUI {
         case available
         case suppressionStuck
-        case peerBusy
+        case cancelled
     }
 
     static func withUIAllowed<T>(_ body: (_ ui: InteractiveUI) throws -> T) rethrows -> T {
         condition.lock()
-        // Interactive operations are EXCLUSIVE of one another, not just of suppressed ones. A
-        // Refresh All starts every provider at once, so without this a single click could put
-        // several macOS approval dialogs on screen together — the prompt storm this gate exists to
-        // prevent. The wait is bounded because an approval dialog can be abandoned: waiting forever
-        // would hang every other provider's manual refresh behind an unrelated dialog. Past the
-        // deadline the caller is told UI is unavailable, so it reports "keychain busy" instead of
-        // either hanging or opening a second dialog next to the first.
-        let peerDeadline = Date().addingTimeInterval(interactiveGateWait)
-        while interactiveInFlight, Date() < peerDeadline {
-            condition.wait(until: peerDeadline)
+        // Refresh All starts every provider concurrently. Give each interactive read a FIFO ticket
+        // so every protected provider gets its turn during that same pass, while the active flag
+        // still makes a second simultaneous dialog impossible. Register before waiting: queued
+        // readers keep new suppressed operations from disabling UI in the gap between dialogs.
+        let ticket = nextInteractiveTicket
+        nextInteractiveTicket &+= 1
+        interactiveQueue.append(ticket)
+        interactiveCount += 1
+        while interactiveInFlight || interactiveQueue.first != ticket {
+            if Task.isCancelled {
+                interactiveQueue.removeAll { $0 == ticket }
+                interactiveCount -= 1
+                condition.broadcast()
+                condition.unlock()
+                AppLog.debug(.keychain, "cancelled an interactive keychain operation while it was queued")
+                return try body(.cancelled)
+            }
+            condition.wait(until: Date().addingTimeInterval(cancellationPollInterval))
         }
-        guard !interactiveInFlight else {
+        interactiveQueue.removeFirst()
+        if Task.isCancelled {
+            interactiveCount -= 1
+            condition.broadcast()
             condition.unlock()
-            AppLog.warn(.keychain, "interactive keychain operation skipped: another approval dialog is still open")
-            return try body(.peerBusy)
+            AppLog.debug(.keychain, "cancelled an interactive keychain operation before it reached Security.framework")
+            return try body(.cancelled)
         }
         interactiveInFlight = true
-        interactiveCount += 1
-        let deadline = Date().addingTimeInterval(interactiveGateWait)
+        let deadline = Date().addingTimeInterval(backgroundGateWait)
         while suppressedDepth > 0, Date() < deadline {
             condition.wait(until: deadline)
+        }
+        if Task.isCancelled {
+            interactiveCount -= 1
+            interactiveInFlight = false
+            condition.broadcast()
+            condition.unlock()
+            AppLog.debug(.keychain, "cancelled an interactive keychain operation before it reached Security.framework")
+            return try body(.cancelled)
         }
         // A previously failed restore leaves the process-wide flag disabled; retry before an
         // interactive query so approval prompts aren't permanently broken.
@@ -526,12 +546,10 @@ struct SecurityKeychainAccessor: KeychainReading {
         var gateUI = KeychainUISuppression.InteractiveUI.available
         let status = KeychainUISuppression.withUIAllowed { ui -> OSStatus in
             gateUI = ui
-            // A peer's dialog is open and UI is ENABLED, so querying here would put a second dialog
-            // beside it. Don't call Security at all.
-            guard ui != .peerBusy else { return errSecNotAvailable }
+            guard ui != .cancelled else { return errSecNotAvailable }
             return SecItemCopyMatching(query as CFDictionary, &item)
         }
-        if gateUI == .peerBusy || (status != errSecSuccess && status != errSecItemNotFound && gateUI != .available) {
+        if status != errSecSuccess && status != errSecItemNotFound && gateUI != .available {
             // Either no prompt was possible, or none was attempted. A denial-shaped status here says
             // nothing about this item's ACL, and recording it would trip the item and hand the user
             // an Always Allow instruction for a dialog that was never shown.

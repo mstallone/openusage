@@ -76,8 +76,7 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             let status = allowInteraction
                 ? KeychainUISuppression.withUIAllowed { ui -> OSStatus in
                     gateEngaged = ui == .available
-                    // A peer's dialog is open and UI is ENABLED: querying would open a second one.
-                    guard ui != .peerBusy else { return errSecNotAvailable }
+                    guard ui != .cancelled else { return errSecNotAvailable }
                     return SecItemCopyMatching(query as CFDictionary, &result)
                 }
                 : KeychainUISuppression.withUISuppressed { isSuppressed in

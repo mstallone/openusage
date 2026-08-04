@@ -70,11 +70,23 @@ extension ProviderRuntime {
 /// the whole operation (a provider can issue several reads per refresh). Offloading to a
 /// detached task moves the wait onto a background executor; the `Sendable` result crosses back cleanly.
 /// It is awaited immediately, so it reads like a normal call while no longer blocking the actor.
+/// Cancellation is forwarded to the detached task so a provider watchdog can remove a queued
+/// interactive Keychain read instead of leaving a stale approval request behind the active dialog.
 func loadOffMainActor<T: Sendable>(_ load: @escaping @Sendable () -> T) async -> T {
-    await Task.detached(priority: .utility, operation: load).value
+    let task = Task.detached(priority: .utility, operation: load)
+    return await withTaskCancellationHandler {
+        await task.value
+    } onCancel: {
+        task.cancel()
+    }
 }
 
 /// Throwing counterpart for blocking credential reads that distinguish absence from access failure.
 func loadOffMainActor<T: Sendable>(_ load: @escaping @Sendable () throws -> T) async throws -> T {
-    try await Task.detached(priority: .utility, operation: load).value
+    let task = Task.detached(priority: .utility, operation: load)
+    return try await withTaskCancellationHandler {
+        try await task.value
+    } onCancel: {
+        task.cancel()
+    }
 }

@@ -65,9 +65,12 @@ refresh their own file-based logins (no Keychain involved); moving them to the s
 is the remaining ownership follow-up.
 
 Automatic Keychain reads are in-process and prompt-free; only a direct user action may raise the
-approval dialog — once per protected item, and a denial stops the pass instead of chaining further
-prompts. Two actions qualify: a manual refresh, and clicking **Use** on a Codex reset credit after
-every readable credential was rejected. Both are user-initiated with the app in front of the user.
+approval dialog. A manual **Refresh All** queues protected providers and prompts for them one at a
+time during the same pass, so approval dialogs never overlap. If a refresh is cancelled while its
+read is still queued, that read leaves the queue without touching Keychain. Clicking **Use** on a
+Codex reset credit may also prompt after every readable credential was rejected; that wait has the
+same bounded ceiling as a provider refresh, so an abandoned dialog cannot pin the claim forever. Both paths are
+user-initiated with the app in front of the user.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,

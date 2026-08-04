@@ -376,6 +376,28 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertEqual(approvals.value, 0, "a transient failure must not raise an approval dialog")
     }
 
+    func testInteractiveCredentialWaitTimesOutInsteadOfPinningClaimForever() async {
+        let http = RoutingHTTPClient { _ in
+            HTTPResponse(statusCode: 401, headers: [:], body: Data())
+        }
+        let service = CodexResetClaimService(
+            usageClient: CodexUsageClient(http: http),
+            credentialCandidates: { allowInteraction in
+                guard allowInteraction else { return [("rejected-file-token", nil)] }
+                try? await Task.sleep(for: .seconds(10))
+                return [("approved-keyring-token", nil)]
+            },
+            interactiveCredentialTimeout: 0.05
+        )
+        let startedAt = ContinuousClock.now
+
+        let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
+
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertLessThan(startedAt.duration(to: .now), .seconds(1))
+        XCTAssertEqual(http.requests.count, 1, "timing out approval must not retry with a stale credential")
+    }
+
     func testClaimFailsWhenEveryCandidateIsRejected() async {
         let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
         let service = CodexResetClaimService(
