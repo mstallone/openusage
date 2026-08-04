@@ -119,9 +119,12 @@ jobs:
 
       - name: Resolve signing identity
         run: |
-          # The cert is now in the search list; codesign needs the identity's display name.
-          IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
-          [ -n "$IDENTITY" ] || { echo "No Developer ID Application identity found in the imported cert" >&2; exit 1; }
+          # The cert is now in the search list; resolve it in-process through Security.framework.
+          if ! IDENTITY="$(xcrun swift "$GITHUB_WORKSPACE/script/find_codesigning_identity.swift" \
+            "Developer ID Application:" "$APPLE_TEAM_ID")"; then
+            echo "No valid Developer ID Application identity found in the imported cert" >&2
+            exit 1
+          fi
           [[ "$IDENTITY" == *"($APPLE_TEAM_ID)" ]] \
             || { echo "Developer ID identity does not belong to NextByte team $APPLE_TEAM_ID" >&2; exit 1; }
           echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"

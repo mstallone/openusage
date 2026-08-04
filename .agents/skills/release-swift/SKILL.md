@@ -1,6 +1,6 @@
 ---
 name: release-swift
-description: Cut a stable release of Runway (Swift menu-bar app): pick a version, generate a categorized changelog, tag from `main`, and publish the GitHub Release with notes.
+description: "Cut a stable release of Runway (Swift menu-bar app): pick a version, generate a categorized changelog, tag from `main`, and publish the GitHub Release with notes."
 ---
 
 # Release Swift
@@ -42,7 +42,7 @@ configuration and breaks the other.
 Verify a downloaded profile before trusting it:
 
 ```sh
-security cms -D -i profile.mobileprovision > /tmp/p.plist
+script/decode_provisioning_profile.sh profile.mobileprovision /tmp/p.plist
 /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.icloud-container-identifiers' /tmp/p.plist
 /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.icloud-container-environment' /tmp/p.plist
 ```

@@ -55,7 +55,7 @@ KEY_PATH="$(cd "$(dirname "$APPLE_NOTARY_KEY_PATH")" && pwd)/$(basename "$APPLE_
 install_profile() {
   local path="$1" expected_app_id="$2" plist uuid name app_id
   [ -f "$path" ] || { echo "Provisioning profile does not exist: $path" >&2; return 1; }
-  plist="$(security cms -D -i "$path")"
+  plist="$("$ROOT_DIR/script/decode_provisioning_profile.sh" "$path")"
   uuid="$(printf '%s' "$plist" | plutil -extract UUID raw -o - -)"
   name="$(printf '%s' "$plist" | plutil -extract Name raw -o - -)"
   app_id="$(printf '%s' "$plist" | plutil -extract Entitlements.application-identifier raw -o - -)"

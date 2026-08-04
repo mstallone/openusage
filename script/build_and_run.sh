@@ -194,35 +194,40 @@ else
 fi
 
 # Pick a stable Apple Development identity from the NextByte team so ad-hoc cdhash churn doesn't
-# re-trigger permission prompts on every rebuild. Certificate display names contain the developer's
-# certificate ID, not necessarily the team ID, so inspect the certificate subject's OU rather than
-# trusting the text in parentheses. Fall back to ad-hoc only if no NextByte identity is installed.
-certificate_belongs_to_team() {
-  local identity="$1"
-  local subject
-  subject=$(/usr/bin/security find-certificate -c "$identity" -p 2>/dev/null \
-    | /usr/bin/openssl x509 -noout -subject -nameopt RFC2253 2>/dev/null || true)
-  [[ "$subject" == *"OU=$APPLE_TEAM_ID"* ]]
-}
-
+# re-trigger permission prompts on every rebuild. The native helper queries Security.framework
+# directly and checks the certificate subject's OU because its display-name suffix is the
+# developer certificate ID, not necessarily the team ID. Fall back to ad-hoc if none is installed.
 find_apple_development_identity() {
-  local identity
-  while IFS= read -r identity; do
-    if certificate_belongs_to_team "$identity"; then
-      printf '%s\n' "$identity"
-      return 0
-    fi
-  done < <(/usr/bin/security find-identity -p codesigning -v 2>/dev/null \
-    | /usr/bin/awk -F\" '/Apple Development:/ { print $2 }')
-  return 1
+  /usr/bin/xcrun swift "$ROOT_DIR/script/find_codesigning_identity.swift" \
+    "Apple Development:" "$APPLE_TEAM_ID"
 }
 
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [ -z "$CODESIGN_IDENTITY" ]; then
-  CODESIGN_IDENTITY="$(find_apple_development_identity || true)"
-elif ! certificate_belongs_to_team "$CODESIGN_IDENTITY"; then
-  echo "CODESIGN_IDENTITY must belong to NextByte team $APPLE_TEAM_ID" >&2
-  exit 1
+  if resolved_identity="$(find_apple_development_identity)"; then
+    CODESIGN_IDENTITY="$resolved_identity"
+  else
+    identity_status=$?
+    if [ "$identity_status" -ne 1 ]; then
+      echo "could not inspect installed code-signing identities" >&2
+      exit 1
+    fi
+  fi
+else
+  if resolved_identity=$(/usr/bin/xcrun swift "$ROOT_DIR/script/find_codesigning_identity.swift" \
+    "$CODESIGN_IDENTITY" "$APPLE_TEAM_ID"); then
+    [ "$resolved_identity" = "$CODESIGN_IDENTITY" ] \
+      || { echo "CODESIGN_IDENTITY must be the identity's exact display name" >&2; exit 1; }
+  else
+    identity_status=$?
+    if [ "$identity_status" -eq 1 ]; then
+      echo "CODESIGN_IDENTITY must name a valid identity from NextByte team $APPLE_TEAM_ID" >&2
+      exit 1
+    else
+      echo "could not inspect installed code-signing identities" >&2
+      exit 1
+    fi
+  fi
 fi
 
 # Embed + sign Sparkle.framework before sealing the app. The executable links Sparkle, so without the

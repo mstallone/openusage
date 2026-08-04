@@ -8,7 +8,8 @@ CONTAINER_ID="${4:?iCloud container identifier required}"
 
 PROFILE_PLIST="$(mktemp)"
 trap 'rm -f "$PROFILE_PLIST"' EXIT
-/usr/bin/security cms -D -i "$PROFILE" > "$PROFILE_PLIST"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$SCRIPT_DIR/decode_provisioning_profile.sh" "$PROFILE" "$PROFILE_PLIST"
 
 TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")"
 [ -n "$TEAM_ID" ] || { echo "provisioning profile has no team identifier" >&2; exit 1; }
