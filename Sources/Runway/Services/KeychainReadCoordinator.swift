@@ -1,7 +1,10 @@
 import Foundation
 
-/// Process-wide gate for the in-process reads of ACL-protected Keychain items (Claude Code's
-/// credentials and any other foreign item read through `SecurityKeychainAccessor`). It exists to keep
+/// Process-wide gate for the in-process reads of ACL-protected Keychain items belonging to other
+/// apps: everything read through `SecurityKeychainAccessor`, plus the Safe Storage keys Claude
+/// Desktop and Sakana decode themselves (via `externalRead`). Runway's own item
+/// (`RunwayOwnedKeychainStore`) deliberately stays outside — its ACL names Runway, so it never
+/// prompts and never contends for approval. It exists to keep
 /// Runway's Keychain traffic minimal and bounded when `securityd` is slow, wedged, or showing an
 /// approval dialog (the 2026-08-03 incident):
 ///
@@ -186,6 +189,64 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         } catch {
             condition.lock()
             store(key: key, fingerprint: fingerprint, value: nil, tripped: true)
+            condition.unlock()
+            throw error
+        }
+    }
+
+    /// Single-flight + breaker for a bespoke in-process secret read that does not speak
+    /// `NonInteractiveKeychainRead` — the Safe Storage keys Claude Desktop and Sakana decode
+    /// themselves. Those items are read directly through `SecItemCopyMatching`, so without this they
+    /// would keep starting fresh Security calls behind a wedged predecessor and would never trip a
+    /// breaker after a denial.
+    ///
+    /// Non-interactive callers that cannot take the flight (or whose item is freshly tripped) get
+    /// `unavailable()` thrown without touching Security.framework. Interactive callers proceed past
+    /// a stuck flight — manual recovery must not hang — and a success clears the breaker.
+    func externalRead<T>(
+        service: String,
+        account: String?,
+        interactive: Bool,
+        unavailable: () -> Error,
+        read: () throws -> T
+    ) throws -> T {
+        let key = Key(service: service, account: account)
+
+        condition.lock()
+        let acquired = waitWhileInFlight(key, deadline: now().addingTimeInterval(inFlightWait))
+        if !acquired, !interactive {
+            condition.unlock()
+            AppLog.warn(.keychain, "keychain read skipped behind a stuck operation for one item; reporting unavailable")
+            throw unavailable()
+        }
+        if !interactive, let entry = entries[key], entry.tripped,
+           now().timeIntervalSince(entry.updatedAt) < revalidateAfter {
+            condition.unlock()
+            throw unavailable()
+        }
+        if acquired {
+            inFlight.insert(key)
+        }
+        condition.unlock()
+
+        defer {
+            if acquired {
+                condition.lock()
+                inFlight.remove(key)
+                condition.broadcast()
+                condition.unlock()
+            }
+        }
+
+        do {
+            let value = try read()
+            condition.lock()
+            store(key: key, fingerprint: nil, value: nil, tripped: false)
+            condition.unlock()
+            return value
+        } catch {
+            condition.lock()
+            store(key: key, fingerprint: nil, value: nil, tripped: true)
             condition.unlock()
             throw error
         }

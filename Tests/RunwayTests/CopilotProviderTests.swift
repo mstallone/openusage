@@ -70,6 +70,23 @@ final class CopilotAuthStoreTests: XCTestCase {
         XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
     }
 
+    func testBillingCandidatesReportWhenThePreferredCredentialNeedsApproval() {
+        // Editor config supplies the usage token; the preferred GitHub CLI token sits behind an
+        // unapproved ACL. The candidate list must carry that fact, or an org-managed card blames
+        // billing access when the real fix is approving a credential that already exists.
+        let store = CopilotAuthStore(
+            files: FakeFiles([
+                CopilotAuthStore.editorAppsPath: #"{ "github.com": { "oauth_token": "gho_editor" } }"#
+            ]),
+            keychain: UnauthorizedItemKeychain()
+        )
+
+        let candidates = store.loadBillingTokenCandidates(usageToken: CopilotToken(value: "gho_editor"))
+
+        XCTAssertEqual(candidates.tokens.map(\.value), ["gho_editor"])
+        XCTAssertTrue(candidates.keychainPermissionRequired)
+    }
+
     func testUnknownExistenceProbeIsTreatedAsUnreadableNotLoggedOut() {
         // A locked keychain (or a probe suppressed behind a stuck flight) answers `nil` — "cannot
         // check". Collapsing that into "not logged in" would disable Copilot at first-run detection
@@ -109,7 +126,7 @@ final class CopilotAuthStoreTests: XCTestCase {
 
         let billing = store.loadBillingTokenCandidates(usageToken: usageToken, allowKeychainInteraction: true)
 
-        XCTAssertEqual(billing.map(\.value), ["gho_keychain"])
+        XCTAssertEqual(billing.tokens.map(\.value), ["gho_keychain"])
         XCTAssertEqual(keychain.interactiveReads, 1, "billing must not raise a second prompt")
         XCTAssertEqual(keychain.plainReads, 0)
     }
@@ -129,14 +146,14 @@ final class CopilotAuthStoreTests: XCTestCase {
 
         // Automatic: the protected item is skipped silently; only the usage token remains.
         XCTAssertEqual(
-            store.loadBillingTokenCandidates(usageToken: usageToken).map(\.value),
+            store.loadBillingTokenCandidates(usageToken: usageToken).tokens.map(\.value),
             ["gho_editor"]
         )
         XCTAssertEqual(keychain.interactiveReads, 0)
 
         // Manual: exactly one interactive read approves and returns the billing token.
         XCTAssertEqual(
-            store.loadBillingTokenCandidates(usageToken: usageToken, allowKeychainInteraction: true).map(\.value),
+            store.loadBillingTokenCandidates(usageToken: usageToken, allowKeychainInteraction: true).tokens.map(\.value),
             ["gho_billing", "gho_editor"]
         )
         XCTAssertEqual(keychain.interactiveReads, 1)
@@ -166,11 +183,11 @@ final class CopilotAuthStoreTests: XCTestCase {
         let usageToken = try XCTUnwrap(store.loadCredentials().token)
 
         XCTAssertEqual(
-            store.loadBillingTokenCandidates(usageToken: usageToken).map(\.value),
+            store.loadBillingTokenCandidates(usageToken: usageToken).tokens.map(\.value),
             ["gho_billing", "gho_editor"]
         )
         XCTAssertEqual(
-            store.loadBillingTokenCandidates(usageToken: CopilotToken(value: "gho_billing")).map(\.value),
+            store.loadBillingTokenCandidates(usageToken: CopilotToken(value: "gho_billing")).tokens.map(\.value),
             ["gho_billing"]
         )
     }

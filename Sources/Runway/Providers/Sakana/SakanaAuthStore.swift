@@ -60,12 +60,30 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
         // classic login-keychain items whose ACL dialog ignores the LAContext above, so background
         // reads must run inside the process-wide suppression scope and interactive reads must hold
         // the gate for their whole duration.
+        // Through the coordinator like every other in-process secret read: single-flight per item,
+        // and a denial trips its breaker so five-minute refreshes stop starting new Security calls
+        // behind a wedged predecessor.
         var result: CFTypeRef?
-        let status = allowInteraction
-            ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
-            : KeychainUISuppression.withUISuppressed { isSuppressed in
-                isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
+        let status = try KeychainReadCoordinator.shared.externalRead(
+            service: service,
+            account: nil,
+            interactive: allowInteraction,
+            unavailable: { SakanaBrowserCredentialError.permissionRequired }
+        ) { () -> OSStatus in
+            let status = allowInteraction
+                ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
+                : KeychainUISuppression.withUISuppressed { isSuppressed in
+                    isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
+                }
+            // Denials throw from inside the flight so the breaker records them; every other status
+            // is interpreted below.
+            switch status {
+            case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
+                throw SakanaBrowserCredentialError.permissionRequired
+            default:
+                return status
             }
+        }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data,
@@ -77,8 +95,6 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             return password
         case errSecItemNotFound:
             return nil
-        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
-            throw SakanaBrowserCredentialError.permissionRequired
         default:
             throw SakanaBrowserCredentialError.keychainFailure(Int(status))
         }
