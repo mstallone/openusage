@@ -381,7 +381,22 @@ enum KeychainUISuppression {
     /// already hold `suppressedDepth`, and those never wait on anything once entered. The deadline
     /// only guards against a wedged suppressed call — it cannot be extended by new entrants, because
     /// those park on `interactiveCount` instead.
-    static func withUIAllowed<T>(_ body: (_ uiAvailable: Bool) throws -> T) rethrows -> T {
+    /// What the gate could give this caller. The two failure modes need OPPOSITE handling, so they
+    /// must not collapse into one flag:
+    ///
+    /// - `.suppressionStuck` — UI is still disabled by a wedged suppressed call. Running the query
+    ///   is safe and worthwhile (an already-authorized item reads fine), but a FAILURE says nothing
+    ///   about the item's ACL, because no prompt was possible.
+    /// - `.peerBusy` — another provider's approval dialog is open and UI is ENABLED. The query must
+    ///   NOT run: it would put a second dialog on screen beside the first, which is the storm this
+    ///   gate exists to prevent.
+    enum InteractiveUI {
+        case available
+        case suppressionStuck
+        case peerBusy
+    }
+
+    static func withUIAllowed<T>(_ body: (_ ui: InteractiveUI) throws -> T) rethrows -> T {
         condition.lock()
         // Interactive operations are EXCLUSIVE of one another, not just of suppressed ones. A
         // Refresh All starts every provider at once, so without this a single click could put
@@ -397,7 +412,7 @@ enum KeychainUISuppression {
         guard !interactiveInFlight else {
             condition.unlock()
             AppLog.warn(.keychain, "interactive keychain operation skipped: another approval dialog is still open")
-            return try body(false)
+            return try body(.peerBusy)
         }
         interactiveInFlight = true
         interactiveCount += 1
@@ -429,7 +444,7 @@ enum KeychainUISuppression {
             condition.broadcast()
             condition.unlock()
         }
-        return try body(!suppressionStuck)
+        return try body(suppressionStuck ? .suppressionStuck : .available)
     }
 }
 
@@ -491,17 +506,20 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecReturnData as String: true,
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
-        var uiWasAvailable = true
-        let status = KeychainUISuppression.withUIAllowed { uiAvailable in
-            uiWasAvailable = uiAvailable
+        var gateUI = KeychainUISuppression.InteractiveUI.available
+        let status = KeychainUISuppression.withUIAllowed { ui -> OSStatus in
+            gateUI = ui
+            // A peer's dialog is open and UI is ENABLED, so querying here would put a second dialog
+            // beside it. Don't call Security at all.
+            guard ui != .peerBusy else { return errSecNotAvailable }
             return SecItemCopyMatching(query as CFDictionary, &item)
         }
-        if status != errSecSuccess, status != errSecItemNotFound, !uiWasAvailable {
-            // The prompt never had a chance to appear, so a denial-shaped status here says nothing
-            // about this item's ACL. Recording it would trip the item and hand the user an Always
-            // Allow instruction for a dialog that was never shown.
+        if gateUI == .peerBusy || (status != errSecSuccess && status != errSecItemNotFound && gateUI != .available) {
+            // Either no prompt was possible, or none was attempted. A denial-shaped status here says
+            // nothing about this item's ACL, and recording it would trip the item and hand the user
+            // an Always Allow instruction for a dialog that was never shown.
             coordinator.recordContention(service: service, account: account)
-            AppLog.warn(.keychain, "interactive read for service '\(service)' failed while the UI gate was held by a stuck call")
+            AppLog.warn(.keychain, "interactive read for service '\(service)' skipped or failed while the UI gate was unavailable")
             throw KeychainError.readFailed("The keychain was busy. Try refreshing again.")
         }
         switch status {
