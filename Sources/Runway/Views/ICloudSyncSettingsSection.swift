@@ -44,7 +44,15 @@ struct ICloudSyncSettingsSection: View {
                 .padding(.bottom, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if sync.enabled { enabledContent }
+                if sync.enabled {
+                    enabledContent
+                } else if let error = sync.disabledStateWarning {
+                    // A problem that outlives the toggle — e.g. this Mac's record could not be
+                    // removed because its identity was unresolvable — must stay visible while sync
+                    // is off, or the user never learns the opt-out didn't finish.
+                    Divider()
+                    inlineNotice(error)
+                }
             }
             .cardSurface()
         }
