@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.9
+
+### Bug Fixes
+- Queue Keychain approvals during manual Refresh All ([#95](https://github.com/mstallone/runway/pull/95)) by @mstallone
+- Remove repository-owned security CLI usage ([#94](https://github.com/mstallone/runway/pull/94)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.8...v0.8.9](https://github.com/mstallone/runway/compare/v0.8.8...v0.8.9)
+
+- [1b36d35](https://github.com/mstallone/runway/commit/1b36d357e680d61c9e9915626293912ce7ff8d22) Queue Keychain approvals during manual Refresh All (#95) by @mstallone
+- [896930e](https://github.com/mstallone/runway/commit/896930e3553011aea2b3470e165c1d830eae6bc6) Remove repository-owned security CLI usage (#94) by @mstallone
+
 ## v0.8.8
 
 ### Bug Fixes
