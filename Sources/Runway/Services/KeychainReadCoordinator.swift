@@ -353,10 +353,16 @@ final class KeychainReadCoordinator: @unchecked Sendable {
 
     /// `true` when the last failed read of this item was an ACL denial, `false` when the keychain
     /// was unreadable, `nil` when no failure has been seen.
+    ///
+    /// The category describes a FAILED outcome, so it only answers while the item's stored outcome
+    /// is a failure. Categories are recorded by the read itself, without the sequence check that
+    /// guards the cache, so an older read finishing after a newer recovery can leave one behind —
+    /// this keeps that stale verdict from outliving the failure it described.
     func lastFailureWasPermissionDenied(service: String, account: String?) -> Bool? {
         let key = Key(service: service, account: account)
         condition.lock()
         defer { condition.unlock() }
+        guard entries[key]?.tripped == true else { return nil }
         return lastFailureDenied[key]
     }
 

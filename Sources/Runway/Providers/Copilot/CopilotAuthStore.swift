@@ -8,6 +8,8 @@ struct CopilotToken: Hashable, Sendable {
 enum CopilotAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case tokenInvalid
+    case keychainPermissionRequired
+    case credentialStoreUnreadable
 
     var errorDescription: String? {
         switch self {
@@ -15,7 +17,38 @@ enum CopilotAuthError: Error, LocalizedError, Equatable {
             return "Sign in to GitHub Copilot in your editor, or run gh auth login, and try again."
         case .tokenInvalid:
             return "GitHub token invalid or expired. Re-authenticate (gh auth login) and try again."
+        case .keychainPermissionRequired:
+            return "GitHub login found in Keychain. Refresh manually and choose Always Allow to connect it."
+        case .credentialStoreUnreadable:
+            return "GitHub login couldn’t be read. Unlock your login keychain and refresh."
         }
+    }
+}
+
+/// Billing candidates plus why the *preferred* GitHub CLI credential was unusable, when that is
+/// a Keychain problem. Without it an org-managed card falls back to an editor token that usually
+/// lacks billing scopes and reports "you need billing access", when the actionable truth is that
+/// an existing credential can be approved — or that the keychain simply couldn't be read.
+struct CopilotBillingCandidates: Sendable {
+    var tokens: [CopilotToken]
+    var keychainError: CopilotAuthError?
+}
+
+/// Outcome of a credential load. `keychainPermissionRequired` means a gh Keychain item exists but
+/// Runway isn't authorized to read it prompt-free yet — a real login footprint that only an explicit
+/// manual refresh may convert into access.
+enum CopilotCredentialLoad: Equatable, Sendable {
+    case token(CopilotToken)
+    case keychainPermissionRequired
+    /// The item could not be read for a reason approval cannot fix — a locked login keychain, or
+    /// securityd failing. Kept apart from `keychainPermissionRequired` so the card gives advice
+    /// that works.
+    case unreadable
+    case none
+
+    var token: CopilotToken? {
+        guard case .token(let token) = self else { return nil }
+        return token
     }
 }
 
@@ -44,20 +77,52 @@ struct CopilotAuthStore: Sendable {
     }
 
     /// First non-empty source wins. Blocking (Keychain) — call off the main actor.
-    func loadToken() -> CopilotToken? {
-        loadFromEditorConfig() ?? loadFromGhConfig() ?? loadFromGhKeychain()
+    /// `allowKeychainInteraction` is true only for a manual refresh: that read may raise the macOS
+    /// approval prompt once, for Runway itself; automatic refreshes and launch detection never
+    /// prompt.
+    func loadCredentials(allowKeychainInteraction: Bool = false) -> CopilotCredentialLoad {
+        if let token = loadFromEditorConfig() ?? loadFromGhConfig() {
+            return .token(token)
+        }
+        return loadFromGhKeychain(allowKeychainInteraction: allowKeychainInteraction)
     }
 
     /// Tokens suitable for public GitHub billing APIs, with the GitHub CLI credential first.
     /// Editor OAuth tokens remain useful fallbacks, but commonly have only the private Copilot
     /// endpoint's permissions. Blocking (Keychain) — call off the main actor.
-    func loadBillingTokenCandidates(usageToken: CopilotToken) -> [CopilotToken] {
-        let ghToken = loadFromGhConfig() ?? loadFromGhKeychain()
+    ///
+    /// The Keychain lookup is prompt-free first: when the usage token itself just came from an
+    /// approved manual Keychain read, the coordinator's cache serves the same value here without a
+    /// second prompt. Only a manual refresh may then fall through to one interactive read — the
+    /// editor-token-plus-protected-gh-item setup, where billing is the FIRST Keychain touch and
+    /// would otherwise be impossible to approve at all.
+    func loadBillingTokenCandidates(
+        usageToken: CopilotToken,
+        allowKeychainInteraction: Bool = false
+    ) -> CopilotBillingCandidates {
+        var ghToken = loadFromGhConfig()
+        var keychainError: CopilotAuthError?
+        if ghToken == nil {
+            var load = loadFromGhKeychain()
+            // Retry BOTH unreadable outcomes when the user is watching. An earlier automatic read
+            // can leave the item circuit-broken for 15 minutes, so a manual refresh right after the
+            // user unlocks their keychain would otherwise keep reporting the stale failure.
+            if load == .keychainPermissionRequired || load == .unreadable, allowKeychainInteraction {
+                load = loadFromGhKeychain(allowKeychainInteraction: true)
+            }
+            switch load {
+            case .keychainPermissionRequired: keychainError = .keychainPermissionRequired
+            case .unreadable: keychainError = .credentialStoreUnreadable
+            case .token, .none: keychainError = nil
+            }
+            ghToken = load.token
+        }
         var seen: Set<CopilotToken> = []
-        return [ghToken, usageToken].compactMap { token in
+        let tokens = [ghToken, usageToken].compactMap { (token: CopilotToken?) -> CopilotToken? in
             guard let token, seen.insert(token).inserted else { return nil }
             return token
         }
+        return CopilotBillingCandidates(tokens: tokens, keychainError: keychainError)
     }
 
     // MARK: - Sources
@@ -85,23 +150,108 @@ struct CopilotAuthStore: Sendable {
         return CopilotToken(value: token)
     }
 
-    func loadFromGhKeychain() -> CopilotToken? {
-        guard let raw = readGhKeychainRaw(),
-              let token = ProviderParse.unwrapGoKeyring(raw)
-        else {
-            return nil
+    /// `gh` stores its Keychain item under the GitHub username as the account. Read it scoped to that
+    /// account when we can recover it from hosts.yml; otherwise fall back to a service-only lookup.
+    /// Both reads are in-process — never the `/usr/bin/security` subprocess, whose prompts authorize
+    /// the helper binary instead of Runway and fueled the 2026-08-03 prompt loop.
+    func loadFromGhKeychain(allowKeychainInteraction: Bool = false) -> CopilotCredentialLoad {
+        let account = ghUsername()
+        guard allowKeychainInteraction else {
+            if let account {
+                switch keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService, account: account) {
+                case .value(let raw):
+                    return credentialLoad(fromKeychainRaw: raw)
+                case .unavailable:
+                    // The intended account's item is protected (or the keychain can't be checked).
+                    // Never broaden to the account-less query from here — with several
+                    // `gh:github.com` items it could silently select another account's token.
+                    // Broadening is allowed only when the scoped item provably does not exist.
+                    switch keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService, account: account) {
+                    case true?:
+                        return .keychainPermissionRequired
+                    case false?:
+                        return .unreadable
+                    case nil:
+                        // No verdict recorded: UI-gate contention leaves none by design, and the
+                        // probe behind that same gate answers nil too. The item was never examined,
+                        // so report it unreadable rather than asking to approve an item that may
+                        // already be authorized. A probe that proves absence still falls through.
+                        switch keychain.genericPasswordExists(service: Self.ghKeychainService, account: account) {
+                        case true?: return .keychainPermissionRequired
+                        case nil: return .unreadable
+                        case false?: break
+                        }
+                    }
+                case .missing:
+                    break
+                }
+            }
+            switch keychain.readGenericPasswordWithoutUserInteraction(service: Self.ghKeychainService) {
+            case .value(let raw):
+                return credentialLoad(fromKeychainRaw: raw)
+            case .missing:
+                return .none
+            case .unavailable:
+                // An existing-but-unreadable item is a real login footprint (`hasLocalCredentials`
+                // must see it); only a manual refresh may convert it into access. The existence
+                // probe is attributes-only and prompt-free, and `nil` from it means "cannot check"
+                // (locked keychain, suppressed UI, stuck flight) — never "absent", which would
+                // report a real login as logged-out.
+                switch keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService) {
+                case true?:
+                    return .keychainPermissionRequired
+                case false?:
+                    return .unreadable
+                case nil:
+                    // No verdict and an indeterminate probe means the item was never examined —
+                    // unreadable, not unapproved. A confirmed-present item still asks for approval,
+                    // and only a confirmed-absent one reports no credential.
+                    switch keychain.genericPasswordExists(service: Self.ghKeychainService) {
+                    case true?: return .keychainPermissionRequired
+                    case nil: return .unreadable
+                    case false?: return .none
+                    }
+                }
+            }
         }
-        return CopilotToken(value: token)
+        // Manual refresh: may raise the approval prompt, once, for Runway itself. A denial is
+        // reported as still-needing-permission and deliberately NOT retried through the broader
+        // service-only lookup — that would just repeat the same prompt.
+        if let account {
+            do {
+                if let raw = try keychain.readGenericPasswordAllowingUserInteraction(
+                    service: Self.ghKeychainService, account: account
+                ) {
+                    return credentialLoad(fromKeychainRaw: raw)
+                }
+            } catch {
+                return interactiveFailureLoad(account: account)
+            }
+        }
+        do {
+            guard let raw = try keychain.readGenericPasswordAllowingUserInteraction(service: Self.ghKeychainService) else {
+                return .none
+            }
+            return credentialLoad(fromKeychainRaw: raw)
+        } catch {
+            return interactiveFailureLoad(account: nil)
+        }
     }
 
-    private func readGhKeychainRaw() -> String? {
-        // `gh` stores its Keychain item under the GitHub username as the account. Read it scoped to that
-        // account when we can recover it from hosts.yml; otherwise fall back to a service-only lookup.
-        if let account = ghUsername(),
-           let raw = try? keychain.readGenericPassword(service: Self.ghKeychainService, account: account) {
-            return raw
-        }
-        return try? keychain.readGenericPassword(service: Self.ghKeychainService)
+    /// A failed interactive read is a denial only when the read's own status said so. A locked
+    /// keychain or a wedged UI gate reaches the same catch, and approval cannot fix either.
+    private func interactiveFailureLoad(account: String?) -> CopilotCredentialLoad {
+        let denied = account.map { keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService, account: $0) }
+            ?? keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService)
+        // Only a recorded ACL denial asks for approval. No verdict at all means the read never
+        // reached one — UI-gate contention leaves no category by design — and telling the user to
+        // choose Always Allow for an item that was never examined is wrong advice.
+        return denied == true ? .keychainPermissionRequired : .unreadable
+    }
+
+    private func credentialLoad(fromKeychainRaw raw: String) -> CopilotCredentialLoad {
+        guard let token = ProviderParse.unwrapGoKeyring(raw) else { return .none }
+        return .token(CopilotToken(value: token))
     }
 
     private func ghUsername() -> String? {

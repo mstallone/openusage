@@ -96,9 +96,11 @@ final class AntigravityProvider: ProviderRuntime {
     }
 
     private func probe() async throws -> StrategyResult {
-        // A manual refresh (⌘R) bypasses the cooldown: the documented recovery flow is "start
-        // Antigravity, then refresh", and that must probe immediately.
-        let skipProcessScan = !ProviderRefreshContext.isManual && lastNoProcessProbe.map {
+        // A forced refresh (⌘R or `runway --force`) bypasses the cooldown: the documented recovery
+        // flow is "start Antigravity, then refresh", and that must probe immediately. This keys off
+        // `isForced`, not `isManual` — the CLI forces without being able to prompt, and it still
+        // deserves a fresh process scan.
+        let skipProcessScan = !ProviderRefreshContext.isForced && lastNoProcessProbe.map {
             now().timeIntervalSince($0) < Self.noProcessProbeCooldown
         } ?? false
         if !skipProcessScan {
@@ -217,7 +219,12 @@ final class AntigravityProvider: ProviderRuntime {
 
     private func probeCloudCode() async throws -> StrategyResult {
         let authStore = self.authStore
-        let keychainToken = try await loadOffMainActor { try authStore.loadKeychainToken() }
+        // A manual refresh may raise the Keychain approval prompt (once, for Runway itself);
+        // automatic refreshes stay prompt-free.
+        let allowInteraction = ProviderRefreshContext.isManual
+        let keychainToken = try await loadOffMainActor {
+            try authStore.loadKeychainToken(allowKeychainInteraction: allowInteraction)
+        }
 
         guard let keychainToken else {
             // Proven logout invalidates the derived cache. A Keychain read failure throws above and

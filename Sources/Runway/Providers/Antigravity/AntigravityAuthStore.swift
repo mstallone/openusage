@@ -34,17 +34,56 @@ struct AntigravityAuthStore: Sendable {
         self.now = now
     }
 
-    /// Blocking keychain read — call off the main actor.
-    func loadKeychainToken() throws -> AntigravityKeychainToken? {
+    /// Blocking keychain read — call off the main actor. Reads are in-process, never the
+    /// `/usr/bin/security` subprocess: automatic refreshes use the prompt-free form, and only a
+    /// manual refresh (`allowKeychainInteraction`) may raise the approval prompt — once, for Runway
+    /// itself.
+    func loadKeychainToken(allowKeychainInteraction: Bool = false) throws -> AntigravityKeychainToken? {
         let raw: String?
-        do {
-            raw = try keychain.readGenericPassword(
+        if allowKeychainInteraction {
+            do {
+                raw = try keychain.readGenericPasswordAllowingUserInteraction(
+                    service: Self.keychainService,
+                    account: Self.keychainAccount
+                )
+            } catch {
+                // The user just answered the dialog, so a denial here is the clearest ACL evidence
+                // there is — same verdict the automatic branch below consults. Telling them to
+                // unlock the keychain after they cancelled the prompt would be the wrong fix.
+                if keychain.lastReadWasPermissionDenied(
+                    service: Self.keychainService,
+                    account: Self.keychainAccount
+                ) == true {
+                    AppLog.error(LogTag.auth("antigravity"), "keychain approval was not granted; refresh manually to approve access")
+                    throw AntigravityError.keychainPermissionRequired
+                }
+                AppLog.error(LogTag.auth("antigravity"), "keychain credential read failed")
+                throw AntigravityError.credentialStoreUnreadable
+            }
+        } else {
+            switch keychain.readGenericPasswordWithoutUserInteraction(
                 service: Self.keychainService,
                 account: Self.keychainAccount
-            )
-        } catch {
-            AppLog.error(LogTag.auth("antigravity"), "keychain credential read failed")
-            throw AntigravityError.credentialStoreUnreadable
+            ) {
+            case .value(let value):
+                raw = value
+            case .missing:
+                raw = nil
+            case .unavailable:
+                // Two different failures arrive as `.unavailable`, and they need opposite advice.
+                // The read's own status told them apart, and that verdict is remembered per item —
+                // a follow-up probe could not answer this, because the failed read trips the
+                // item's breaker and later probes are then answered locally.
+                if keychain.lastReadWasPermissionDenied(
+                    service: Self.keychainService,
+                    account: Self.keychainAccount
+                ) == true {
+                    AppLog.error(LogTag.auth("antigravity"), "keychain credential not approved for Runway; refresh manually to approve access")
+                    throw AntigravityError.keychainPermissionRequired
+                }
+                AppLog.error(LogTag.auth("antigravity"), "keychain credential could not be read; the keychain may be locked")
+                throw AntigravityError.credentialStoreUnreadable
+            }
         }
         guard let raw else { return nil }
         guard let token = Self.extractToken(fromKeychainRaw: raw) else {

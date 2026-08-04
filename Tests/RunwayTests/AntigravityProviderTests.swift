@@ -262,6 +262,42 @@ final class AntigravityProviderTests: XCTestCase {
         XCTAssertEqual(AntigravityAuthStore.extractToken(fromKeychainRaw: "rawtoken")?.accessToken, "rawtoken")
     }
 
+    func testAutomaticKeychainLoadIsPromptFreeAndManualLoadMayPrompt() throws {
+        // Automatic refreshes and launch detection must never touch a prompt-capable Keychain path;
+        // only a manual refresh may use the interactive read (one prompt, for Runway itself).
+        let keychain = ReadModeTrackingKeychain(value: "rawtoken")
+        let store = AntigravityAuthStore(keychain: keychain, files: FakeFiles())
+
+        XCTAssertEqual(try store.loadKeychainToken()?.accessToken, "rawtoken")
+        XCTAssertEqual(keychain.interactiveReads, 0)
+        XCTAssertEqual(keychain.nonInteractiveReads, 1)
+        XCTAssertEqual(keychain.plainReads, 0, "the subprocess-style read path must not be used")
+
+        XCTAssertEqual(try store.loadKeychainToken(allowKeychainInteraction: true)?.accessToken, "rawtoken")
+        XCTAssertEqual(keychain.interactiveReads, 1)
+        XCTAssertEqual(keychain.plainReads, 0)
+    }
+
+    func testLockedKeychainSaysUnlockRatherThanApprove() {
+        // An inconclusive existence probe means the keychain itself couldn't be read. Telling the
+        // user to choose Always Allow there is wrong advice — there is nothing to approve yet.
+        let store = AntigravityAuthStore(keychain: IndeterminateAntigravityKeychain(), files: FakeFiles())
+
+        XCTAssertThrowsError(try store.loadKeychainToken()) { error in
+            XCTAssertEqual(error as? AntigravityError, .credentialStoreUnreadable)
+        }
+    }
+
+    func testUnavailableKeychainAsksForApprovalWithoutFallingBackToAPrompt() {
+        // An item Runway isn't authorized to read yet surfaces the permission-specific error — not
+        // "unlock Keychain or sign in again", which fixes neither — and must not prompt on its own.
+        let store = AntigravityAuthStore(keychain: UnavailableKeychain(), files: FakeFiles())
+
+        XCTAssertThrowsError(try store.loadKeychainToken()) { error in
+            XCTAssertEqual(error as? AntigravityError, .keychainPermissionRequired)
+        }
+    }
+
     func testLoadCachedTokenAppliesRefreshBuffer() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         func store(expiresInSeconds: Double) -> AntigravityAuthStore {
@@ -466,5 +502,38 @@ private final class Counter: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         defer { value += 1 }
         return value
+    }
+}
+
+/// A Keychain whose non-interactive reads report `.unavailable` while the attributes-only probe
+/// still confirms the item — "present, but this app isn't approved for it yet".
+private final class UnavailableKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        true
+    }
+}
+
+/// Reads are unavailable and the failure was NOT an ACL denial — the locked-keychain shape.
+private final class IndeterminateAntigravityKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        false
     }
 }

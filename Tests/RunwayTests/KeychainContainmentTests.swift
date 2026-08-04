@@ -269,6 +269,33 @@ final class KeychainFailureCategoryTests: XCTestCase {
         )
         XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), false)
     }
+
+    func testAStaleCategoryCannotOutliveTheFailureItDescribed() {
+        // A category belongs to the read that observed the status, and travels with that read's
+        // sequenced outcome. A stale read's verdict must never be reported as the item's current
+        // one once a newer read has recovered it.
+        let coordinator = KeychainReadCoordinator()
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-1" },
+            read: { ticket in
+                coordinator.recordFailureCategory(ticket, permissionDenied: true)
+                return NonInteractiveKeychainRead.unavailable
+            }
+        )
+        XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), true)
+
+        // The user approves; the interactive read clears the breaker (a background read would be
+        // answered locally by it and never reach Security at all). The recovery clears the category
+        // along with the failure it described.
+        _ = try? coordinator.interactiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-2" },
+            read: { _ in "approved-secret" }
+        )
+        XCTAssertNil(
+            coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"),
+            "a recovered item has no failure to describe"
+        )
+    }
 }
 
 /// UI-gate contention is not evidence about the item that was skipped.

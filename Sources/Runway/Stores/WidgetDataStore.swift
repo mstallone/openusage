@@ -209,9 +209,12 @@ final class WidgetDataStore {
     /// Refresh every enabled provider, concurrently — one slow provider never delays the rest.
     /// Everything stays MainActor-isolated; the overlap happens at the network awaits inside each
     /// provider, and the per-provider in-flight guard in `refresh` still prevents duplicate fetches.
-    /// `force` bypasses the snapshot cache (the manual "refresh now" path); the periodic loop keeps
-    /// honoring it.
-    func refreshAll(force: Bool = false) async {
+    /// `force` bypasses the snapshot cache; `interactive` marks a user-attended GUI action, the only
+    /// context in which a provider may raise a Keychain approval prompt. The two are deliberately
+    /// separate: the CLI and automated retries force past caches without a user present, so they
+    /// must never unlock credential UI (a prompt from the CLI helper would also authorize the wrong
+    /// binary).
+    func refreshAll(force: Bool = false, interactive: Bool = false) async {
         // `Task {}` from MainActor context inherits the isolation (a task-group child can't capture
         // the non-Sendable store), so: fire one task per provider, then await them all.
         let providerIDs = registry.providers.map(\.id).filter { isProviderEnabled($0) }
@@ -222,7 +225,7 @@ final class WidgetDataStore {
         // both to a single batch-end rebuild + persist.
         snapshotRebuildDeferrals += 1
         let tasks = providerIDs.map { providerID in
-            Task { await self.refresh(providerID: providerID, force: force, notifyStateChange: false) }
+            Task { await self.refresh(providerID: providerID, force: force, interactive: interactive, notifyStateChange: false) }
         }
         var outcomes: [RefreshOutcome] = []
         outcomes.reserveCapacity(tasks.count)
@@ -318,6 +321,7 @@ final class WidgetDataStore {
     func refresh(
         providerID: String,
         force: Bool = false,
+        interactive: Bool = false,
         notifyStateChange: Bool = true
     ) async -> RefreshOutcome {
         guard isProviderEnabled(providerID) else { return .skipped }
@@ -377,9 +381,11 @@ final class WidgetDataStore {
         let timedOutSnapshot: ProviderSnapshot? = await withCheckedContinuation { continuation in
             final class RaceState { var resumed = false; var watchdog: Task<Void, Never>? }
             let state = RaceState()
-            let refreshTask = Task { [force] in
-                let snapshot = await ProviderRefreshContext.$isManual.withValue(force) {
-                    await provider.refresh()
+            let refreshTask = Task { [force, interactive] in
+                let snapshot = await ProviderRefreshContext.$isForced.withValue(force) {
+                    await ProviderRefreshContext.$isManual.withValue(interactive) {
+                        await provider.refresh()
+                    }
                 }
                 guard !state.resumed else {
                     // Lost the race: this straggler just exited, so the runtime is idle again —

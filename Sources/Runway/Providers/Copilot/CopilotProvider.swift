@@ -80,13 +80,29 @@ final class CopilotProvider: ProviderRuntime {
     }
 
     func hasLocalCredentials() async -> Bool {
-        // Same source as `refresh()`: editor config, gh config, or the gh keychain entry.
-        await loadOffMainActor { [authStore] in authStore.loadToken() } != nil
+        // Same sources as `refresh()`: editor config, gh config, or the gh keychain entry. A
+        // protected keychain item counts — it is a real login even though only a manual refresh may
+        // ask the user to approve reading it.
+        await loadOffMainActor { [authStore] in authStore.loadCredentials() } != .none
     }
 
     func refresh() async -> ProviderSnapshot {
-        let token = await loadOffMainActor { [authStore] in authStore.loadToken() }
-        guard let token else {
+        // A manual refresh may raise the Keychain approval prompt (once, for Runway itself);
+        // automatic refreshes stay prompt-free.
+        let allowInteraction = ProviderRefreshContext.isManual
+        let load = await loadOffMainActor { [authStore] in
+            authStore.loadCredentials(allowKeychainInteraction: allowInteraction)
+        }
+        let token: CopilotToken
+        switch load {
+        case .token(let loaded):
+            token = loaded
+        case .keychainPermissionRequired:
+            return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.keychainPermissionRequired)
+        case .unreadable:
+            // Approval cannot fix a locked keychain or a failing securityd, so don't ask for it.
+            return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.credentialStoreUnreadable)
+        case .none:
             return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.notLoggedIn)
         }
 
@@ -112,12 +128,20 @@ final class CopilotProvider: ProviderRuntime {
                 // only when Copilot named the seat org; otherwise `/user/orgs` must stay tied to the
                 // same credential that produced this Copilot card.
                 let billingTokens: [CopilotToken]
+                // Set when the preferred GitHub CLI credential exists but is not approved yet, so a
+                // failed billing lookup can name the real fix instead of blaming billing access.
+                var billingKeychainError: CopilotAuthError?
                 if mapped.organizationLogins.isEmpty {
                     billingTokens = [token]
                 } else {
-                    billingTokens = await loadOffMainActor { [authStore] in
-                        authStore.loadBillingTokenCandidates(usageToken: token)
+                    let candidates = await loadOffMainActor { [authStore] in
+                        authStore.loadBillingTokenCandidates(
+                            usageToken: token,
+                            allowKeychainInteraction: allowInteraction
+                        )
                     }
+                    billingTokens = candidates.tokens
+                    billingKeychainError = candidates.keychainError
                 }
                 switch await orgBillingLookup(
                     tokens: billingTokens,
@@ -133,6 +157,12 @@ final class CopilotProvider: ProviderRuntime {
                     // aggregation above.
                     lines = usageLines
                 case .managed:
+                    // An unusable GitHub CLI credential is the likely reason billing could not
+                    // be read; telling the user to obtain billing access would send them down the
+                    // wrong path. Report which Keychain problem it actually was.
+                    if let billingKeychainError {
+                        return ProviderSnapshot.error(provider: provider, error: billingKeychainError)
+                    }
                     lines = [
                         .badge(
                             label: "Organization Usage",

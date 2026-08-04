@@ -87,7 +87,7 @@ struct WidgetGroupedListView: View {
             }
             Divider()
             Button("Refresh \(name)") {
-                Task { await dataStore.refresh(providerID: group.provider.id, force: true) }
+                Task { await dataStore.refresh(providerID: group.provider.id, force: true, interactive: true) }
             }
             // Renaming needs an account record to write to, so it only shows on account-model cards
             // whose identity has been observed at least once.
@@ -201,7 +201,7 @@ struct WidgetGroupedListView: View {
             onRefresh: {
                 // The explicit user action that may legitimately show a Keychain approval prompt —
                 // the same forced refresh the header and row context menus carry.
-                Task { await dataStore.refresh(providerID: providerID, force: true) }
+                Task { await dataStore.refresh(providerID: providerID, force: true, interactive: true) }
             }
         )
     }
@@ -380,7 +380,7 @@ struct WidgetGroupedListView: View {
         Divider()
         if let provider = layout.provider(id: providerID) {
             Button("Refresh \(container.displayName(for: provider))") {
-                Task { await dataStore.refresh(providerID: providerID, force: true) }
+                Task { await dataStore.refresh(providerID: providerID, force: true, interactive: true) }
             }
         }
         Button("Customize…") {
