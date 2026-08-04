@@ -268,6 +268,66 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         XCTAssertNil(try store.migrateLegacyDeviceID())
     }
 
+    func testAReadableButInvalidStoredIDNeverMintsAReplacement() async throws {
+        // A stored value that is readable text but not a UUID is a CORRUPT identity, not an absent
+        // one. Normalizing it to nil would look identical to a fresh install, so a new id would be
+        // minted and a second record published for a Mac that already has one.
+        let defaults = makeDefaults("invalid-stored-device-id")
+        let owned = InMemoryOwnedSecretStore()
+        owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"] = "not-a-uuid"
+        let cloudStore = RecordingUsageCloudStore()
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: KeychainICloudDeviceIDStore(
+                ownedStore: owned,
+                legacyKeychain: ProbeOnlyKeychain(),
+                bundleIdentifier: "com.mattstallone.runway"
+            ),
+            pollInterval: nil
+        )
+
+        try await Task.sleep(for: .milliseconds(120))
+
+        XCTAssertNotNil(sync.serviceError, "a corrupt identity must be reported, not silently replaced")
+        XCTAssertNil(
+            defaults.string(forKey: "runway.icloudSync.deviceID.v1"),
+            "no replacement identity may be persisted"
+        )
+        let writes = await cloudStore.writeCount
+        XCTAssertEqual(writes, 0, "and nothing may be published under a minted id")
+        XCTAssertEqual(owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"], "not-a-uuid")
+    }
+
+    func testAnUndecodableOwnedValueIsAReadFailureNotAnAbsentItem() throws {
+        // The owned store must surface a present-but-undecodable item as an error. Returning nil
+        // would put the store on the same "fresh install" path as a genuinely missing item.
+        let store = RunwayOwnedKeychainStore()
+        let service = "RunwayTests.owned.invalid.\(UUID().uuidString)"
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "runway",
+            kSecValueData as String: Data([0xFF, 0xFE, 0xFD]),
+        ]
+        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else {
+            throw XCTSkip("cannot create a login-keychain item in this environment")
+        }
+        defer {
+            _ = SecItemDelete([
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+            ] as CFDictionary)
+        }
+
+        XCTAssertThrowsError(try store.read(service: service)) { error in
+            guard case KeychainError.readFailed = error else {
+                return XCTFail("expected KeychainError.readFailed, got \(error)")
+            }
+        }
+    }
+
     func testMissingDeviceIDReadsNilWithoutInventingAnIdentity() throws {
         let store = KeychainICloudDeviceIDStore(
             ownedStore: InMemoryOwnedSecretStore(),
