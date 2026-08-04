@@ -86,10 +86,21 @@ final class CursorProvider: ProviderRuntime {
             // The selected token lapsed or was rejected server-side. Runway never refreshes it, but
             // Cursor's app and its `agent` CLI keep separate copies — try a live one for the SAME
             // account once before telling the user to sign in again.
-            let alternative = await loadOffMainActor { [authStore] in
+            let alternativeLoad = await loadOffMainActor { [authStore] in
                 authStore.sameAccountAlternative(to: state, allowKeychainInteraction: allowInteraction)
             }
-            guard let alternative else {
+            let alternative: CursorAuthState
+            switch alternativeLoad {
+            case .state(let candidate):
+                alternative = candidate
+            case .keychainPermissionRequired:
+                // The live credential may be the one Runway can't read yet — say so instead of
+                // sending the user to sign in again.
+                return ProviderSnapshot.error(
+                    provider: provider,
+                    error: CursorAuthError.keychainPermissionRequired
+                )
+            case .none:
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
             AppLog.info(LogTag.auth("cursor"), "selected token rejected; retrying this account's other local credential")

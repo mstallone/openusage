@@ -487,3 +487,37 @@ private final class FakeSQLite: SQLiteAccessing, @unchecked Sendable {
 
     func queryJSONRows(path: String, sql: String) throws -> String? { nil }
 }
+
+@MainActor
+final class CursorProtectedAlternativeTests: XCTestCase {
+    func testRejectedTokenWithAProtectedAlternativeAsksForApproval() async {
+        // The unexpired SQLite token was rejected server-side and the same-account agent token sits
+        // behind an unapproved ACL. The live credential may be exactly the one Runway can't read,
+        // so the card must ask for approval rather than telling the user to sign in again.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let revoked = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
+        let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(
+                sqlite: FakeSQLite(values: [
+                    CursorAuthStore.accessTokenKey: revoked,
+                    CursorAuthStore.membershipTypeKey: "pro"
+                ]),
+                keychain: UnavailableCursorKeychain(),
+                now: { now }
+            ),
+            usageClient: CursorUsageClient(http: http),
+            now: { now }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(
+            snapshot.lines.compactMap { line -> String? in
+                guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+                return text
+            }.first,
+            CursorAuthError.keychainPermissionRequired.localizedDescription
+        )
+    }
+}

@@ -159,18 +159,25 @@ struct CursorAuthStore: Sendable {
     func sameAccountAlternative(
         to state: CursorAuthState,
         allowKeychainInteraction: Bool = false
-    ) -> CursorAuthState? {
+    ) -> CursorCredentialLoad {
         guard let current = state.accessToken, let subject = Self.tokenSubject(current) else {
-            return nil
+            return .none
         }
         let candidate: String?
         let source: CursorAuthState.Source
         switch state.source {
         case .sqlite:
-            candidate = readKeychainValue(
+            let read = readKeychainValue(
                 Self.keychainAccessTokenService,
                 allowInteraction: allowKeychainInteraction
-            ).trimmedValue
+            )
+            // An unreadable alternative is NOT "no alternative": the rejected selection may well be
+            // dead while this protected item holds the live token, so ask for approval rather than
+            // telling the user to sign in again.
+            if protectedItemExists(read, service: Self.keychainAccessTokenService) {
+                return .keychainPermissionRequired
+            }
+            candidate = read.trimmedValue
             source = .keychain
         case .keychain:
             candidate = readStateValues([Self.accessTokenKey])[Self.accessTokenKey]
@@ -181,9 +188,9 @@ struct CursorAuthStore: Sendable {
               Self.tokenSubject(candidate) == subject,
               !isExpired(candidate)
         else {
-            return nil
+            return .none
         }
-        return CursorAuthState(accessToken: candidate, source: source)
+        return .state(CursorAuthState(accessToken: candidate, source: source))
     }
 
     /// `nil` from the probe means "cannot check" (locked keychain, stuck flight), not "absent" —
