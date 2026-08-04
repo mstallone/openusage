@@ -275,28 +275,6 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         XCTAssertEqual(fixture.keyReader.calls, [false])
     }
 
-    func testDesktopCredentialsAreNeverSaved() throws {
-        let files = FakeFiles()
-        let keychain = FakeKeychain()
-        let fixture = try makeFixture(
-            activeOrganization: organization,
-            v2: [cacheKey(organization: organization): tokenEntry("desktop-token", expiresIn: 3_600)]
-        )
-        let now = now
-        let authStore = ClaudeAuthStore(
-            environment: FakeEnvironment(),
-            files: files,
-            keychain: keychain,
-            desktop: fixture.store,
-            now: { now }
-        )
-        let state = authStore.loadCredentialCandidates().first!
-
-        XCTAssertFalse(try authStore.save(state, ifUnchanged: ClaudeCredentialGeneration([state])))
-        XCTAssertTrue(files.files.isEmpty)
-        XCTAssertNil(keychain.value)
-    }
-
     @MainActor
     func testDesktop401NeverAttemptsRefreshTokenExchange() async throws {
         let fixture = try makeFixture(
@@ -326,8 +304,44 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             await provider.refresh()
         }
 
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.desktopTokenExpired.localizedDescription)
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.desktopTokenExpired.localizedDescription)
         XCTAssertEqual(httpClient.requests.count, 1)
+    }
+
+    @MainActor
+    func testStaleDesktopOnlyLoginDegradesToRenewalNoticeNotAnError() async throws {
+        // A Desktop-only user whose cached token lapsed gets the same renewal treatment as a lapsed
+        // CLI login: an amber warning over the (still-working) local tiles, not a hard error card.
+        // The stale Desktop loader yields no credential state, so there is no plan badge to show.
+        let fixture = try makeFixture(
+            activeOrganization: organization,
+            v2: [cacheKey(organization: organization): tokenEntry("expired-desktop", expiresIn: -1)]
+        )
+        let now = now
+        let httpClient = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: FakeEnvironment(),
+                files: fixture.files,
+                keychain: FakeKeychain(),
+                desktop: fixture.store,
+                now: { now }
+            ),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            now: { now },
+            pricing: { TestPricing.bundled }
+        )
+
+        let snapshot = await ProviderRefreshContext.$isManual.withValue(true) {
+            await provider.refresh()
+        }
+
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.desktopTokenExpired.localizedDescription)
+        XCTAssertNil(snapshot.plan)
+        XCTAssertTrue(httpClient.requests.isEmpty)
     }
 
     @MainActor
@@ -449,7 +463,8 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             await provider.refresh()
         }
 
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.tokenExpired.localizedDescription)
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.loginRenewalRequired.localizedDescription)
         XCTAssertEqual(httpClient.requests.count, 1)
     }
 

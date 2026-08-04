@@ -36,13 +36,11 @@ struct ClaudeCredentialState: Hashable, Sendable {
 
     var oauth: ClaudeOAuth
     var source: Source
-    var fullData: ClaudeCredentialsFile?
     var inferenceOnly: Bool
     /// The account's CURRENT plan family and rate-limit tier from Claude Code's state file
     /// (`.claude.json`), when the scope has one. The credential blob's copies are written at login and
     /// never updated on a plan change, so after an upgrade the blob keeps saying e.g. `…_5x` (or `pro`)
-    /// while the profile Claude Code refetches regularly says `…_20x` (`claude_max`). Display-only —
-    /// `save()` never writes either back into the blob.
+    /// while the profile Claude Code refetches regularly says `…_20x` (`claude_max`).
     var profileSubscriptionType: String? = nil
     var profileRateLimitTier: String? = nil
 
@@ -70,20 +68,18 @@ struct ClaudeCredentialState: Hashable, Sendable {
     }
 
     /// A token-free, log-safe one-line descriptor for diagnosing auth failures from a default-level
-    /// (info) log: the source kind plus booleans for whether this candidate carries a refresh token and
-    /// whether its access token is already expired (`expiresAt`, epoch ms, vs `now`). NEVER includes any
-    /// token value or the credential blob — only the source kind and the two booleans. Why these two
-    /// booleans: a candidate with `refresh=no` can never self-heal an expiry (the #738 root cause), and
-    /// `expired=yes` explains why a refresh was needed at all.
+    /// (info) log: the source kind plus whether its access token is already expired (`expiresAt`,
+    /// epoch ms, vs `now`). NEVER includes any token value or the credential blob. Runway never
+    /// refreshes a Claude token, so `expired=yes` explains exactly why a candidate was skipped and
+    /// the login-renewal notice shown.
     func diagnosticsLabel(now: Date) -> String {
-        let refresh = (oauth.refreshToken?.isEmpty == false) ? "yes" : "no"
         let expired: String
         if let expiresAt = oauth.expiresAt {
             expired = expiresAt <= now.timeIntervalSince1970 * 1000 ? "yes" : "no"
         } else {
             expired = "unknown"
         }
-        return "\(source.label) refresh=\(refresh) expired=\(expired)"
+        return "\(source.label) expired=\(expired)"
     }
 }
 
@@ -109,43 +105,6 @@ enum ClaudeKeychainAccessStatus: Equatable, Sendable {
     }
 }
 
-/// Token-bearing credential candidates in their effective probe order. Environment-only inference
-/// tokens are excluded because they never fetch live usage; every stored candidate that can affect
-/// selection remains, including an earlier source that the current refresh already tried and rejected.
-struct ClaudeCredentialGeneration: Equatable, Sendable {
-    struct Candidate: Equatable, Sendable {
-        let oauth: ClaudeOAuth
-        let source: ClaudeCredentialState.Source
-
-        init(_ state: ClaudeCredentialState) {
-            oauth = state.oauth
-            source = state.source
-        }
-    }
-
-    var candidates: [Candidate]
-    var keychainAccessStatus: ClaudeKeychainAccessStatus
-
-    init(
-        _ states: [ClaudeCredentialState],
-        keychainAccessStatus: ClaudeKeychainAccessStatus = .resolved
-    ) {
-        candidates = states
-            .filter { $0.hasUsableAccessToken && !$0.inferenceOnly }
-            .map(Candidate.init)
-        self.keychainAccessStatus = keychainAccessStatus
-    }
-
-    func replacing(_ state: ClaudeCredentialState) -> Self {
-        var updated = self
-        guard let index = updated.candidates.firstIndex(where: { $0.source == state.source }) else {
-            fatalError("live usage source missing from Claude credential generation")
-        }
-        updated.candidates[index] = Candidate(state)
-        return updated
-    }
-}
-
 struct ClaudeCredentialLoad: Sendable {
     var candidates: [ClaudeCredentialState]
     var desktopStatus: ClaudeDesktopCredentialStatus
@@ -161,9 +120,7 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
     case desktopPermissionRequired
     case desktopTokenExpired
     case desktopCredentialsUnavailable
-    case sessionExpired
-    case tokenExpired
-    case credentialsChanged
+    case loginRenewalRequired
     case invalidOAuthURL(String)
 
     var errorDescription: String? {
@@ -180,12 +137,8 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
             return "Claude Desktop login is stale. Open Claude Desktop, then refresh Runway."
         case .desktopCredentialsUnavailable:
             return "Claude Desktop login couldn't be read. Open Claude Desktop, then try again."
-        case .sessionExpired:
-            return "Session expired. Run `claude` to log in again."
-        case .tokenExpired:
-            return "Token expired. Run `claude` to log in again."
-        case .credentialsChanged:
-            return "Claude login changed during refresh. Refresh again."
+        case .loginRenewalRequired:
+            return "Claude login needs renewal. Open Claude Code, then refresh Runway."
         case .invalidOAuthURL(let value):
             return "Invalid Claude OAuth URL: \(value). Check CLAUDE_CODE_CUSTOM_OAUTH_URL / CLAUDE_LOCAL_OAUTH_API_BASE."
         }
@@ -199,19 +152,26 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
     /// `CodexAuthError.allowsAuthFallback`.
     var allowsAuthFallback: Bool {
         switch self {
-        case .sessionExpired, .tokenExpired, .desktopTokenExpired:
+        case .loginRenewalRequired, .desktopTokenExpired:
             return true
         case .notLoggedIn, .codePermissionRequired, .codeCredentialsUnavailable, .desktopPermissionRequired,
-             .desktopCredentialsUnavailable, .credentialsChanged, .invalidOAuthURL:
+             .desktopCredentialsUnavailable, .invalidOAuthURL:
             return false
         }
     }
-}
 
-struct ClaudeOAuthConfig: Hashable, Sendable {
-    var usageURL: URL
-    var refreshURL: URL
-    var clientID: String
+    /// The renewal cases where Runway still has a login on file but its token has lapsed. The provider
+    /// degrades these to a header warning over the local spend tiles instead of a hard error card:
+    /// Runway is a read-only consumer of Claude's credentials, so the fix is always "open the owning
+    /// Claude app", never a Runway-side action.
+    var isLoginRenewal: Bool {
+        switch self {
+        case .loginRenewalRequired, .desktopTokenExpired:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// Which login a `ClaudeAuthStore` is allowed to see. `.standard` is the default card —
@@ -231,9 +191,6 @@ struct ClaudeAuthStore: Sendable {
     private static let credentialFileName = ".credentials.json"
     private static let keychainServicePrefix = "Claude Code"
     private static let prodBaseAPIURL = "https://api.anthropic.com"
-    private static let prodRefreshURL = "https://platform.claude.com/v1/oauth/token"
-    private static let prodClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-    private static let nonProdClientID = "22422756-60c9-4084-8eb7-27705fd5cf9a"
 
     var environment: EnvironmentReading
     var files: TextFileAccessing
@@ -326,7 +283,6 @@ struct ClaudeAuthStore: Sendable {
                 stored.insert(ClaudeCredentialState(
                     oauth: oauth,
                     source: .desktop,
-                    fullData: nil,
                     inferenceOnly: false
                 ), at: 0)
             }
@@ -399,15 +355,13 @@ struct ClaudeAuthStore: Sendable {
         // preferred — the live-capable login when there is one, else the first stored login — so the
         // fallback doesn't inherit metadata from a login we decided not to use. Source it honestly as
         // `.environment`: the token came from the env, so the refresh-start diagnostics name the real
-        // source when the loop falls back to it, and `save()` correctly no-ops instead of writing an env
-        // token back into the keychain under a borrowed source.
+        // source when the loop falls back to it.
         let base = liveCapable.first ?? stored.first
         var oauth = base?.oauth ?? ClaudeOAuth()
         oauth.accessToken = envAccessToken
         let envCandidate = ClaudeCredentialState(
             oauth: oauth,
             source: .environment,
-            fullData: base?.fullData,
             inferenceOnly: true,
             profileSubscriptionType: base?.profileSubscriptionType,
             profileRateLimitTier: base?.profileRateLimitTier
@@ -415,65 +369,11 @@ struct ClaudeAuthStore: Sendable {
         return liveCapable.isEmpty ? [envCandidate] : liveCapable + [envCandidate]
     }
 
-    func needsRefresh(_ oauth: ClaudeOAuth) -> Bool {
+    /// Whether the access token's own expiry stamp has lapsed. Runway never refreshes a Claude
+    /// token — Claude Code owns rotation — so an expired candidate is skipped, not renewed.
+    func isExpired(_ oauth: ClaudeOAuth) -> Bool {
         guard let expiresAt = oauth.expiresAt else { return false }
-        return expiresAt - now().timeIntervalSince1970 * 1000 <= 5 * 60 * 1000
-    }
-
-    func credentialGeneration(
-        allowKeychainInteraction: Bool = false,
-        forceDesktopFallback: Bool = false
-    ) -> ClaudeCredentialGeneration {
-        let load = loadCredentialSet(
-            allowKeychainInteraction: allowKeychainInteraction,
-            forceDesktopFallback: forceDesktopFallback,
-            includeProfileTier: false
-        )
-        return ClaudeCredentialGeneration(
-            load.candidates,
-            keychainAccessStatus: load.keychainAccessStatus
-        )
-    }
-
-    /// Save an OAuth rotation only if the ordered effective candidate set is unchanged. Checking the
-    /// whole generation catches a newly added higher-priority source as well as replacement in place.
-    /// The underlying stores provide no atomic compare-and-swap, so this remains best-effort.
-    func save(
-        _ state: ClaudeCredentialState,
-        ifUnchanged expected: ClaudeCredentialGeneration,
-        allowKeychainInteraction: Bool = false
-    ) throws -> Bool {
-        guard credentialGeneration(allowKeychainInteraction: allowKeychainInteraction) == expected else {
-            return false
-        }
-        var fullData = state.fullData ?? ClaudeCredentialsFile()
-        fullData.claudeAiOauth = state.oauth
-        let data = try JSONEncoder().encode(fullData)
-        guard let text = String(data: data, encoding: .utf8) else { return false }
-
-        switch state.source {
-        case .file:
-            try files.writeText(credentialsPath(), text)
-        case .keychainCurrentUser(let service):
-            try keychain.updateGenericPasswordForCurrentUser(
-                service: service,
-                value: text,
-                allowUserInteraction: allowKeychainInteraction
-            )
-        case .keychainLegacy(let service):
-            try keychain.updateGenericPassword(
-                service: service,
-                value: text,
-                allowUserInteraction: allowKeychainInteraction
-            )
-        case .desktop:
-            return false
-        case .environment:
-            return false
-        }
-        // NEVER log the credential blob/tokens — only that a rotation was persisted, and to where.
-        AppLog.debug(LogTag.auth("claude"), "persisted rotated credentials (source=\(state.source.label))")
-        return true
+        return expiresAt <= now().timeIntervalSince1970 * 1000
     }
 
     /// Why the live-usage endpoint (`/api/oauth/usage`, which backs Session / Weekly / Sonnet / Extra
@@ -507,12 +407,10 @@ struct ClaudeAuthStore: Sendable {
     }
 
     // Resolved OAuth endpoint strings before URL validation. The suffix is derived from the same
-    // env-var branching as the URLs but never depends on URL validity, so the (non-throwing) keychain
-    // candidate path can read it without risking a throw.
+    // env-var branching as the base URL but never depends on URL validity, so the (non-throwing)
+    // keychain candidate path can read it without risking a throw.
     private struct ResolvedOAuthEndpoints {
         var baseAPI: String
-        var refreshURL: String
-        var clientID: String
         var suffix: String
     }
 
@@ -522,35 +420,23 @@ struct ClaudeAuthStore: Sendable {
 
     private static func resolveOAuthEndpoints(environment: EnvironmentReading) -> ResolvedOAuthEndpoints {
         var baseAPI = Self.prodBaseAPIURL
-        var refreshURL = Self.prodRefreshURL
-        var clientID = Self.prodClientID
         var suffix = ""
 
         let isAntUser = envText(environment, "USER_TYPE") == "ant"
         if isAntUser, envFlag(environment, "USE_LOCAL_OAUTH") {
-            let base = (envText(environment, "CLAUDE_LOCAL_OAUTH_API_BASE") ?? "http://localhost:8000").trimmingTrailingSlashes
-            baseAPI = base
-            refreshURL = "\(base)/v1/oauth/token"
-            clientID = Self.nonProdClientID
+            baseAPI = (envText(environment, "CLAUDE_LOCAL_OAUTH_API_BASE") ?? "http://localhost:8000").trimmingTrailingSlashes
             suffix = "-local-oauth"
         } else if isAntUser, envFlag(environment, "USE_STAGING_OAUTH") {
             baseAPI = "https://api-staging.anthropic.com"
-            refreshURL = "https://platform.staging.ant.dev/v1/oauth/token"
-            clientID = Self.nonProdClientID
             suffix = "-staging-oauth"
         }
 
         if let custom = envText(environment, "CLAUDE_CODE_CUSTOM_OAUTH_URL") {
-            let base = custom.trimmingTrailingSlashes
-            baseAPI = base
-            refreshURL = "\(base)/v1/oauth/token"
+            baseAPI = custom.trimmingTrailingSlashes
             suffix = "-custom-oauth"
         }
-        if let override = envText(environment, "CLAUDE_CODE_OAUTH_CLIENT_ID") {
-            clientID = override
-        }
 
-        return ResolvedOAuthEndpoints(baseAPI: baseAPI, refreshURL: refreshURL, clientID: clientID, suffix: suffix)
+        return ResolvedOAuthEndpoints(baseAPI: baseAPI, suffix: suffix)
     }
 
     /// The keychain service names as this environment's Claude Code writes them — the single source
@@ -582,24 +468,16 @@ struct ClaudeAuthStore: Sendable {
         ]
     }
 
-    // baseAPI/refreshURL can derive from user-set env vars (CLAUDE_CODE_CUSTOM_OAUTH_URL,
+    // The base API can derive from user-set env vars (CLAUDE_CODE_CUSTOM_OAUTH_URL,
     // CLAUDE_LOCAL_OAUTH_API_BASE). A malformed value is a system-boundary input that must fail
     // loudly — never force-unwrap (crashes the app) and never silently fall back to prod (that hides
     // the misconfiguration and would send the user's token to production).
-    func oauthConfig() throws -> ClaudeOAuthConfig {
-        let endpoints = resolveOAuthEndpoints()
-        let usageURLString = "\(endpoints.baseAPI)/api/oauth/usage"
+    func usageEndpoint() throws -> URL {
+        let usageURLString = "\(resolveOAuthEndpoints().baseAPI)/api/oauth/usage"
         guard let usageURL = URL(string: usageURLString) else {
             throw ClaudeAuthError.invalidOAuthURL(usageURLString)
         }
-        guard let refreshURL = URL(string: endpoints.refreshURL) else {
-            throw ClaudeAuthError.invalidOAuthURL(endpoints.refreshURL)
-        }
-        return ClaudeOAuthConfig(
-            usageURL: usageURL,
-            refreshURL: refreshURL,
-            clientID: endpoints.clientID
-        )
+        return usageURL
     }
 
     func keychainServiceCandidates() -> [String] {
@@ -674,7 +552,7 @@ struct ClaudeAuthStore: Sendable {
         else {
             return nil
         }
-        return ClaudeCredentialState(oauth: oauth, source: .file, fullData: parsed, inferenceOnly: false)
+        return ClaudeCredentialState(oauth: oauth, source: .file, inferenceOnly: false)
     }
 
     private struct KeychainCredentialLoad {
@@ -779,7 +657,7 @@ struct ClaudeAuthStore: Sendable {
             return nil
         }
         AppLog.debug(.keychain, "read hit service=\(service)")
-        return ClaudeCredentialState(oauth: oauth, source: source, fullData: parsed, inferenceOnly: false)
+        return ClaudeCredentialState(oauth: oauth, source: source, inferenceOnly: false)
     }
 
     private func credentialsPath() -> String {

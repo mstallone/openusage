@@ -12,37 +12,34 @@ final class ClaudeAuthStoreTests: XCTestCase {
         XCTAssertEqual(credentials?.claudeAiOauth?.subscriptionType, "pro")
     }
 
-    func testCredentialDiagnosticsLabelIsTokenFreeWithSourceRefreshAndExpiredFlags() {
+    func testCredentialDiagnosticsLabelIsTokenFreeWithSourceAndExpiredFlag() {
         // The info-level "refresh start" / fallback diagnostics must name the source kind and whether each
-        // candidate carries a refresh token + is already expired — never any token value (#738 diagnosis).
+        // candidate is already expired — never any token value.
         let now = Date(timeIntervalSince1970: 1_000_000) // 1_000_000_000 ms
 
         let fresh = ClaudeCredentialState(
             oauth: ClaudeOAuth(accessToken: "ACCESS_SECRET", refreshToken: "REFRESH_SECRET", expiresAt: 2_000_000_000_000),
             source: .keychainCurrentUser(service: "Claude Code-credentials"),
-            fullData: nil,
             inferenceOnly: false
         )
-        XCTAssertEqual(fresh.diagnosticsLabel(now: now), "keychainCurrentUser refresh=yes expired=no")
+        XCTAssertEqual(fresh.diagnosticsLabel(now: now), "keychainCurrentUser expired=no")
         XCTAssertFalse(fresh.diagnosticsLabel(now: now).contains("SECRET")) // never leaks token values
 
-        // No refresh token + an already-expired access token: the #738 shape that can never self-heal.
+        // An already-expired access token: Runway never refreshes it, so this explains the renewal notice.
         let lockedOut = ClaudeCredentialState(
             oauth: ClaudeOAuth(accessToken: "a", refreshToken: nil, expiresAt: 1),
             source: .file,
-            fullData: nil,
             inferenceOnly: false
         )
-        XCTAssertEqual(lockedOut.diagnosticsLabel(now: now), "file refresh=no expired=yes")
+        XCTAssertEqual(lockedOut.diagnosticsLabel(now: now), "file expired=yes")
 
-        // Empty refresh token counts as absent; missing expiry is reported as unknown, not assumed fresh.
+        // Missing expiry is reported as unknown, not assumed fresh.
         let unknownExpiry = ClaudeCredentialState(
             oauth: ClaudeOAuth(accessToken: "a", refreshToken: "", expiresAt: nil),
             source: .keychainLegacy(service: "svc"),
-            fullData: nil,
             inferenceOnly: false
         )
-        XCTAssertEqual(unknownExpiry.diagnosticsLabel(now: now), "keychainLegacy refresh=no expired=unknown")
+        XCTAssertEqual(unknownExpiry.diagnosticsLabel(now: now), "keychainLegacy expired=unknown")
     }
 
     func testPrefersCurrentUserKeychainCredentialsBeforeFile() {
@@ -388,8 +385,7 @@ final class ClaudeAuthStoreTests: XCTestCase {
             ClaudeCredentialState(
                 oauth: ClaudeOAuth(accessToken: "token", scopes: scopes),
                 source: .keychainCurrentUser(service: "Claude Code-credentials"),
-                fullData: nil,
-                inferenceOnly: inferenceOnly
+                    inferenceOnly: inferenceOnly
             )
         }
 
@@ -404,7 +400,7 @@ final class ClaudeAuthStoreTests: XCTestCase {
     }
 
     func testMalformedCustomOAuthURLThrowsInsteadOfCrashing() {
-        // A malformed custom OAuth URL is system-boundary input: oauthConfig() must fail loudly
+        // A malformed custom OAuth URL is system-boundary input: usageEndpoint() must fail loudly
         // rather than force-unwrap a nil URL (which crashes) or silently fall back to prod.
         let store = ClaudeAuthStore(
             environment: FakeEnvironment(["CLAUDE_CODE_CUSTOM_OAUTH_URL": "http://exa mple.com"]),
@@ -412,7 +408,7 @@ final class ClaudeAuthStoreTests: XCTestCase {
             keychain: FakeKeychain()
         )
 
-        XCTAssertThrowsError(try store.oauthConfig()) { error in
+        XCTAssertThrowsError(try store.usageEndpoint()) { error in
             guard case ClaudeAuthError.invalidOAuthURL = error else {
                 return XCTFail("expected ClaudeAuthError.invalidOAuthURL, got \(error)")
             }
@@ -799,66 +795,17 @@ final class ClaudeProviderTests: XCTestCase {
         )
     }
 
-    func testUnreadableKeychainAppearingDuringRequestInvalidatesFileGeneration() async {
-        let keychain = AppearingUnreadableKeychain()
-        let httpClient = RoutingHTTPClient { request in
-            XCTAssertTrue(request.url.absoluteString.hasSuffix("/api/oauth/usage"))
-            keychain.makeExistenceUnknown()
-            return HTTPResponse(
-                statusCode: 200,
-                headers: [:],
-                body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
-            )
-        }
-        let provider = ClaudeProvider(
-            authStore: ClaudeAuthStore(
-                environment: FakeEnvironment(),
-                files: FakeFiles([
-                    "~/.claude/.credentials.json":
-                        #"""
-                        {"claudeAiOauth":{"accessToken":"file-token","subscriptionType":"pro","scopes":["user:profile"]}}
-                        """#
-                ]),
-                keychain: keychain
-            ),
-            usageClient: ClaudeUsageClient(httpClient: httpClient),
-            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
-            pricing: { TestPricing.bundled }
-        )
-
-        let snapshot = await provider.refresh()
-
-        XCTAssertEqual(
-            badge(snapshot.lines, "Error"),
-            ClaudeAuthError.codeCredentialsUnavailable.localizedDescription
-        )
-        XCTAssertEqual(httpClient.requests.count, 1)
-        XCTAssertEqual(keychain.interactiveReadCount, 0)
-    }
-
-    func testAutomaticKeychainRotationUsesNonInteractiveRunwayUpdate() async {
-        let keychain = RotationTrackingKeychain(
+    func testExpiredKeychainTokenNeverRefreshesOrWritesAndDegradesToRenewalNotice() async {
+        // Regression for the 2026-08-03 incident: Runway rotating Claude Code's refresh token (and
+        // writing it back to Claude's Keychain item) can strand a concurrently running Claude process
+        // and trip OAuth reuse detection. Runway is a read-only consumer: an expired token means NO
+        // token-endpoint call, NO credential write, and a renewal notice over the local spend tiles.
+        let keychain = WriteTrackingKeychain(
             value: #"""
             {"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":1,"subscriptionType":"pro","scopes":["user:profile"]}}
             """#
         )
-        let httpClient = RoutingHTTPClient { request in
-            if request.url.absoluteString.hasSuffix("/api/oauth/usage") {
-                guard request.headers["Authorization"]?.contains("fresh-token") == true else {
-                    return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-                }
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
-                )
-            }
-            return HTTPResponse(
-                statusCode: 200,
-                headers: [:],
-                body: Data(#"{"access_token":"fresh-token","refresh_token":"refresh-2","expires_in":3600}"#.utf8)
-            )
-        }
+        let httpClient = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))
         let provider = ClaudeProvider(
             authStore: ClaudeAuthStore(
                 environment: FakeEnvironment(),
@@ -872,16 +819,14 @@ final class ClaudeProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
+        // The expired stamp short-circuits before any network call: no usage call, and above all no
+        // POST to any /oauth/token endpoint.
+        XCTAssertTrue(httpClient.requests.isEmpty)
+        XCTAssertEqual(keychain.writeCount, 0, "Claude's credential stores are never written by Runway")
         XCTAssertNil(badge(snapshot.lines, "Error"))
-        XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Session" }))
-        XCTAssertEqual(keychain.runwayUpdateInteractionValues, [false])
-        XCTAssertEqual(
-            keychain.helperWriteCount,
-            0,
-            "background rotation must not delegate persistence to /usr/bin/security"
-        )
-        XCTAssertTrue(keychain.storedValue.contains("fresh-token"))
-        XCTAssertTrue(keychain.storedValue.contains("refresh-2"))
+        XCTAssertNil(snapshot.line(label: "Session"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.loginRenewalRequired.localizedDescription)
+        XCTAssertEqual(snapshot.plan, "Pro")
     }
 
     func testRefreshFetchesLiveUsageAndScansConfigDirLogs() async throws {
@@ -979,7 +924,7 @@ final class ClaudeProviderTests: XCTestCase {
 
         let response = try await ClaudeUsageClient().fetchUsage(
             accessToken: state.oauth.accessToken ?? "",
-            config: store.oauthConfig()
+            usageURL: store.usageEndpoint()
         )
         XCTAssertTrue((200..<300).contains(response.statusCode))
         let resetHeaders = response.headers.filter { $0.key.localizedCaseInsensitiveContains("reset") }
@@ -1001,28 +946,16 @@ final class ClaudeProviderTests: XCTestCase {
         }
     }
 
-    func testRetriesOnceAfter401AndPersistsRefreshedCredentials() async {
+    func testUsage401NeverRetriesWithARefreshAndNeverWritesTheCredentialsFile() async {
+        // A 401 on the usage endpoint means the token lapsed server-side. Runway must not try to
+        // refresh it (Claude Code owns rotation) and must not touch `.credentials.json`: one usage
+        // call, then the renewal notice.
         let now = RunwayISO8601.date(from: "2026-02-20T16:00:00.000Z")!
-        let files = FakeFiles([
-            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":4102444800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
-        ])
+        let originalBlob = #"{"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":4102444800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
+        let files = FakeFiles(["/tmp/claude/.credentials.json": originalBlob])
         let httpClient = RoutingHTTPClient { request in
-            if request.url.absoluteString.hasSuffix("/api/oauth/usage") {
-                let authorization = request.headers["Authorization"] ?? ""
-                guard authorization.contains("fresh-token") else {
-                    return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-                }
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
-                )
-            }
-            return HTTPResponse(
-                statusCode: 200,
-                headers: [:],
-                body: Data(#"{"access_token":"fresh-token","refresh_token":"refresh-2","expires_in":3600}"#.utf8)
-            )
+            XCTAssertTrue(request.url.absoluteString.hasSuffix("/api/oauth/usage"))
+            return HTTPResponse(statusCode: 401, headers: [:], body: Data())
         }
         let provider = ClaudeProvider(
             authStore: ClaudeAuthStore(
@@ -1039,19 +972,18 @@ final class ClaudeProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Session" }))
-        let usageCalls = httpClient.requests.filter { $0.url.absoluteString.hasSuffix("/api/oauth/usage") }
-        XCTAssertEqual(usageCalls.count, 2)
-        let saved = files.files["/tmp/claude/.credentials.json"] ?? ""
-        XCTAssertTrue(saved.contains("fresh-token"))
-        XCTAssertTrue(saved.contains("refresh-2"))
+        XCTAssertEqual(httpClient.requests.count, 1)
+        XCTAssertEqual(files.files["/tmp/claude/.credentials.json"], originalBlob)
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertNil(snapshot.line(label: "Session"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.loginRenewalRequired.localizedDescription)
     }
 
     func testFallsBackToFileWhenKeychainTokenIsLockedOut() async {
-        // #687: a stale/locked-out token sits in the keychain (its refresh token is server-revoked →
-        // invalid_grant → "session expired") while a fresh external `claude` re-login wrote a working
-        // token to the file. The refresh must fall through to the file source and recover instead of
-        // surfacing the stale keychain error until the app is restarted.
+        // #687: a stale/locked-out token sits in the keychain (the usage endpoint rejects it) while a
+        // fresh external `claude` re-login wrote a working token to the file. The refresh must fall
+        // through to the file source and recover instead of surfacing the stale keychain error until
+        // the app is restarted.
         let now = RunwayISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let files = FakeFiles([
             "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"fresh-access","refreshToken":"fresh-refresh","expiresAt":4070908800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
@@ -1064,25 +996,22 @@ final class ClaudeProviderTests: XCTestCase {
             now: { now }
         )
         // The keychain is always probed first (it's the source of truth), so this exercises the
-        // auth-failure fallback: the stale keychain token's refresh is revoked, and recovery comes from
-        // falling through to the fresh file token — not from any expiry-based reordering.
+        // auth-failure fallback: the stale keychain token is rejected server-side, and recovery comes
+        // from falling through to the fresh file token — not from any expiry-based reordering.
         let hashedService = authStore.keychainServiceCandidates().first!
         keychain.currentUserValues[hashedService] = #"{"claudeAiOauth":{"accessToken":"stale-access","refreshToken":"stale-refresh","expiresAt":4102444800000,"subscriptionType":"max","scopes":["user:profile"]}}"#
 
         let httpClient = RoutingHTTPClient { request in
-            if request.url.absoluteString.hasSuffix("/api/oauth/usage") {
-                let authorization = request.headers["Authorization"] ?? ""
-                guard authorization.contains("fresh-access") else {
-                    return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-                }
-                return HTTPResponse(
-                    statusCode: 200,
-                    headers: [:],
-                    body: Data(#"{"five_hour":{"utilization":42,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
-                )
+            XCTAssertTrue(request.url.absoluteString.hasSuffix("/api/oauth/usage"))
+            let authorization = request.headers["Authorization"] ?? ""
+            guard authorization.contains("fresh-access") else {
+                return HTTPResponse(statusCode: 401, headers: [:], body: Data())
             }
-            // Refresh endpoint: only the stale candidate reaches here, and its refresh token is revoked.
-            return HTTPResponse(statusCode: 400, headers: [:], body: Data(#"{"error":"invalid_grant"}"#.utf8))
+            return HTTPResponse(
+                statusCode: 200,
+                headers: [:],
+                body: Data(#"{"five_hour":{"utilization":42,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
+            )
         }
         let provider = ClaudeProvider(
             authStore: authStore,
@@ -1100,11 +1029,16 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertNil(badge(snapshot.lines, "Error"))
     }
 
-    func testSurfacesAuthErrorWhenAllCredentialSourcesAreExpired() async {
-        // The fallback must not mask a genuine all-sources-expired state: when both keychain and file
-        // tokens are revoked, the refresh fails loudly with the auth error rather than silently
-        // recovering or dropping it.
+    func testAllSourcesExpiredServesLocalSpendTilesUnderARenewalNotice() async throws {
+        // When every stored login is rejected server-side there is nothing left to try live — but the
+        // local spend tiles are computed from Claude's own session logs and stay trustworthy. The card
+        // must degrade to those tiles under the renewal notice (amber triangle), not a hard error.
         let now = RunwayISO8601.date(from: "2026-02-20T16:00:00.000Z")!
+        let home = try ClaudeLogFixture.makeHome(files: [
+            "project-a/session.jsonl": ClaudeLogFixture.usageLine(
+                timestamp: "2026-02-20T16:00:00.000Z", input: 100, output: 50, costUSD: 0.25
+            )
+        ])
         let files = FakeFiles([
             "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"file-stale","refreshToken":"file-refresh","expiresAt":4070908800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
         ])
@@ -1118,24 +1052,29 @@ final class ClaudeProviderTests: XCTestCase {
         let hashedService = authStore.keychainServiceCandidates().first!
         keychain.currentUserValues[hashedService] = #"{"claudeAiOauth":{"accessToken":"keychain-stale","refreshToken":"keychain-refresh","expiresAt":4102444800000,"subscriptionType":"max","scopes":["user:profile"]}}"#
 
-        // Every usage call 401s and every refresh is revoked → both sources are dead.
+        // Every usage call 401s → both sources are dead; no other endpoint is ever contacted.
         let httpClient = RoutingHTTPClient { request in
-            if request.url.absoluteString.hasSuffix("/api/oauth/usage") {
-                return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-            }
-            return HTTPResponse(statusCode: 400, headers: [:], body: Data(#"{"error":"invalid_grant"}"#.utf8))
+            XCTAssertTrue(request.url.absoluteString.hasSuffix("/api/oauth/usage"))
+            return HTTPResponse(statusCode: 401, headers: [:], body: Data())
         }
         let provider = ClaudeProvider(
             authStore: authStore,
             usageClient: ClaudeUsageClient(httpClient: httpClient),
-            logUsageScanner: ClaudeLogFixture.scanner(home: nil),
+            logUsageScanner: ClaudeLogFixture.scanner(home: home),
             now: { now },
             pricing: { TestPricing.bundled }
         )
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.sessionExpired.localizedDescription)
+        XCTAssertNil(badge(snapshot.lines, "Error"))
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.loginRenewalRequired.localizedDescription)
+        XCTAssertNil(snapshot.line(label: "Session"))
+        // The renewal snapshot keeps the preferred (keychain) login's plan badge and the local tiles.
+        XCTAssertEqual(snapshot.plan, "Max")
+        XCTAssertEqual(values(snapshot.lines, "Today"),
+                       [MetricValue(number: 0.25, kind: .dollars, estimated: true),
+                        MetricValue(number: 150, kind: .count, label: "tokens")])
     }
 
     func testNoCredentialsReportsNotLoggedIn() async {
@@ -1311,20 +1250,14 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertEqual(third.plan, "Max 20x")
     }
 
-    func testRefreshSurfacesRequestFailureForNonOAuthRefreshErrorBody() async {
-        // The usage call 401s (forcing a refresh); the refresh endpoint then returns a non-OAuth 400
-        // (an HTML proxy/WAF page). The snapshot must report a request failure, NOT "token expired" —
-        // a transport/infra error the user can't fix by re-logging in.
+    func testUsageServerErrorSurfacesRequestFailureNotARenewalNotice() async {
+        // A 5xx from the usage endpoint is an infra failure the user can't fix by opening Claude —
+        // it must stay a loud request-failure error, never be softened into the renewal notice.
         let now = RunwayISO8601.date(from: "2026-02-20T16:00:00.000Z")!
         let files = FakeFiles([
-            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"stale-token","refreshToken":"refresh-1","expiresAt":4102444800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
+            "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"token","refreshToken":"refresh-1","expiresAt":4102444800000,"subscriptionType":"pro","scopes":["user:profile"]}}"#
         ])
-        let httpClient = RoutingHTTPClient { request in
-            if request.url.absoluteString.hasSuffix("/api/oauth/usage") {
-                return HTTPResponse(statusCode: 401, headers: [:], body: Data())
-            }
-            return HTTPResponse(statusCode: 400, headers: [:], body: Data("<html>Bad Gateway</html>".utf8))
-        }
+        let httpClient = FakeHTTPClient(response: HTTPResponse(statusCode: 500, headers: [:], body: Data()))
         let provider = ClaudeProvider(
             authStore: ClaudeAuthStore(
                 environment: FakeEnvironment(["CLAUDE_CONFIG_DIR": "/tmp/claude"]),
@@ -1340,8 +1273,8 @@ final class ClaudeProviderTests: XCTestCase {
 
         let snapshot = await provider.refresh()
 
-        XCTAssertEqual(badge(snapshot.lines, "Error"), ProviderUsageErrorText.requestFailed(statusCode: 400))
-        XCTAssertNotEqual(badge(snapshot.lines, "Error"), ClaudeAuthError.tokenExpired.localizedDescription)
+        XCTAssertEqual(badge(snapshot.lines, "Error"), ProviderUsageErrorText.requestFailed(statusCode: 500))
+        XCTAssertNil(snapshot.warning)
     }
 
     private func badge(_ lines: [MetricLine], _ label: String) -> String? {
@@ -1440,82 +1373,20 @@ private final class InteractionTrackingKeychain: KeychainAccessing, @unchecked S
     func writeGenericPasswordForCurrentUser(service: String, value: String) throws {}
 }
 
-/// Starts with no Claude Code item, then models a Keychain that becomes unreadable while the file
-/// credential request is in flight. The generation marker must force a reload before that response
-/// can be published, and every automatic read remains interaction-forbidden.
-private final class AppearingUnreadableKeychain: KeychainAccessing, @unchecked Sendable {
+
+/// Models a readable Claude Code item and counts every write-capable call. Runway is a read-only
+/// consumer of Claude's credentials, so tests assert the count stays zero.
+private final class WriteTrackingKeychain: KeychainAccessing, @unchecked Sendable {
     private let lock = NSLock()
-    private var existenceUnknown = false
-    private var interactiveReads = 0
-
-    var interactiveReadCount: Int {
-        lock.withLock { interactiveReads }
-    }
-
-    func makeExistenceUnknown() {
-        lock.withLock { existenceUnknown = true }
-    }
-
-    func readGenericPassword(service: String) throws -> String? {
-        lock.withLock { interactiveReads += 1 }
-        return nil
-    }
-
-    func readGenericPasswordForCurrentUser(service: String) throws -> String? {
-        lock.withLock { interactiveReads += 1 }
-        return nil
-    }
-
-    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
-        lock.withLock { interactiveReads += 1 }
-        return nil
-    }
-
-    func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
-        lock.withLock { interactiveReads += 1 }
-        return nil
-    }
-
-    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
-        lock.withLock { existenceUnknown ? .unavailable : .missing }
-    }
-
-    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
-        lock.withLock { existenceUnknown ? .unavailable : .missing }
-    }
-
-    func genericPasswordExists(service: String) -> Bool? {
-        lock.withLock { existenceUnknown ? nil : false }
-    }
-
-    func writeGenericPassword(service: String, value: String) throws {}
-
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {}
-}
-
-/// Models a readable Claude Code item whose OAuth token rotates during an automatic refresh. Helper
-/// writes represent `/usr/bin/security`; Runway updates represent the in-process Security.framework
-/// operation and record whether the caller allowed UI.
-private final class RotationTrackingKeychain: KeychainAccessing, @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: String
-    private var helperWrites = 0
-    private var runwayUpdateInteractions: [Bool] = []
+    private let value: String
+    private var writes = 0
 
     init(value: String) {
         self.value = value
     }
 
-    var helperWriteCount: Int {
-        lock.withLock { helperWrites }
-    }
-
-    var runwayUpdateInteractionValues: [Bool] {
-        lock.withLock { runwayUpdateInteractions }
-    }
-
-    var storedValue: String {
-        lock.withLock { value }
+    var writeCount: Int {
+        lock.withLock { writes }
     }
 
     func readGenericPassword(service: String) throws -> String? {
@@ -1523,7 +1394,7 @@ private final class RotationTrackingKeychain: KeychainAccessing, @unchecked Send
     }
 
     func readGenericPasswordForCurrentUser(service: String) throws -> String? {
-        lock.withLock { value }
+        value
     }
 
     func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
@@ -1531,7 +1402,7 @@ private final class RotationTrackingKeychain: KeychainAccessing, @unchecked Send
     }
 
     func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
-        lock.withLock { .value(value) }
+        .value(value)
     }
 
     func genericPasswordExists(service: String) -> Bool? {
@@ -1539,34 +1410,15 @@ private final class RotationTrackingKeychain: KeychainAccessing, @unchecked Send
     }
 
     func writeGenericPassword(service: String, value: String) throws {
-        lock.withLock { helperWrites += 1 }
+        lock.withLock { writes += 1 }
     }
 
     func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
-        lock.withLock { helperWrites += 1 }
+        lock.withLock { writes += 1 }
     }
 
-    func updateGenericPassword(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws {
-        lock.withLock {
-            runwayUpdateInteractions.append(allowUserInteraction)
-            self.value = value
-        }
-    }
-
-    func updateGenericPasswordForCurrentUser(
-        service: String,
-        value: String,
-        allowUserInteraction: Bool
-    ) throws {
-        try updateGenericPassword(
-            service: service,
-            value: value,
-            allowUserInteraction: allowUserInteraction
-        )
+    func writeGenericPassword(service: String, account: String, value: String) throws {
+        lock.withLock { writes += 1 }
     }
 }
 

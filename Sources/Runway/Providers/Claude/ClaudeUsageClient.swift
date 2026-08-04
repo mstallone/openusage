@@ -1,17 +1,5 @@
 import Foundation
 
-struct ClaudeRefreshResponse: Decodable, Hashable, Sendable {
-    var accessToken: String
-    var refreshToken: String?
-    var expiresIn: Double?
-
-    enum CodingKeys: String, CodingKey {
-        case accessToken = "access_token"
-        case refreshToken = "refresh_token"
-        case expiresIn = "expires_in"
-    }
-}
-
 enum ClaudeUsageError: Error, LocalizedError, Equatable {
     case connectionFailed
     case invalidResponse
@@ -29,39 +17,21 @@ enum ClaudeUsageError: Error, LocalizedError, Equatable {
     }
 }
 
+/// Read-only client for Claude's usage endpoint. Runway never calls the OAuth token endpoint:
+/// Claude Code owns its credentials and their rotation, and a second process refreshing the same
+/// refresh token can trip the server's reuse detection and revoke the user's session.
 struct ClaudeUsageClient: Sendable {
-    private static let scopes = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-
     var httpClient: HTTPClient
 
     init(httpClient: HTTPClient = URLSessionHTTPClient()) {
         self.httpClient = httpClient
     }
 
-    func refreshToken(_ refreshToken: String, config: ClaudeOAuthConfig) async throws -> HTTPResponse {
-        let body: [String: Any] = [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": config.clientID,
-            "scope": Self.scopes
-        ]
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        return try await httpClient.send(
-            HTTPRequest(
-                method: "POST",
-                url: config.refreshURL,
-                headers: ["Content-Type": "application/json"],
-                body: bodyData,
-                timeout: 15
-            )
-        )
-    }
-
-    func fetchUsage(accessToken: String, config: ClaudeOAuthConfig) async throws -> HTTPResponse {
+    func fetchUsage(accessToken: String, usageURL: URL) async throws -> HTTPResponse {
         try await httpClient.send(
             HTTPRequest(
                 method: "GET",
-                url: config.usageURL,
+                url: usageURL,
                 headers: [
                     "Authorization": "Bearer \(accessToken.trimmingCharacters(in: .whitespacesAndNewlines))",
                     "Accept": "application/json",
@@ -74,4 +44,3 @@ struct ClaudeUsageClient: Sendable {
         )
     }
 }
-
