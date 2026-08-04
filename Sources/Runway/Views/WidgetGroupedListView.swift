@@ -73,6 +73,7 @@ struct WidgetGroupedListView: View {
             warning: dataStore.headerNotice(for: group.provider.id),
             refreshing: dataStore.refreshingProviderIDs.contains(group.provider.id),
             staleness: dataStore.stalenessHint(for: group.provider.id),
+            onWarningRefresh: { refreshProvider(group.provider.id) },
             onCopyScreenshot: { shareCard(group) }
         )
         // Keep the provider mark and hover-revealed copy control aligned with the card's content edges.
@@ -87,7 +88,7 @@ struct WidgetGroupedListView: View {
             }
             Divider()
             Button("Refresh \(name)") {
-                Task { await dataStore.refresh(providerID: group.provider.id, force: true, interactive: true) }
+                refreshProvider(group.provider.id)
             }
             // Renaming needs an account record to write to, so it only shows on account-model cards
             // whose identity has been observed at least once.
@@ -198,12 +199,16 @@ struct WidgetGroupedListView: View {
         ProviderErrorCardView(
             message: message,
             isRefreshing: dataStore.refreshingProviderIDs.contains(providerID),
-            onRefresh: {
-                // The explicit user action that may legitimately show a Keychain approval prompt —
-                // the same forced refresh the header and row context menus carry.
-                Task { await dataStore.refresh(providerID: providerID, force: true, interactive: true) }
-            }
+            onRefresh: { refreshProvider(providerID) }
         )
+    }
+
+    /// The one forced refresh every user-initiated control on this screen runs: the header and row
+    /// context menus, the error card's Refresh button, and the header's warning triangle. Interactive
+    /// and forced because it is an explicit user action — the one that may legitimately raise a
+    /// Keychain approval prompt, which background refreshes must never do.
+    private func refreshProvider(_ providerID: String) {
+        Task { await dataStore.refresh(providerID: providerID, force: true, interactive: true) }
     }
 
     private func metricContainer(_ group: ProviderGroup) -> some View {
@@ -380,7 +385,7 @@ struct WidgetGroupedListView: View {
         Divider()
         if let provider = layout.provider(id: providerID) {
             Button("Refresh \(container.displayName(for: provider))") {
-                Task { await dataStore.refresh(providerID: providerID, force: true, interactive: true) }
+                refreshProvider(providerID)
             }
         }
         Button("Customize…") {
