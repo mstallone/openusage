@@ -84,7 +84,7 @@ final class CopilotAuthStoreTests: XCTestCase {
         let candidates = store.loadBillingTokenCandidates(usageToken: CopilotToken(value: "gho_editor"))
 
         XCTAssertEqual(candidates.tokens.map(\.value), ["gho_editor"])
-        XCTAssertTrue(candidates.keychainPermissionRequired)
+        XCTAssertEqual(candidates.keychainError, .keychainPermissionRequired)
     }
 
     func testUnknownExistenceProbeIsTreatedAsUnreadableNotLoggedOut() {
@@ -94,6 +94,18 @@ final class CopilotAuthStoreTests: XCTestCase {
         let store = CopilotAuthStore(files: FakeFiles(), keychain: IndeterminateKeychain())
 
         XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+    }
+
+    func testUnreadableKeychainIsNotReportedAsNeedingApproval() {
+        // "Choose Always Allow" cannot fix a locked login keychain or a failing securityd. The
+        // read's own status told the two apart, so the load must carry that distinction rather
+        // than collapsing both into an approval request.
+        let store = CopilotAuthStore(
+            files: FakeFiles(),
+            keychain: UnreadableItemKeychain()
+        )
+
+        XCTAssertEqual(store.loadCredentials(), .unreadable)
     }
 
     func testProtectedScopedItemNeverBroadensToAnotherAccountsToken() {
@@ -2137,6 +2149,32 @@ final class ReadModeTrackingKeychain: KeychainReading, @unchecked Sendable {
 /// A Keychain holding a gh item Runway isn't authorized to read prompt-free: non-interactive reads
 /// report `.unavailable` while the attributes-only existence probe still confirms the item. An
 /// interactive read models the user approving the prompt.
+/// The item could not be read for a reason approval cannot fix: the recorded category says the
+/// failure was NOT an ACL denial.
+private final class UnreadableItemKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func lastReadWasPermissionDenied(service: String) -> Bool? {
+        false
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        XCTFail("the recorded category answers this; no probe should be needed")
+        return nil
+    }
+}
+
 private final class UnauthorizedItemKeychain: KeychainReading, @unchecked Sendable {
     private let lock = NSLock()
     private let approvedValue: String?

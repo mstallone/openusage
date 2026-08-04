@@ -198,6 +198,9 @@ protocol KeychainReading: Sendable {
     /// (unlock it), `nil` = no failure recorded. Taken from the read's own `OSStatus`, so it stays
     /// answerable after the breaker trips — a follow-up probe would just be answered locally.
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool?
+    /// The same verdict for a SERVICE-WIDE read (no account), which is a distinct coordinator key
+    /// from any account-scoped read of the same service.
+    func lastReadWasPermissionDenied(service: String) -> Bool?
     /// The same verdict for the CURRENT-USER item, whose account name only the accessor knows.
     func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool?
     /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
@@ -294,6 +297,10 @@ extension KeychainReading {
     }
 
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        nil
+    }
+
+    func lastReadWasPermissionDenied(service: String) -> Bool? {
         nil
     }
 
@@ -623,6 +630,10 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
         coordinator.lastFailureWasPermissionDenied(service: service, account: account)
+    }
+
+    func lastReadWasPermissionDenied(service: String) -> Bool? {
+        coordinator.lastFailureWasPermissionDenied(service: service, account: nil)
     }
 
     func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {
