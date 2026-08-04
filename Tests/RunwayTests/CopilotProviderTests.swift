@@ -2124,6 +2124,16 @@ final class ReadModeTrackingKeychain: KeychainAccessing, @unchecked Sendable {
         return value
     }
 
+    /// Attributes-only probes are not secret reads — model them explicitly so they don't fall
+    /// through the protocol default onto the subprocess path this fake asserts against.
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        true
+    }
+
     func writeGenericPassword(service: String, value: String) throws {}
 }
 

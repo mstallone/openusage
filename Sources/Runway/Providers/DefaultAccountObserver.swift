@@ -120,9 +120,17 @@ struct DefaultAccountObserver: Sendable {
         let keychainUsability = ClaudeAuthStore.standardKeychainServiceCandidates(
             environment: environment,
             configDirOverride: configDirOverride
-        ).flatMap { service in
-            [
-                keychain.readGenericPasswordForCurrentUserWithoutUserInteraction(service: service),
+        ).flatMap { service -> [Bool?] in
+            // Exact item first. When it is unreadable, STOP: the service-wide read is keyed
+            // `(service, nil)`, so it neither waits on the exact item's flight nor sees its
+            // breaker — it would just issue another `SecItemCopyMatching` against the very item
+            // that was protected, which is the containment `ClaudeAuthStore` already enforces.
+            let currentUser = keychain.readGenericPasswordForCurrentUserWithoutUserInteraction(service: service)
+            guard currentUser != .unavailable else {
+                return [Self.claudeKeychainCredentialUsability(currentUser)]
+            }
+            return [
+                currentUser,
                 keychain.readGenericPasswordWithoutUserInteraction(service: service),
             ].map(Self.claudeKeychainCredentialUsability)
         }
