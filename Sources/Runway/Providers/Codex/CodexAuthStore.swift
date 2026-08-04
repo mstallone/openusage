@@ -218,6 +218,11 @@ struct CodexAuthStore: Sendable {
                     credentialHome: canonicalHome
                 ))
             case .unavailable:
+                // Interactive mode: the user just saw (and declined, or failed) this exact item's
+                // prompt. Stop the scan — continuing would raise one dialog per remaining home.
+                if allowKeychainInteraction {
+                    return .permissionRequired
+                }
                 // This home's item exists but is protected (or the keychain can't be checked) —
                 // a real login footprint. The existence probe is attributes-only and prompt-free.
                 if keychain.genericPasswordExists(service: Self.keychainService, account: account) != false {
