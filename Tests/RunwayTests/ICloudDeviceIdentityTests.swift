@@ -196,6 +196,34 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         )
     }
 
+    func testOptOutWithAProvisionalIdentityReportsThatNothingWasRemoved() async throws {
+        // Deleting the provisional UUID would remove nothing and quietly strand the record this Mac
+        // really published — and opting out also stops the retries that would resolve it.
+        let defaults = makeDefaults("provisional-opt-out")
+        let cloudStore = RecordingUsageCloudStore()
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: KeychainICloudDeviceIDStore(
+                ownedStore: InMemoryOwnedSecretStore(),
+                legacyKeychain: IndeterminateProbeKeychain(),
+                bundleIdentifier: "com.mattstallone.runway"
+            ),
+            pollInterval: nil
+        )
+
+        sync.enabled = false
+        let deadline = Date().addingTimeInterval(2)
+        while sync.serviceError == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let deleted = await cloudStore.deletedDeviceIDs
+        XCTAssertTrue(deleted.isEmpty, "a provisional id must not be used for the opt-out delete")
+        XCTAssertNotNil(sync.serviceError, "the user must be told the record wasn't removed")
+    }
+
     func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
         // A fresh install has no v1 item: the prompt-free existence probe answers "absent" and the
         // subprocess-backed legacy read must never run — not even once.
