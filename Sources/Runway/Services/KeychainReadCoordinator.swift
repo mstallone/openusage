@@ -51,9 +51,14 @@ final class KeychainReadCoordinator: @unchecked Sendable {
 
     private let condition = NSCondition()
     private var entries: [Key: Entry] = [:]
-    /// Bumped on every store. A background reader that ran overlapped with a newer write (e.g. a
-    /// wedged read finishing after a successful manual read) must not clobber the fresher entry.
-    private var epochs: [Key: Int] = [:]
+    /// Hands every read a start ticket, so a store can be ordered by when its read BEGAN rather
+    /// than when it finished. Two overlapping reads would otherwise be indistinguishable, and the
+    /// first to finish would win even when it is the older, staler one.
+    private var nextSequence = 0
+    /// The start ticket of the read whose outcome each item currently holds. A store from an older
+    /// read is dropped: a wedged read finishing after a newer one already recovered the item must
+    /// not clobber the fresher entry.
+    private var storedSequences: [Key: Int] = [:]
     private var inFlight: Set<Key> = []
     /// Why an item's last read failed: `true` = its ACL has not approved this app, `false` = the
     /// keychain itself could not be read. Captured from the read's own `OSStatus`, because a second
@@ -112,7 +117,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
             return .unavailable
         }
         inFlight.insert(key)
-        let epoch = epochs[key, default: 0]
+        let sequence = takeSequence()
         condition.unlock()
 
         defer {
@@ -146,7 +151,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         condition.lock()
         storeIfCurrent(
             key: key,
-            epoch: epoch,
+            sequence: sequence,
             fingerprint: fingerprint,
             value: result == .unavailable ? nil : result,
             tripped: result == .unavailable
@@ -173,7 +178,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         if acquired {
             inFlight.insert(key)
         }
-        let epoch = epochs[key, default: 0]
+        let sequence = takeSequence()
         condition.unlock()
 
         defer {
@@ -197,7 +202,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
             condition.lock()
             storeIfCurrent(
                 key: key,
-                epoch: epoch,
+                sequence: sequence,
                 fingerprint: fingerprint,
                 value: value.map(NonInteractiveKeychainRead.value) ?? .missing,
                 tripped: false
@@ -206,7 +211,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
             return value
         } catch {
             condition.lock()
-            storeIfCurrent(key: key, epoch: epoch, fingerprint: fingerprint, value: nil, tripped: true)
+            storeIfCurrent(key: key, sequence: sequence, fingerprint: fingerprint, value: nil, tripped: true)
             condition.unlock()
             throw error
         }
@@ -248,7 +253,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         if acquired {
             inFlight.insert(key)
         }
-        let epoch = epochs[key, default: 0]
+        let sequence = takeSequence()
         condition.unlock()
 
         defer {
@@ -263,12 +268,12 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         do {
             let value = try read()
             condition.lock()
-            storeIfCurrent(key: key, epoch: epoch, value: nil, tripped: false)
+            storeIfCurrent(key: key, sequence: sequence, value: nil, tripped: false)
             condition.unlock()
             return value
         } catch {
             condition.lock()
-            storeIfCurrent(key: key, epoch: epoch, value: nil, tripped: true)
+            storeIfCurrent(key: key, sequence: sequence, value: nil, tripped: true)
             condition.unlock()
             throw error
         }
@@ -278,14 +283,18 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// a stuck read finishing after a successful recovery must not re-trip the breaker — and
     /// downgrades a failure that never reached securityd. Every path (background, interactive,
     /// external) goes through this so both rules hold everywhere rather than on one path.
+    /// Must be called under `condition`'s lock. Takes the read's start ticket.
     private func storeIfCurrent(
         key: Key,
-        epoch: Int,
+        sequence: Int,
         fingerprint: String? = nil,
         value: NonInteractiveKeychainRead?,
         tripped: Bool
     ) {
-        guard epochs[key, default: 0] == epoch else { return }
+        // `>=` and not `>`: a read stores at most once, so the only way to match is to be that
+        // same read writing its own outcome.
+        guard sequence >= storedSequences[key, default: Int.min] else { return }
+        storedSequences[key] = sequence
         // A read the UI gate turned away says nothing about this item, so it must not trip the
         // breaker and lock the item out for the whole revalidation window.
         let wasContention = contendedKeys.remove(key) != nil
@@ -370,8 +379,13 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     }
 
     /// Must be called under `condition`'s lock.
+    private func takeSequence() -> Int {
+        nextSequence += 1
+        return nextSequence
+    }
+
+    /// Must be called under `condition`'s lock.
     private func store(key: Key, fingerprint: String?, value: NonInteractiveKeychainRead?, tripped: Bool) {
-        epochs[key, default: 0] += 1
         if !tripped { lastFailureDenied[key] = nil }
         entries[key] = Entry(fingerprint: fingerprint, value: value, tripped: tripped, updatedAt: now())
     }

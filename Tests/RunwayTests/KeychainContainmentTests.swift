@@ -139,6 +139,52 @@ final class KeychainFailureCategoryTests: XCTestCase {
         XCTAssertEqual(reads.value, 1, "the stale failure must not have re-tripped the breaker")
     }
 
+    func testANewerRecoveryWinsEvenWhenTheOlderReadFinishesFirst() {
+        // The mirror of the stale-completion case: A is stuck, B bypasses it after the deadline,
+        // then A finishes BEFORE B returns. Ordering by completion would let A's failure land last
+        // and leave the item tripped for the whole window, even though the user just approved it.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        let aStarted = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let aFinished = DispatchSemaphore(value: 0)
+        let aDone = expectation(description: "older read finished")
+
+        let readerA = Thread {
+            _ = try? coordinator.interactiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: {
+                    aStarted.signal()
+                    releaseA.wait()
+                    throw KeychainError.readFailed("denied")
+                }
+            )
+            aFinished.signal()
+            aDone.fulfill()
+        }
+        readerA.start()
+        XCTAssertEqual(aStarted.wait(timeout: .now() + 2), .success)
+
+        // B starts second and succeeds, but lets A store first.
+        let recovered = try? coordinator.interactiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: {
+                releaseA.signal()
+                XCTAssertEqual(aFinished.wait(timeout: .now() + 2), .success)
+                return "approved-secret"
+            }
+        )
+        XCTAssertEqual(recovered, "approved-secret")
+        wait(for: [aDone], timeout: 2)
+
+        let reads = Counter()
+        let after = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { reads.increment(); return .value("approved-secret") }
+        )
+        XCTAssertEqual(after, .value("approved-secret"))
+        XCTAssertEqual(reads.value, 1, "the older read's failure must not have won the store")
+    }
+
     func testAnUnreadableKeychainIsRecordedAsNotDenied() {
         let coordinator = KeychainReadCoordinator()
         coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: false)
