@@ -88,8 +88,13 @@ struct CursorAuthStore: Sendable {
         // is the only thing that can save the refresh, so it is allowed to ask.
         let sqliteExpired = sqliteAccessToken.map(isExpired) ?? false
         let keychainCanWin = !hasSQLiteAuth || sqliteMembershipType == "free" || sqliteExpired
-        let allowKeychainPrompt = allowKeychainInteraction && keychainCanWin
-        let accessRead = readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainPrompt)
+        // Don't even read when the answer cannot change the outcome. A usable paid SQLite login is
+        // returned unconditionally below, and this read is a synchronous securityd round trip — so
+        // a wedged securityd would otherwise strand a refresh that had a perfectly good credential
+        // in hand. First-run detection takes this path too, with no enclosing deadline at all.
+        let accessRead: NonInteractiveKeychainRead = keychainCanWin
+            ? readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainInteraction)
+            : .missing
         let keychainAccessToken = accessRead.trimmedValue
 
         let hasKeychainAuth = keychainAccessToken != nil
