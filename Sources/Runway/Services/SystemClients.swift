@@ -471,7 +471,10 @@ struct SecurityKeychainAccessor: KeychainReading {
     }
 
     private func promptFreeValue(service: String, account: String?) throws -> String? {
-        switch performNonInteractiveRead(service: service, account: account) {
+        // Through the coordinator, not straight at Security: these reads get the same single-flight,
+        // change-gating, and breaker as every other one, and the read is handed the ticket it needs
+        // to attribute what it observes.
+        switch readGenericPasswordWithoutUserInteraction(service: service, account: account) {
         case .value(let value):
             return value
         case .missing:
