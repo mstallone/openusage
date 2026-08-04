@@ -62,8 +62,18 @@ struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
         case true?:
             break
         }
-        guard let legacy = try legacyKeychain.readGenericPasswordForCurrentUser(service: legacyService) else {
+        // In-process and prompt-free. The `/usr/bin/security` read this replaced could raise a
+        // password dialog on a launch nobody asked for — and would do it again on every retry,
+        // because the v1 item's ACL names the `security` helper rather than Runway. A failure here
+        // leaves the identity provisional with its existing warning, which is the honest outcome.
+        let legacy: String
+        switch legacyKeychain.readGenericPasswordForCurrentUserWithoutUserInteraction(service: legacyService) {
+        case .value(let value):
+            legacy = value
+        case .missing:
             return nil
+        case .unavailable:
+            throw KeychainError.readFailed("This Mac's previous sync identity could not be read.")
         }
         try ownedStore.write(service: service, value: legacy)
         return legacy

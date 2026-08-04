@@ -151,19 +151,37 @@ final class ICloudUsageSyncStore {
         resolveProvisionalIdentityIfNeeded()
         guard !identityIsProvisional else { return }
         AppLog.info(.config, "retrying an iCloud opt-out that could not complete earlier")
+        guard await deleteOwnRecord() else { return }
+        AppLog.info(.config, "iCloud opt-out completed: this Mac's record was removed")
+        // The user can re-enable while this delete is in flight; without republishing, that late
+        // delete would leave an enabled Mac missing until some other change schedules a write.
+        // Same race the normal disable path already guards.
+        if enabled {
+            await writeNow()
+        }
+    }
+
+    /// The ONE path that removes this Mac's record from iCloud. The intent is persisted *before*
+    /// the attempt, so a failure — or a crash mid-flight — is remembered and retried instead of
+    /// leaving the user believing they opted out while their record is still there. Returns whether
+    /// the record is now gone.
+    @discardableResult
+    private func deleteOwnRecord() async -> Bool {
+        defaults.set(true, forKey: Self.pendingOptOutKey)
+        pendingOptOutDeletion = true
         do {
             try await cloudStore.delete(deviceID: deviceID)
             defaults.set(false, forKey: Self.pendingOptOutKey)
             pendingOptOutDeletion = false
-            AppLog.info(.config, "iCloud opt-out completed: this Mac's record was removed")
-            // The user can re-enable while this delete is in flight; without republishing, that
-            // late delete would leave an enabled Mac missing until some other change schedules a
-            // write. Same race the normal disable path already guards.
-            if enabled {
-                await writeNow()
-            }
+            return true
         } catch {
             report(error, .disable)
+            // Already inside the retry loop? It will come back on its own schedule; starting
+            // another would cancel the task this call is running in.
+            if !isRetryingOptOut {
+                startPendingOptOutRetries()
+            }
+            return false
         }
     }
 
@@ -218,31 +236,21 @@ final class ICloudUsageSyncStore {
                 startPendingOptOutRetries()
                 return
             }
-            do {
-                try await cloudStore.delete(deviceID: deviceID)
-                // Re-enabling can race this deletion: if the toggle came back on while the delete
-                // was in flight, publish again so a late-landing delete cannot leave an enabled
-                // Mac's record missing until the next refresh batch.
-                defaults.set(false, forKey: Self.pendingOptOutKey)
-                pendingOptOutDeletion = false
-                if enabled {
-                    await writeNow()
-                } else {
-                    readError = nil
-                    writeError = nil
-                }
-                // After the republish, never before: this can run while the retry task is awaiting
-                // a write of its own, and cancelling first would abort it.
-                optOutRetryTask?.cancel()
-            } catch {
-                // The same stranding problem as an unresolved identity: sync is off, Settings only
-                // renders errors for the enabled state, and nothing comes back for it. Record the
-                // unfinished opt-out so it is visible and retried at the next launch.
-                defaults.set(true, forKey: Self.pendingOptOutKey)
-                pendingOptOutDeletion = true
-                report(error, .disable)
-                startPendingOptOutRetries()
+            // A failure here is remembered and retried by deleteOwnRecord; sync is off, Settings
+            // only renders errors for the enabled state, and nothing else comes back for it.
+            guard await deleteOwnRecord() else { return }
+            // Re-enabling can race this deletion: if the toggle came back on while the delete was
+            // in flight, publish again so a late-landing delete cannot leave an enabled Mac's
+            // record missing until the next refresh batch.
+            if enabled {
+                await writeNow()
+            } else {
+                readError = nil
+                writeError = nil
             }
+            // After the republish, never before: this can run while the retry task is awaiting a
+            // write of its own, and cancelling first would abort it.
+            optOutRetryTask?.cancel()
         }
     }
 
@@ -291,9 +299,11 @@ final class ICloudUsageSyncStore {
             do {
                 try await cloudStore.write(deviceRecord)
                 // Disabling can run while the write is in flight. If it did, remove the
-                // just-finished record as well so this Mac cannot reappear in peers after opting out.
+                // just-finished record as well so this Mac cannot reappear in peers after opting
+                // out — through deleteOwnRecord, so a failure here is persisted and retried rather
+                // than leaving the user believing the opt-out succeeded.
                 guard enabled else {
-                    try await cloudStore.delete(deviceID: deviceID)
+                    await deleteOwnRecord()
                     return
                 }
                 writeError = nil
