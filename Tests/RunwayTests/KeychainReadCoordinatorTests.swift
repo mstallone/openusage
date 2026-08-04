@@ -425,7 +425,7 @@ final class ClaudeProtectedItemContainmentTests: XCTestCase {
 
 /// The current-user item is present but unreadable; any service-wide read is recorded so the test
 /// can prove it never happens.
-private final class CurrentUserProtectedKeychain: KeychainAccessing, @unchecked Sendable {
+private final class CurrentUserProtectedKeychain: KeychainReading, @unchecked Sendable {
     private let lock = NSLock()
     private var serviceWide = 0
 

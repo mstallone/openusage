@@ -97,12 +97,15 @@ final class ICloudUsageSyncStore {
 
     private let defaults: UserDefaults
     private let cloudStore: any UsageCloudStoring
-    private let identityError: String?
+    private var identityError: String?
     /// True when this Mac's durable sync identity could not be established — the legacy lookup was
     /// indeterminate and no saved id existed, so `deviceID` is a freshly minted UUID that may
     /// duplicate a record this Mac already published under its real id. Reads and the UI carry on;
     /// only publishing is withheld, because a publish is what creates the duplicate.
-    private let identityIsProvisional: Bool
+    private var identityIsProvisional: Bool
+    /// The store used to resolve this Mac's identity, kept so a provisional identity can be retried
+    /// once Keychain access comes back rather than staying stuck until relaunch.
+    private let deviceIDStore: any ICloudDeviceIDStoring
     private let dataStore: WidgetDataStore
     private let writeDebounce: Duration
     /// How often to check the private database for peer updates while sync is on. CloudKit has no
@@ -117,7 +120,7 @@ final class ICloudUsageSyncStore {
     private var writeQueued = false
     private var reloadGeneration = 0
 
-    let deviceID: String
+    private(set) var deviceID: String
     let deviceName: String
     var enabled: Bool {
         didSet {
@@ -153,6 +156,7 @@ final class ICloudUsageSyncStore {
         self.deviceID = identity.id
         self.identityError = identity.error
         self.identityIsProvisional = identity.isProvisional
+        self.deviceIDStore = deviceIDStore
         self.deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         // On by default: a fresh install starts syncing; only a user's explicit choice is stored.
         self.enabled = (defaults.object(forKey: Self.enabledKey) as? Bool) ?? true
@@ -230,6 +234,9 @@ final class ICloudUsageSyncStore {
     private func performWrite() async {
         guard enabled else { return }
         // A provisional identity would publish a SECOND record for a Mac that already has one.
+        // Retry the lookup first — Keychain access usually comes back within a session (an unlock),
+        // and the error text promises publishing resumes when it does.
+        resolveProvisionalIdentityIfNeeded()
         guard !identityIsProvisional else {
             AppLog.warn(.config, "iCloud publish skipped: this Mac's sync identity is unresolved")
             return
@@ -280,7 +287,13 @@ final class ICloudUsageSyncStore {
                 guard enabled, generation == reloadGeneration else { return }
                 documents = UsageHistoryDocument.newestByDevice(result.documents)
                 invalidRecordMessages = result.invalidRecordMessages
-                dataStore.setPeerHistoryDocuments(result.documents, ownDeviceID: deviceID)
+                // While the identity is provisional, this Mac's OWN previous record cannot be
+                // recognized — merging would count its local usage a second time, as if another
+                // device had produced it. Show the peer list, contribute nothing.
+                dataStore.setPeerHistoryDocuments(
+                    identityIsProvisional ? [] : result.documents,
+                    ownDeviceID: deviceID
+                )
                 readError = result.invalidRecordMessages.isEmpty
                     ? nil
                     : "Runway couldn’t read some synced usage data. Check the log for details."
@@ -311,6 +324,19 @@ final class ICloudUsageSyncStore {
         case .write, .disable: writeError = error.localizedDescription
         }
         AppLog.warn(.config, "iCloud history \(operation.rawValue) failed: \(error.localizedDescription)")
+    }
+
+    /// Re-run identity resolution while it is provisional. A success adopts the real id (and
+    /// clears the notice) so publishing resumes without a relaunch; a failure leaves the state as
+    /// it was and the next attempt tries again.
+    private func resolveProvisionalIdentityIfNeeded() {
+        guard identityIsProvisional else { return }
+        let identity = Self.resolveDeviceID(defaults: defaults, store: deviceIDStore)
+        guard !identity.isProvisional else { return }
+        AppLog.info(.config, "iCloud sync identity resolved; publishing resumes")
+        deviceID = identity.id
+        identityError = identity.error
+        identityIsProvisional = false
     }
 
     private static func resolveDeviceID(
