@@ -15,9 +15,12 @@ The command and app import the same providers, authentication stores, pricing, r
 snapshot cache. A normal read reuses snapshots less than five minutes old and refreshes missing or stale
 ones. `--force` bypasses that freshness gate and
 writes successful results to the same cache. It is not a full substitute for the app's manual
-refresh: because nobody is watching a terminal command, `--force` never opens a macOS Keychain
-approval dialog. A provider whose card asks you to "refresh manually and choose Always Allow" has to
-be refreshed inside the Runway app once; after that approval, the command reads it silently too. The command uses credentials only on your machine; they
+refresh: nobody is watching a terminal command, so `--force` never opens a macOS Keychain approval
+dialog. It also cannot inherit one — `runway` is a separate executable with its own signature, and
+macOS grants Keychain access per binary, so approving an item inside the Runway app does not
+authorize the command. A provider whose credential lives only in a protected Keychain item
+therefore keeps working here through the shared snapshot the app writes (within its five-minute
+freshness window), while a forced or stale read of that provider reports it as unavailable. The command uses credentials only on your machine; they
 never appear in the output.
 
 A provider argument names providers by plain string matching, exactly like the

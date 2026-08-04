@@ -278,13 +278,13 @@ final class AntigravityProviderTests: XCTestCase {
         XCTAssertEqual(keychain.plainReads, 0)
     }
 
-    func testUnavailableKeychainThrowsStoreUnreadableWithoutFallingBackToAPrompt() {
-        // An item Runway isn't (yet) authorized to read surfaces the friendly store-unreadable
-        // error; it must not silently vanish into "not logged in" and must not prompt.
+    func testUnavailableKeychainAsksForApprovalWithoutFallingBackToAPrompt() {
+        // An item Runway isn't authorized to read yet surfaces the permission-specific error — not
+        // "unlock Keychain or sign in again", which fixes neither — and must not prompt on its own.
         let store = AntigravityAuthStore(keychain: UnavailableKeychain(), files: FakeFiles())
 
         XCTAssertThrowsError(try store.loadKeychainToken()) { error in
-            XCTAssertEqual(error as? AntigravityError, .credentialStoreUnreadable)
+            XCTAssertEqual(error as? AntigravityError, .keychainPermissionRequired)
         }
     }
 

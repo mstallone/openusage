@@ -125,15 +125,20 @@ final class CopilotProvider: ProviderRuntime {
                 // only when Copilot named the seat org; otherwise `/user/orgs` must stay tied to the
                 // same credential that produced this Copilot card.
                 let billingTokens: [CopilotToken]
+                // Set when the preferred GitHub CLI credential exists but is not approved yet, so a
+                // failed billing lookup can name the real fix instead of blaming billing access.
+                var billingNeedsApproval = false
                 if mapped.organizationLogins.isEmpty {
                     billingTokens = [token]
                 } else {
-                    billingTokens = await loadOffMainActor { [authStore] in
+                    let candidates = await loadOffMainActor { [authStore] in
                         authStore.loadBillingTokenCandidates(
                             usageToken: token,
                             allowKeychainInteraction: allowInteraction
                         )
                     }
+                    billingTokens = candidates.tokens
+                    billingNeedsApproval = candidates.keychainPermissionRequired
                 }
                 switch await orgBillingLookup(
                     tokens: billingTokens,
@@ -149,6 +154,15 @@ final class CopilotProvider: ProviderRuntime {
                     // aggregation above.
                     lines = usageLines
                 case .managed:
+                    // A protected GitHub CLI credential is the likely reason billing could not be
+                    // read; telling the user to obtain billing access would send them down the
+                    // wrong path.
+                    if billingNeedsApproval {
+                        return ProviderSnapshot.error(
+                            provider: provider,
+                            error: CopilotAuthError.keychainPermissionRequired
+                        )
+                    }
                     lines = [
                         .badge(
                             label: "Organization Usage",

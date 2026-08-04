@@ -22,6 +22,15 @@ enum CopilotAuthError: Error, LocalizedError, Equatable {
     }
 }
 
+/// Billing candidates plus whether the *preferred* GitHub CLI credential is sitting behind an
+/// unapproved Keychain ACL. Without that flag an org-managed card falls back to an editor token
+/// that usually lacks billing scopes and reports "you need billing access", when the actionable
+/// truth is that an existing credential can be approved with a manual refresh.
+struct CopilotBillingCandidates: Sendable {
+    var tokens: [CopilotToken]
+    var keychainPermissionRequired: Bool
+}
+
 /// Outcome of a credential load. `keychainPermissionRequired` means a gh Keychain item exists but
 /// Runway isn't authorized to read it prompt-free yet — a real login footprint that only an explicit
 /// manual refresh may convert into access.
@@ -83,20 +92,23 @@ struct CopilotAuthStore: Sendable {
     func loadBillingTokenCandidates(
         usageToken: CopilotToken,
         allowKeychainInteraction: Bool = false
-    ) -> [CopilotToken] {
+    ) -> CopilotBillingCandidates {
         var ghToken = loadFromGhConfig()
+        var permissionRequired = false
         if ghToken == nil {
             var load = loadFromGhKeychain()
             if load == .keychainPermissionRequired, allowKeychainInteraction {
                 load = loadFromGhKeychain(allowKeychainInteraction: true)
             }
+            permissionRequired = load == .keychainPermissionRequired
             ghToken = load.token
         }
         var seen: Set<CopilotToken> = []
-        return [ghToken, usageToken].compactMap { token in
+        let tokens = [ghToken, usageToken].compactMap { (token: CopilotToken?) -> CopilotToken? in
             guard let token, seen.insert(token).inserted else { return nil }
             return token
         }
+        return CopilotBillingCandidates(tokens: tokens, keychainPermissionRequired: permissionRequired)
     }
 
     // MARK: - Sources
