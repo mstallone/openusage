@@ -74,7 +74,10 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
         ) { () -> OSStatus in
             var gateEngaged = true
             let status = allowInteraction
-                ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
+                ? KeychainUISuppression.withUIAllowed { uiAvailable in
+                    gateEngaged = uiAvailable
+                    return SecItemCopyMatching(query as CFDictionary, &result)
+                }
                 : KeychainUISuppression.withUISuppressed { isSuppressed in
                     gateEngaged = isSuppressed
                     return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
