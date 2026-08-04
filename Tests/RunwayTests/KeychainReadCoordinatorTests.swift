@@ -455,3 +455,96 @@ private final class CurrentUserProtectedKeychain: KeychainAccessing, @unchecked 
 
     func writeGenericPassword(service: String, value: String) throws {}
 }
+
+/// The breaker answers later probes locally, so "was this an ACL denial or an unreadable keychain?"
+/// has to be remembered from the read that produced the failure.
+final class KeychainFailureCategoryTests: XCTestCase {
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func increment() { lock.withLock { count += 1 } }
+        var value: Int { lock.withLock { count } }
+    }
+
+    /// Minimal mutable clock (the suite's own `Locked` is private to its test class).
+    private final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Date
+        init(_ value: Date) { self.value = value }
+        var now: Date { lock.withLock { value } }
+        func advance(_ seconds: TimeInterval) { lock.withLock { value = value.addingTimeInterval(seconds) } }
+    }
+
+    func testRecordedDenialSurvivesTheBreakerAndIsClearedByASuccess() {
+        let clock = Clock(Date(timeIntervalSince1970: 1_000_000))
+        let coordinator = KeychainReadCoordinator(
+            revalidateAfter: 60,
+            now: { clock.now }
+        )
+
+        XCTAssertNil(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"))
+
+        coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: true)
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-1" },
+            read: { NonInteractiveKeychainRead.unavailable }
+        )
+        // The item is tripped now — a probe answers nil locally — but the category still reads back.
+        XCTAssertNil(coordinator.probe(service: "svc", account: "acct") { true })
+        XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), true)
+
+        // Once the breaker revalidates and the read succeeds, there is no failure to describe.
+        clock.advance(61)
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-2" },
+            read: { NonInteractiveKeychainRead.value("secret") }
+        )
+        XCTAssertNil(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"))
+    }
+
+    func testAnOlderInteractiveCompletionCannotOverwriteANewerRecovery() {
+        // Reviewer-requested: interactive read A stalls past the bounded wait, B bypasses it and
+        // recovers; A must not then re-trip the item and lock background refreshes out.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        let aStarted = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let aDone = expectation(description: "stalled interactive read finished")
+
+        let readerA = Thread {
+            _ = try? coordinator.interactiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: {
+                    aStarted.signal()
+                    releaseA.wait()
+                    throw KeychainError.readFailed("denied")
+                }
+            )
+            aDone.fulfill()
+        }
+        readerA.start()
+        XCTAssertEqual(aStarted.wait(timeout: .now() + 2), .success)
+
+        let recovered = try? coordinator.interactiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { "approved-secret" }
+        )
+        XCTAssertEqual(recovered, "approved-secret")
+
+        releaseA.signal()
+        wait(for: [aDone], timeout: 2)
+
+        let reads = Counter()
+        let after = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { reads.increment(); return .value("approved-secret") }
+        )
+        XCTAssertEqual(after, .value("approved-secret"))
+        XCTAssertEqual(reads.value, 1, "the stale failure must not have re-tripped the breaker")
+    }
+
+    func testAnUnreadableKeychainIsRecordedAsNotDenied() {
+        let coordinator = KeychainReadCoordinator()
+        coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: false)
+        XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), false)
+    }
+}
