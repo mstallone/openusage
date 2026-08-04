@@ -228,6 +228,41 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         )
     }
 
+    func testPendingOptOutIsRetriedOnTheNextLaunch() async throws {
+        // Sync is off after a failed opt-out, so nothing else would ever come back for it. The
+        // intent is persisted and completed once the identity is knowable again.
+        let defaults = makeDefaults("pending-opt-out-retry")
+        defaults.set(false, forKey: "runway.icloudSync.enabled.v1")
+        defaults.set(true, forKey: "runway.icloudSync.pendingOptOutDeletion.v1")
+        defaults.set("cccccccc-1111-2222-3333-444444444444", forKey: "runway.icloudSync.deviceID.v1")
+        let cloudStore = RecordingUsageCloudStore()
+
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: KeychainICloudDeviceIDStore(
+                ownedStore: InMemoryOwnedSecretStore(),
+                legacyKeychain: ServiceKeychain(),
+                bundleIdentifier: "com.mattstallone.runway"
+            ),
+            pollInterval: nil
+        )
+        XCTAssertFalse(sync.enabled)
+
+        let deadline = Date().addingTimeInterval(2)
+        while await cloudStore.deletedDeviceIDs.isEmpty, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let deleted = await cloudStore.deletedDeviceIDs
+        XCTAssertEqual(deleted, ["cccccccc-1111-2222-3333-444444444444"])
+        XCTAssertFalse(
+            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
+            "a completed opt-out must clear the pending flag"
+        )
+    }
+
     func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
         // A fresh install has no v1 item: the prompt-free existence probe answers "absent" and the
         // subprocess-backed legacy read must never run — not even once.
