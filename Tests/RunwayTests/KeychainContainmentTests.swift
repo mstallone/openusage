@@ -22,7 +22,7 @@ final class ClaudeProtectedItemContainmentTests: XCTestCase {
 
 /// The current-user item is present but unreadable; any service-wide read is recorded so the test
 /// can prove it never happens.
-private final class CurrentUserProtectedKeychain: KeychainAccessing, @unchecked Sendable {
+private final class CurrentUserProtectedKeychain: KeychainReading, @unchecked Sendable {
     private let lock = NSLock()
     private var serviceWide = 0
 
@@ -50,7 +50,6 @@ private final class CurrentUserProtectedKeychain: KeychainAccessing, @unchecked 
         true
     }
 
-    func writeGenericPassword(service: String, value: String) throws {}
 }
 
 /// The breaker answers later probes locally, so "was this an ACL denial or an unreadable keychain?"
