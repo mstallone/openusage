@@ -4,6 +4,7 @@
 // (docs/ios-app.md), so it always lands under ios/.
 const TESTFLIGHT_FILES = new Set([
   ".github/workflows/release-ios.yml",
+  "script/decode_provisioning_profile.sh",
   "script/release_ios.sh",
   "script/testflight_distribute.mjs",
   "script/testflight_gate.mjs",

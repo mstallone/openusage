@@ -11,6 +11,7 @@ test("iOS source and dedicated TestFlight pipeline changes are relevant", () => 
     "ios/RunwayMobile/App/RunwayMobileApp.swift",
     "ios/Shared/SyncWire.swift",
     ".github/workflows/release-ios.yml",
+    "script/decode_provisioning_profile.sh",
     "script/release_ios.sh",
     "script/testflight_distribute.mjs",
     "script/testflight_gate.mjs",
