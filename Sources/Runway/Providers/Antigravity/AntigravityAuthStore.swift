@@ -60,10 +60,17 @@ struct AntigravityAuthStore: Sendable {
             case .missing:
                 raw = nil
             case .unavailable:
-                // Present but not approved: only an in-app manual refresh + Always Allow fixes it,
-                // so don't send the user to unlock Keychain or sign in again.
-                AppLog.error(LogTag.auth("antigravity"), "keychain credential unavailable without interaction; refresh manually to approve access")
-                throw AntigravityError.keychainPermissionRequired
+                // Two different failures arrive as `.unavailable`, and they need opposite advice.
+                // The attributes probe (prompt-free) tells them apart: a confirmed item means the
+                // ACL simply hasn't approved Runway — a manual refresh plus Always Allow fixes it.
+                // An inconclusive probe means the keychain itself couldn't be read (locked, or a
+                // suppressed/stuck query), where approving nothing helps and unlocking does.
+                if keychain.genericPasswordExists(service: Self.keychainService, account: Self.keychainAccount) == true {
+                    AppLog.error(LogTag.auth("antigravity"), "keychain credential not approved for Runway; refresh manually to approve access")
+                    throw AntigravityError.keychainPermissionRequired
+                }
+                AppLog.error(LogTag.auth("antigravity"), "keychain credential could not be read; the keychain may be locked")
+                throw AntigravityError.credentialStoreUnreadable
             }
         }
         guard let raw else { return nil }

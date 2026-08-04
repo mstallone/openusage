@@ -278,6 +278,16 @@ final class AntigravityProviderTests: XCTestCase {
         XCTAssertEqual(keychain.plainReads, 0)
     }
 
+    func testLockedKeychainSaysUnlockRatherThanApprove() {
+        // An inconclusive existence probe means the keychain itself couldn't be read. Telling the
+        // user to choose Always Allow there is wrong advice — there is nothing to approve yet.
+        let store = AntigravityAuthStore(keychain: IndeterminateAntigravityKeychain(), files: FakeFiles())
+
+        XCTAssertThrowsError(try store.loadKeychainToken()) { error in
+            XCTAssertEqual(error as? AntigravityError, .credentialStoreUnreadable)
+        }
+    }
+
     func testUnavailableKeychainAsksForApprovalWithoutFallingBackToAPrompt() {
         // An item Runway isn't authorized to read yet surfaces the permission-specific error — not
         // "unlock Keychain or sign in again", which fixes neither — and must not prompt on its own.
@@ -495,7 +505,8 @@ private final class Counter: @unchecked Sendable {
     }
 }
 
-/// A Keychain whose non-interactive reads report `.unavailable` (item present but not authorized).
+/// A Keychain whose non-interactive reads report `.unavailable` while the attributes-only probe
+/// still confirms the item — "present, but this app isn't approved for it yet".
 private final class UnavailableKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
@@ -504,5 +515,25 @@ private final class UnavailableKeychain: KeychainReading, @unchecked Sendable {
 
     func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
         .unavailable
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        true
+    }
+}
+
+/// Reads are unavailable and the existence probe cannot answer — the locked-keychain shape.
+private final class IndeterminateAntigravityKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        nil
     }
 }
