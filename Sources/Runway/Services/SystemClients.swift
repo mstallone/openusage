@@ -306,6 +306,8 @@ enum KeychainUISuppression {
     private static let condition = NSCondition()
     nonisolated(unsafe) private static var suppressedDepth = 0
     nonisolated(unsafe) private static var interactiveCount = 0
+    /// Whether an interactive operation currently holds the gate. See `withUIAllowed`.
+    nonisolated(unsafe) private static var interactiveInFlight = false
     /// Whether the outermost scope's disable call actually succeeded. The setter essentially never
     /// fails, but if it does, running the protected query anyway could show the exact background
     /// dialog this gate exists to prevent — so bodies receive this and skip the prompt-capable call.
@@ -370,6 +372,16 @@ enum KeychainUISuppression {
     /// those park on `interactiveCount` instead.
     static func withUIAllowed<T>(_ body: (_ uiAvailable: Bool) throws -> T) rethrows -> T {
         condition.lock()
+        // Interactive operations are EXCLUSIVE of one another, not just of suppressed ones. A
+        // Refresh All starts every provider at once, so without this a single click could put
+        // several macOS approval dialogs on screen together — the prompt storm this gate exists to
+        // prevent. Unbounded on purpose: the holder is showing the user a dialog, and giving up
+        // early would produce exactly those concurrent prompts. The suppressed side is the one that
+        // must not block indefinitely, and it already has its own deadline.
+        while interactiveInFlight {
+            condition.wait()
+        }
+        interactiveInFlight = true
         interactiveCount += 1
         let deadline = Date().addingTimeInterval(interactiveGateWait)
         while suppressedDepth > 0, Date() < deadline {
@@ -395,9 +407,8 @@ enum KeychainUISuppression {
         defer {
             condition.lock()
             interactiveCount -= 1
-            if interactiveCount == 0 {
-                condition.broadcast()
-            }
+            interactiveInFlight = false
+            condition.broadcast()
             condition.unlock()
         }
         return try body(!suppressionStuck)

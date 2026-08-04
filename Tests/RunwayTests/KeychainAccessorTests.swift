@@ -84,6 +84,30 @@ final class KeychainAccessorTests: XCTestCase {
         )
     }
 
+    func testTwoInteractiveOperationsNeverOverlap() {
+        // A Refresh All starts every provider at once, so without exclusivity one click could put
+        // several macOS approval dialogs on screen together — the storm this gate exists to stop.
+        let overlapped = Locked(false)
+        let active = Locked(0)
+        let bothDone = expectation(description: "both interactive operations finished")
+        bothDone.expectedFulfillmentCount = 2
+
+        for _ in 0..<2 {
+            Thread {
+                KeychainUISuppression.withUIAllowed { _ in
+                    let concurrent = active.withLock { $0 += 1; return $0 }
+                    if concurrent > 1 { overlapped.withLock { $0 = true } }
+                    Thread.sleep(forTimeInterval: 0.15)
+                    active.withLock { $0 -= 1 }
+                }
+                bothDone.fulfill()
+            }.start()
+        }
+
+        wait(for: [bothDone], timeout: 5)
+        XCTAssertFalse(overlapped.withLock { $0 }, "only one approval dialog may be open at a time")
+    }
+
     func testSuppressedEntrantWaitsOutAnInteractiveOperation() {
         // The interactive gate is held for the operation's WHOLE duration (an approval dialog can
         // sit open for minutes). A suppressed call arriving mid-operation must park until the
