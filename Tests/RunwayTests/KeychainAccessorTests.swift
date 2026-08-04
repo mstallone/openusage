@@ -109,6 +109,36 @@ final class KeychainAccessorTests: XCTestCase {
         XCTAssertEqual(events.withLock { $0 }, ["interactive-exit", "suppressed-ran"])
     }
 
+    func testSuppressedEntrantGivesUpOnAnAbandonedInteractiveOperation() {
+        // The other half of the contract above: an approval dialog can be abandoned behind another
+        // window, and parking forever would strand every concurrent refresh in exactly the
+        // contention this gate prevents. Past the deadline the body runs with `isSuppressed: false`,
+        // which by contract means "report unavailable without touching Security.framework".
+        let interactiveHeld = DispatchSemaphore(value: 0)
+        let releaseInteractive = DispatchSemaphore(value: 0)
+        let interactiveDone = expectation(description: "interactive operation finished")
+
+        let holder = Thread {
+            KeychainUISuppression.withUIAllowed {
+                interactiveHeld.signal()
+                releaseInteractive.wait()
+            }
+            interactiveDone.fulfill()
+        }
+        holder.start()
+        XCTAssertEqual(interactiveHeld.wait(timeout: .now() + 5), .success)
+
+        let start = Date()
+        let suppressed = KeychainUISuppression.withUISuppressed { $0 }
+        let elapsed = Date().timeIntervalSince(start)
+
+        releaseInteractive.signal()
+        wait(for: [interactiveDone], timeout: 5)
+
+        XCTAssertFalse(suppressed, "a caller that gave up must be told UI is not suppressed")
+        XCTAssertLessThan(elapsed, 5, "the suppressed side must not wait indefinitely")
+    }
+
     func testNonInteractiveReadStaysSilentForAuthorizedItemsAndDistinguishesMissing() throws {
         // The test process creates this item, so its ACL already authorizes the process — the
         // suppressed read must still return the secret silently (the already-approved default

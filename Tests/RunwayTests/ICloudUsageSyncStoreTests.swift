@@ -454,6 +454,28 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         XCTAssertEqual(relaunch.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
     }
 
+    func testUnknownLegacyProbeWarnsInsteadOfMintingADuplicateIdentity() async throws {
+        // v2 and the saved preference are both gone and the keychain can't be checked. Treating
+        // "unknown" as "absent" would publish a SECOND device record to iCloud for a Mac that
+        // already has one — so the migration fails and the store surfaces its duplicate warning.
+        let defaults = makeDefaults("unknown-legacy-probe")
+        let store = KeychainICloudDeviceIDStore(
+            ownedStore: InMemoryOwnedSecretStore(),
+            legacyKeychain: IndeterminateProbeKeychain(),
+            bundleIdentifier: "com.mattstallone.runway"
+        )
+        XCTAssertThrowsError(try store.migrateLegacyDeviceID())
+
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: RecordingUsageCloudStore(),
+            deviceIDStore: store,
+            pollInterval: nil
+        )
+        XCTAssertNotNil(sync.serviceError, "the user must be told sync may duplicate this device")
+    }
+
     func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
         // A fresh install has no v1 item: the prompt-free existence probe answers "absent" and the
         // subprocess-backed legacy read must never run — not even once.
@@ -670,4 +692,21 @@ private final class ProbeOnlyKeychain: KeychainReading, @unchecked Sendable {
     }
 
     func writeGenericPassword(service: String, value: String) throws {}
+}
+
+/// The legacy item's existence cannot be determined (locked keychain / suppressed probe), and any
+/// secret read would fail the test — the migration must stop at the probe.
+private final class IndeterminateProbeKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("no secret read may run when existence is unknown")
+        return nil
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        nil
+    }
+
+    func genericPasswordForCurrentUserExists(service: String) -> Bool? {
+        nil
+    }
 }

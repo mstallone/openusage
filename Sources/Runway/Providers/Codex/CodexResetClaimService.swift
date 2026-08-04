@@ -63,7 +63,19 @@ final class CodexResetClaimService {
             usageClient: usageClient,
             credentialCandidates: {
                 var candidates = authStore.loadAuthCandidates()
-                if let keychain = await loadOffMainActor({ authStore.loadKeychainAuth() }) {
+                // Claiming a reset credit is an explicit user action, so — like a manual refresh —
+                // it may ask macOS to approve a protected keyring item. Without this the claim
+                // reported a generic failure while the credential that could serve it sat unread.
+                let keychainLoad = await loadOffMainActor {
+                    authStore.loadKeychainCredentials(allowKeychainInteraction: true)
+                }
+                if case .permissionRequired = keychainLoad {
+                    AppLog.warn(
+                        LogTag.auth("codex"),
+                        "reset claim could not read the Codex keyring item; approve it for Runway and try again"
+                    )
+                }
+                if let keychain = keychainLoad.state {
                     candidates.append(keychain)
                 }
                 return candidates.compactMap { candidate in

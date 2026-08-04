@@ -209,7 +209,7 @@ struct CodexAuthStore: Sendable {
                     credentialHome: canonicalHome
                 ))
             case .unavailable:
-                // Interactive mode: the user just saw (and declined/failed) this exact item's
+                // Interactive mode: the user just saw (and declined, or failed) this exact item's
                 // prompt. Stop the scan — continuing would raise one dialog per remaining home.
                 if allowKeychainInteraction {
                     return .permissionRequired
