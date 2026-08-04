@@ -403,3 +403,55 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(reads.value, 1, "only reader A's underlying read may run")
     }
 }
+
+/// Claude's credential load must not follow a protected current-user item with a service-wide read:
+/// that is another Security call behind the same wedge, and with several `Claude Code-credentials`
+/// items it could select a different account's login.
+final class ClaudeProtectedItemContainmentTests: XCTestCase {
+    func testUnavailableCurrentUserReadNeverBroadensToTheServiceWideRead() {
+        let keychain = CurrentUserProtectedKeychain()
+        let store = ClaudeAuthStore(
+            environment: FakeEnvironment(),
+            files: FakeFiles(),
+            keychain: keychain
+        )
+
+        let load = store.loadCredentialSet()
+
+        XCTAssertEqual(load.keychainAccessStatus, .permissionRequired)
+        XCTAssertEqual(keychain.serviceWideReads, 0, "a protected exact item must end the lookup")
+    }
+}
+
+/// The current-user item is present but unreadable; any service-wide read is recorded so the test
+/// can prove it never happens.
+private final class CurrentUserProtectedKeychain: KeychainAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var serviceWide = 0
+
+    var serviceWideReads: Int { lock.withLock { serviceWide } }
+
+    func readGenericPassword(service: String) throws -> String? {
+        lock.withLock { serviceWide += 1 }
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        lock.withLock { serviceWide += 1 }
+        return .unavailable
+    }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func genericPasswordForCurrentUserExists(service: String) -> Bool? {
+        true
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
+}
