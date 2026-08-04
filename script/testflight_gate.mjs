@@ -30,6 +30,7 @@
 import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createClient } from "./lib/appstore_connect.mjs";
+import { testFlightRelevantPaths } from "./lib/testflight_paths.mjs";
 
 const env = (name) => {
   const v = process.env[name];
@@ -51,18 +52,6 @@ const decide = (ship, reason) => {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `ship=${ship}\n`);
   process.exit(0);
 };
-
-// Everything the shipped iOS build and its pipeline are made from. The wire-contract rule keeps
-// this filter sound: a Mac-side change that matters to the phone must update
-// ios/Shared/SyncWire.swift (docs/ios-app.md), so it always lands inside ios/.
-const IOS_PATHS = [
-  "ios",
-  "script/release_ios.sh",
-  "script/testflight_distribute.mjs",
-  "script/testflight_gate.mjs",
-  "script/lib/appstore_connect.mjs",
-  ".github/workflows/release.yml",
-];
 
 const STABLE_TAG = /^v\d+\.\d+\.\d+$/;
 const TAG = env("RELEASE_TAG");
@@ -94,7 +83,11 @@ const previous = git("tag", "--list", "--sort=-v:refname")
 if (!previous) decide(true, "no previous stable release tag — first release.");
 
 const diffAgainst = (base) =>
-  git("diff", "--name-only", base, TAG, "--", ...IOS_PATHS).split("\n").filter(Boolean);
+  testFlightRelevantPaths(
+    // Treat a move out of a relevant directory as a deletion from it, not only as the unrelated
+    // destination path. That keeps the filter sound if git would otherwise detect a rename.
+    git("diff", "--name-only", "--no-renames", base, TAG).split("\n").filter(Boolean),
+  );
 
 // Fast path, no App Store Connect needed: changes since the previous stable tag are new to
 // testers no matter which older build they actually have.
