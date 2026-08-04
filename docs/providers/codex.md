@@ -57,7 +57,7 @@ For supported GPT-5.4, GPT-5.5, and GPT-5.6 models, requests above 272k input to
 - **"Not logged in"** — run `codex` and sign in, then refresh.
 - **API-key-only setups** can't read subscription usage — sign in with your ChatGPT account instead.
 - **Spend tiles show "No data"** — Runway found no Codex session logs in the last 30 days. If your Codex home lives somewhere custom, set `CODEX_HOME` so both the Codex CLI and Runway look in the same place.
-- **A custom home doesn't become a separate card** — confirm it has a ChatGPT OAuth login and either an `auth.json`, `config.toml`, or sessions directory that lets discovery recognize the home. API-key-only, tokenless, and nameless file credentials are skipped rather than guessed. A keyring-only home sometimes needs one additional Runway launch after its exact credential is first bound.
+- **A custom home doesn't become a separate card** — confirm it has a ChatGPT OAuth login and either an `auth.json`, `config.toml`, or sessions directory that lets discovery recognize the home. API-key-only, tokenless, and nameless file credentials are skipped rather than guessed. A keyring-only home sometimes needs one additional Runway launch after its exact credential is first bound. If Runway has never been approved to read that home's `Codex Auth` item, no number of launches will bind it — the diagnostic log names this case ("approve the 'Codex Auth' Keychain item for Runway to bind it"), and today the only way to grant it is from Keychain Access. An in-app approval flow for these hidden homes is planned.
 
 ## Under the hood
 
