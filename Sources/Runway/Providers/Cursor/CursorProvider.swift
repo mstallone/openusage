@@ -82,6 +82,22 @@ final class CursorProvider: ProviderRuntime {
 
         do {
             return try await probe(authState: state)
+        } catch let error as CursorAuthError where error == .loginRenewalRequired {
+            // The selected token lapsed or was rejected server-side. Runway never refreshes it, but
+            // Cursor's app and its `agent` CLI keep separate copies — try a live one for the SAME
+            // account once before telling the user to sign in again.
+            let alternative = await loadOffMainActor { [authStore] in
+                authStore.sameAccountAlternative(to: state, allowKeychainInteraction: allowInteraction)
+            }
+            guard let alternative else {
+                return ProviderSnapshot.error(provider: provider, error: error)
+            }
+            AppLog.info(LogTag.auth("cursor"), "selected token rejected; retrying this account's other local credential")
+            do {
+                return try await probe(authState: alternative)
+            } catch {
+                return ProviderSnapshot.error(provider: provider, error: error)
+            }
         } catch {
             return ProviderSnapshot.error(provider: provider, error: error)
         }

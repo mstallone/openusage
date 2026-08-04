@@ -596,3 +596,82 @@ private final class ApprovableCursorKeychain: KeychainReading, @unchecked Sendab
         true
     }
 }
+
+@MainActor
+final class CursorRevokedTokenFallbackTests: XCTestCase {
+    func testServerRejectionRetriesTheSameAccountKeychainTokenOnce() async {
+        // An unexpired SQLite token that the server revoked (signed out elsewhere). Runway can't
+        // refresh it, but the agent CLI's keychain copy for the SAME account is still live — it must
+        // be tried once instead of reporting renewal while a working credential sits unread.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let revoked = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
+        let live = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
+        let http = RoutingHTTPClient { request in
+            XCTAssertFalse(request.url.absoluteString.contains("oauth/token"), "no OAuth token-endpoint call may be made")
+            guard request.headers["Authorization"]?.contains(live) == true else {
+                return HTTPResponse(statusCode: 401, headers: [:], body: Data())
+            }
+            return HTTPResponse(
+                statusCode: 200,
+                headers: [:],
+                body: Data(#"{"enabled":true,"planUsage":{"limit":40000,"totalPercentUsed":20}}"#.utf8)
+            )
+        }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(
+                sqlite: FakeSQLite(values: [
+                    CursorAuthStore.accessTokenKey: revoked,
+                    CursorAuthStore.membershipTypeKey: "pro"
+                ]),
+                keychain: ServiceKeychain(values: [
+                    CursorAuthStore.keychainAccessTokenService: live
+                ]),
+                now: { now }
+            ),
+            usageClient: CursorUsageClient(http: http),
+            now: { now }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertNil(
+            snapshot.lines.compactMap { line -> String? in
+                guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+                return text
+            }.first,
+            "the live same-account token should have served this refresh"
+        )
+    }
+
+    func testServerRejectionDoesNotRetryADifferentAccountsToken() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let revoked = makeCursorJWT(sub: "auth0|user-a", exp: now.timeIntervalSince1970 + 3_600)
+        let otherAccount = makeCursorJWT(sub: "auth0|user-b", exp: now.timeIntervalSince1970 + 3_600)
+        let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(
+                sqlite: FakeSQLite(values: [
+                    CursorAuthStore.accessTokenKey: revoked,
+                    CursorAuthStore.membershipTypeKey: "pro"
+                ]),
+                keychain: ServiceKeychain(values: [
+                    CursorAuthStore.keychainAccessTokenService: otherAccount
+                ]),
+                now: { now }
+            ),
+            usageClient: CursorUsageClient(http: http),
+            now: { now }
+        )
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertEqual(http.requests.count, 1, "another account's token must never be tried")
+        XCTAssertEqual(
+            snapshot.lines.compactMap { line -> String? in
+                guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+                return text
+            }.first,
+            CursorAuthError.loginRenewalRequired.localizedDescription
+        )
+    }
+}

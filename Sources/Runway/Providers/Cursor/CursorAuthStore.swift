@@ -146,6 +146,40 @@ struct CursorAuthStore: Sendable {
         return .none
     }
 
+    /// A live token for the SAME account from whichever source was not selected. Runway cannot
+    /// refresh a rejected Cursor token, but the app and the `agent` CLI keep separate copies and one
+    /// can outlive the other — so a revoked-but-unexpired selection should not strand a working
+    /// credential. Subject equality is required, so this can never cross accounts.
+    func sameAccountAlternative(
+        to state: CursorAuthState,
+        allowKeychainInteraction: Bool = false
+    ) -> CursorAuthState? {
+        guard let current = state.accessToken, let subject = Self.tokenSubject(current) else {
+            return nil
+        }
+        let candidate: String?
+        let source: CursorAuthState.Source
+        switch state.source {
+        case .sqlite:
+            candidate = readKeychainValue(
+                Self.keychainAccessTokenService,
+                allowInteraction: allowKeychainInteraction
+            ).trimmedValue
+            source = .keychain
+        case .keychain:
+            candidate = readStateValues([Self.accessTokenKey])[Self.accessTokenKey]
+            source = .sqlite
+        }
+        guard let candidate,
+              candidate != current,
+              Self.tokenSubject(candidate) == subject,
+              !isExpired(candidate)
+        else {
+            return nil
+        }
+        return CursorAuthState(accessToken: candidate, source: source)
+    }
+
     /// `nil` from the probe means "cannot check" (locked keychain, stuck flight), not "absent" —
     /// treating it as logged-out would silently swallow an access problem. Only a confirmed-absent
     /// item reads as no footprint.
