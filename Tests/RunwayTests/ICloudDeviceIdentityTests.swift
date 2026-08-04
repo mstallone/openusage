@@ -157,6 +157,45 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         XCTAssertNotNil(sync.serviceError, "the user must be told why usage isn't publishing")
     }
 
+    func testProvisionalIdentityContributesNoPeerHistory() async throws {
+        // This Mac's OWN earlier record can't be recognized while the identity is provisional, so
+        // merging it would count local usage a second time as if a different device produced it.
+        let defaults = makeDefaults("provisional-peer-merge")
+        let ownPriorRecord = UsageHistoryDocument(
+            deviceID: "the-real-id-this-mac-published-before",
+            deviceName: "This Mac",
+            updatedAt: .now,
+            providers: [:]
+        )
+        let cloudStore = RecordingUsageCloudStore(seedDocuments: [ownPriorRecord])
+        let dataStore = makeDataStore(defaults)
+        let sync = ICloudUsageSyncStore(
+            dataStore: dataStore,
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: KeychainICloudDeviceIDStore(
+                ownedStore: InMemoryOwnedSecretStore(),
+                legacyKeychain: IndeterminateProbeKeychain(),
+                bundleIdentifier: "com.mattstallone.runway"
+            ),
+            pollInterval: nil
+        )
+
+        // Poll until the record has actually been downloaded, so this proves the merge path ran
+        // and still contributed nothing — not merely that the load never happened.
+        let deadline = Date().addingTimeInterval(2)
+        while sync.documents.isEmpty, Date() < deadline {
+            await sync.reload()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertFalse(sync.documents.isEmpty, "the prior record should have been downloaded")
+        XCTAssertTrue(
+            dataStore.peerHistoryDocuments.isEmpty,
+            "a provisional identity must contribute no peer history"
+        )
+    }
+
     func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
         // A fresh install has no v1 item: the prompt-free existence probe answers "absent" and the
         // subprocess-backed legacy read must never run — not even once.
