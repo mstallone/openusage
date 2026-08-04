@@ -80,6 +80,35 @@ final class KeychainAccessorTests: XCTestCase {
         XCTAssertFalse(overlapped.withLock { $0 }, "only one approval dialog may be open at a time")
     }
 
+    func testAnAbandonedDialogDoesNotBlockAnotherProviderForever() {
+        // Refresh All starts providers concurrently, so an abandoned approval dialog must not hang
+        // every later provider's manual refresh behind it. Past the deadline the caller is told UI
+        // is unavailable — it reports "busy" rather than hanging or opening a second dialog.
+        let held = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let holderDone = expectation(description: "abandoned dialog released")
+
+        let holder = Thread {
+            KeychainUISuppression.withUIAllowed { _ in
+                held.signal()
+                release.wait()
+            }
+            holderDone.fulfill()
+        }
+        holder.start()
+        XCTAssertEqual(held.wait(timeout: .now() + 5), .success)
+
+        let start = Date()
+        let uiAvailable = KeychainUISuppression.withUIAllowed { $0 }
+        let elapsed = Date().timeIntervalSince(start)
+
+        release.signal()
+        wait(for: [holderDone], timeout: 5)
+
+        XCTAssertFalse(uiAvailable, "a caller that gave up must be told UI is not available")
+        XCTAssertLessThan(elapsed, 5, "it must not wait on the open dialog indefinitely")
+    }
+
     func testSuppressedEntrantWaitsOutAnInteractiveOperation() {
         // The interactive gate is held for the operation's WHOLE duration (an approval dialog can
         // sit open for minutes). A suppressed call arriving mid-operation must park until the
