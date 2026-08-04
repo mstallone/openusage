@@ -63,6 +63,18 @@ final class CodexResetClaimService {
             usageClient: usageClient,
             credentialCandidates: { allowKeychainInteraction in
                 var candidates = authStore.loadAuthCandidates()
+                // Don't touch the Keychain at all while a usable file credential exists. The read
+                // is a synchronous securityd round trip, so a wedged securityd would otherwise
+                // block this claim indefinitely — leaving the row on "Resetting…" — even though the
+                // file credential could have completed it on its own.
+                if !allowKeychainInteraction, candidates.contains(where: \.hasUsableAccessToken) {
+                    return candidates.compactMap { candidate in
+                        guard candidate.hasUsableAccessToken, let token = candidate.auth.tokens?.accessToken else {
+                            return nil
+                        }
+                        return (token, candidate.auth.tokens?.accountID)
+                    }
+                }
                 // Claiming a reset credit is an explicit user action, so — like a manual refresh —
                 // it may ask macOS to approve a protected keyring item. The caller only sets the
                 // flag once the file credentials have actually been rejected, so a user whose

@@ -90,10 +90,13 @@ final class CopilotAuthStoreTests: XCTestCase {
     func testUnknownExistenceProbeIsTreatedAsUnreadableNotLoggedOut() {
         // A locked keychain (or a probe suppressed behind a stuck flight) answers `nil` — "cannot
         // check". Collapsing that into "not logged in" would disable Copilot at first-run detection
-        // and show a misleading sign-in error, so the unreadable state must survive.
+        // and show a misleading sign-in error, so the unreadable state must survive. It is
+        // `.unreadable` and not an approval request: nothing examined the item, so asking the user
+        // to choose Always Allow could be pointing at an item that is already authorized.
         let store = CopilotAuthStore(files: FakeFiles(), keychain: IndeterminateKeychain())
 
-        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+        XCTAssertEqual(store.loadCredentials(), .unreadable)
+        XCTAssertNotEqual(store.loadCredentials(), .none, "first-run detection must still see a login")
     }
 
     func testUnreadableKeychainIsNotReportedAsNeedingApproval() {

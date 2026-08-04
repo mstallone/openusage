@@ -228,7 +228,14 @@ struct CursorAuthStore: Sendable {
         case false?:
             return .unreadable
         case nil:
-            return keychain.genericPasswordExists(service: service) != false ? .keychainPermissionRequired : nil
+            // No verdict recorded: UI-gate contention leaves none by design, and the probe behind
+            // that same gate answers nil too. A confirmed-present item still asks for approval, an
+            // unexamined one reports unreadable, and only a confirmed absence is no footprint.
+            switch keychain.genericPasswordExists(service: service) {
+            case true?: return .keychainPermissionRequired
+            case nil: return .unreadable
+            case false?: return nil
+            }
         }
     }
 
