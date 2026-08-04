@@ -14,10 +14,17 @@ protocol RunwayOwnedSecretStoring: Sendable {
 /// spawned, and the value never appears in an argument list the way the `/usr/bin/security` path
 /// exposed it.
 ///
-/// Not the data-protection Keychain: `kSecUseDataProtectionKeychain` requires an
-/// application-identifier / keychain-access-groups entitlement, and Runway ships Developer ID
-/// signed without one — the call would fail with `errSecMissingEntitlement`. Revisit if the app
-/// ever adopts provisioning.
+/// Not the data-protection Keychain, but not because the entitlement is missing: release builds —
+/// and dev builds that find an iCloud provisioning profile — are signed with
+/// `com.apple.application-identifier` and `keychain-access-groups` (see
+/// `script/render_icloud_entitlements.sh`), so `kSecUseDataProtectionKeychain` would work there.
+/// A plain local build without that profile signs with `Runway.local.entitlements.plist`, which
+/// carries neither, and the call would fail with `errSecMissingEntitlement`. Choosing per build
+/// flavor would split this item across two stores — the same device would mint a second iCloud sync
+/// identity depending on how it was built — so both use the login keychain, which behaves
+/// identically everywhere. Every property that motivated the move is already met here: no
+/// subprocess, no secret in an argument list, and an ACL bound to Runway itself. Migrating to the
+/// data-protection keychain (entitlement-gated, with a copy-forward) is viable follow-up work.
 struct RunwayOwnedKeychainStore: RunwayOwnedSecretStoring {
     /// Fixed account name marking items as Runway's own, distinct from the `$USER` account the
     /// legacy subprocess writes used.
