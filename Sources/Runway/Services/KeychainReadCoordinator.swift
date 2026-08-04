@@ -36,11 +36,14 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     }
 
     private struct Entry {
-        /// Fingerprint the cached outcome belongs to. `nil` (the probe failed or was skipped, e.g.
-        /// an interactive read that proceeded past a stuck flight) never matches the change-gated
-        /// cache path — a nil-fingerprint value is served ONLY by the stale-flight fallback, and
-        /// only while fresh.
+        /// Fingerprint the cached outcome belongs to. `nil` (the probe failed or was skipped) never
+        /// matches the change-gated cache path.
         var fingerprint: String?
+        /// Whether an explicit user action produced this value. Only such an entry may answer a
+        /// caller that timed out behind a stuck flight: that stuck read may be fetching a rotation
+        /// of this very secret, and a background value — which can also carry a nil fingerprint
+        /// when its probe failed — gives no reason to believe it is still current.
+        var fromUserAction: Bool = false
         /// Last successful read, served while the fingerprint is unchanged and the entry is fresh.
         var value: NonInteractiveKeychainRead?
         /// Tripped by a failed/denied read; answers `.unavailable` without touching the Keychain
@@ -101,11 +104,11 @@ final class KeychainReadCoordinator: @unchecked Sendable {
             // unavailable — logged, because the wedged call may never produce its own diagnostic.
             let entry = entries[key]
             condition.unlock()
-            // ONLY an interactive recovery's entry, which carries no fingerprint. A fingerprinted
-            // entry was cached against the attributes the item had BEFORE the stuck read, so the
-            // stuck read may be fetching a rotation of exactly that secret — serving the cached one
-            // would authenticate with a superseded token.
-            if let entry, !entry.tripped, entry.fingerprint == nil, let value = entry.value,
+            // ONLY a value an explicit user action produced. Any background value was cached
+            // against the item as it was BEFORE the stuck read began, and that read may be fetching
+            // a rotation of exactly this secret — serving the cached one would authenticate with a
+            // superseded token.
+            if let entry, !entry.tripped, entry.fromUserAction, let value = entry.value,
                now().timeIntervalSince(entry.updatedAt) < revalidateAfter {
                 return value
             }
@@ -208,6 +211,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
                 key: key,
                 sequence: sequence,
                 fingerprint: fingerprint,
+                fromUserAction: true,
                 value: value.map(NonInteractiveKeychainRead.value) ?? .missing,
                 tripped: false
             )
@@ -292,6 +296,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         key: Key,
         sequence: Int,
         fingerprint: String? = nil,
+        fromUserAction: Bool = false,
         value: NonInteractiveKeychainRead?,
         tripped: Bool
     ) {
@@ -302,7 +307,13 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         // A read the UI gate turned away says nothing about this item, so it must not trip the
         // breaker and lock the item out for the whole revalidation window.
         let wasContention = contendedKeys.remove(key) != nil
-        store(key: key, fingerprint: fingerprint, value: value, tripped: tripped && !wasContention)
+        store(
+            key: key,
+            fingerprint: fingerprint,
+            fromUserAction: fromUserAction,
+            value: value,
+            tripped: tripped && !wasContention
+        )
     }
 
     /// Marks the next stored outcome for this item as UI-gate contention rather than a real
@@ -389,8 +400,20 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     }
 
     /// Must be called under `condition`'s lock.
-    private func store(key: Key, fingerprint: String?, value: NonInteractiveKeychainRead?, tripped: Bool) {
+    private func store(
+        key: Key,
+        fingerprint: String?,
+        fromUserAction: Bool,
+        value: NonInteractiveKeychainRead?,
+        tripped: Bool
+    ) {
         if !tripped { lastFailureDenied[key] = nil }
-        entries[key] = Entry(fingerprint: fingerprint, value: value, tripped: tripped, updatedAt: now())
+        entries[key] = Entry(
+            fingerprint: fingerprint,
+            fromUserAction: fromUserAction,
+            value: value,
+            tripped: tripped,
+            updatedAt: now()
+        )
     }
 }

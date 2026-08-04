@@ -222,6 +222,41 @@ final class KeychainFailureCategoryTests: XCTestCase {
         wait(for: [stuckDone], timeout: 2)
     }
 
+    func testAStuckFlightNeverServesABackgroundValueWithNoFingerprint() {
+        // A background probe can fail and store its value with a nil fingerprint too, so "no
+        // fingerprint" does not mean "a user just approved this". Only an explicit user action's
+        // value may answer here, because the stuck read may be fetching a rotation of this secret.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: nil,
+            fingerprint: { nil },
+            read: { .value("background-value") }
+        )
+
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let stuckDone = expectation(description: "stuck read finished")
+        let stuck = Thread {
+            _ = coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-2" },
+                read: { started.signal(); release.wait(); return .value("rotated") }
+            )
+            stuckDone.fulfill()
+        }
+        stuck.start()
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
+
+        let timedOut = coordinator.nonInteractiveRead(
+            service: "svc", account: nil,
+            fingerprint: { XCTFail("must not probe behind a stuck flight"); return nil },
+            read: { XCTFail("must not read behind a stuck flight"); return .unavailable }
+        )
+        XCTAssertEqual(timedOut, .unavailable, "a background value is no evidence the secret is current")
+
+        release.signal()
+        wait(for: [stuckDone], timeout: 2)
+    }
+
     func testAnUnreadableKeychainIsRecordedAsNotDenied() {
         let coordinator = KeychainReadCoordinator()
         coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: false)
