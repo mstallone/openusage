@@ -75,13 +75,16 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
                 : KeychainUISuppression.withUISuppressed { isSuppressed in
                     isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
                 }
-            // Denials throw from inside the flight so the breaker records them; every other status
-            // is interpreted below.
+            // EVERY failure throws from inside the flight so the breaker records it — a returning
+            // status would clear the breaker and let the next refresh call Security again. Only a
+            // hit or a definite miss come back for interpretation below.
             switch status {
+            case errSecSuccess, errSecItemNotFound:
+                return status
             case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
                 throw SakanaBrowserCredentialError.permissionRequired
             default:
-                return status
+                throw SakanaBrowserCredentialError.keychainFailure(Int(status))
             }
         }
         switch status {
