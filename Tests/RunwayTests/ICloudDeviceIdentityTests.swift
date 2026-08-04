@@ -289,6 +289,46 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         XCTAssertNotNil(sync.disabledStateWarning, "and stay visible while sync is off")
     }
 
+    func testPendingOptOutCompletesWithinTheSameSessionOnceTheKeychainRecovers() async throws {
+        // With sync off there is no poll and no write loop, so a launch-time retry that finds the
+        // keychain still locked used to strand the record until the next relaunch.
+        let defaults = makeDefaults("pending-opt-out-in-session")
+        defaults.set(false, forKey: "runway.icloudSync.enabled.v1")
+        defaults.set(true, forKey: "runway.icloudSync.pendingOptOutDeletion.v1")
+        let recovering = RecoveringDeviceIDStore()
+        let cloudStore = RecordingUsageCloudStore()
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: recovering,
+            pollInterval: nil
+        )
+
+        // The launch-time retry runs against a still-unreadable keychain and must delete nothing:
+        // the provisional UUID is not this Mac's CloudKit record.
+        try await Task.sleep(for: .milliseconds(120))
+        var deleted = await cloudStore.deletedDeviceIDs
+        XCTAssertTrue(deleted.isEmpty, "a provisional identity must never be used to delete")
+        XCTAssertTrue(defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"))
+
+        // The keychain comes back and a refresh reports local state; that is the only recurring
+        // signal left while sync is off, so the opt-out finishes there.
+        recovering.recover(as: "eeeeeeee-1111-2222-3333-444444444444")
+        sync.scheduleWrite()
+        let deadline = Date().addingTimeInterval(2)
+        while await cloudStore.deletedDeviceIDs.isEmpty, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        deleted = await cloudStore.deletedDeviceIDs
+        XCTAssertEqual(deleted, ["eeeeeeee-1111-2222-3333-444444444444"])
+        XCTAssertFalse(
+            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
+            "the opt-out completed without a relaunch"
+        )
+    }
+
     func testProvisionalIdentityRecoversWithinTheSameSession() async throws {
         // Reviewer-requested: once the keychain becomes readable, publishing resumes without a
         // relaunch.
