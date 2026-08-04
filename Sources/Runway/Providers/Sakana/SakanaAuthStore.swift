@@ -72,11 +72,21 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
             unavailable: { denied in denied ? SakanaBrowserCredentialError.permissionRequired : SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable)) }
         ) { () -> OSStatus in
+            var gateEngaged = true
             let status = allowInteraction
                 ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
                 : KeychainUISuppression.withUISuppressed { isSuppressed in
-                    isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
+                    gateEngaged = isSuppressed
+                    return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
                 }
+            guard gateEngaged else {
+                // Another provider's approval dialog held the process-wide UI gate, so this read
+                // never reached securityd. That is not evidence about this item's ACL: reporting a
+                // denial would tell the user to approve an item nobody asked about, and tripping
+                // the breaker would lock out an item that was never attempted.
+                KeychainReadCoordinator.shared.recordContention(service: service, account: nil)
+                throw SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable))
+            }
             // EVERY failure throws from inside the flight so the breaker records it — a returning
             // status would clear the breaker and let the next refresh call Security again. Only a
             // hit or a definite miss come back for interpretation below.
@@ -84,8 +94,16 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             case errSecSuccess, errSecItemNotFound:
                 return status
             case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
+                // Remember WHY, so the breaker's later replays keep giving the same advice instead
+                // of degrading a real denial into a generic "couldn't be read".
+                KeychainReadCoordinator.shared.recordFailureCategory(
+                    service: service, account: nil, permissionDenied: true
+                )
                 throw SakanaBrowserCredentialError.permissionRequired
             default:
+                KeychainReadCoordinator.shared.recordFailureCategory(
+                    service: service, account: nil, permissionDenied: false
+                )
                 throw SakanaBrowserCredentialError.keychainFailure(Int(status))
             }
         }
