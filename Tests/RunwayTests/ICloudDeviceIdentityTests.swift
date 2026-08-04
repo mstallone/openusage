@@ -222,6 +222,10 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         let deleted = await cloudStore.deletedDeviceIDs
         XCTAssertTrue(deleted.isEmpty, "a provisional id must not be used for the opt-out delete")
         XCTAssertNotNil(sync.serviceError, "the user must be told the record wasn't removed")
+        XCTAssertNotNil(
+            sync.disabledStateWarning,
+            "Settings renders errors only while sync is on, so this one must survive the toggle"
+        )
     }
 
     func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
