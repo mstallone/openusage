@@ -51,6 +51,14 @@ struct AntigravityAuthStore: Sendable {
                 throw AntigravityError.credentialStoreUnreadable
             }
         } else {
+            // Probe BEFORE the read. Afterwards is too late: an unreadable secret read trips this
+            // item's breaker, and the coordinator then answers the probe `nil` locally — so the
+            // "is it just unapproved?" question could never be answered and every protected item
+            // got the (wrong) unlock-your-keychain advice.
+            let itemExists = keychain.genericPasswordExists(
+                service: Self.keychainService,
+                account: Self.keychainAccount
+            )
             switch keychain.readGenericPasswordWithoutUserInteraction(
                 service: Self.keychainService,
                 account: Self.keychainAccount
@@ -61,11 +69,11 @@ struct AntigravityAuthStore: Sendable {
                 raw = nil
             case .unavailable:
                 // Two different failures arrive as `.unavailable`, and they need opposite advice.
-                // The attributes probe (prompt-free) tells them apart: a confirmed item means the
-                // ACL simply hasn't approved Runway — a manual refresh plus Always Allow fixes it.
-                // An inconclusive probe means the keychain itself couldn't be read (locked, or a
-                // suppressed/stuck query), where approving nothing helps and unlocking does.
-                if keychain.genericPasswordExists(service: Self.keychainService, account: Self.keychainAccount) == true {
+                // The pre-read probe tells them apart: a confirmed item means the ACL simply hasn't
+                // approved Runway — a manual refresh plus Always Allow fixes it. An inconclusive
+                // probe means the keychain itself couldn't be read (locked, or a suppressed/stuck
+                // query), where approving nothing helps and unlocking does.
+                if itemExists == true {
                     AppLog.error(LogTag.auth("antigravity"), "keychain credential not approved for Runway; refresh manually to approve access")
                     throw AntigravityError.keychainPermissionRequired
                 }
