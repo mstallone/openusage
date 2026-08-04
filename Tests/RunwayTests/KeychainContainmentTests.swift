@@ -224,7 +224,37 @@ final class KeychainFailureCategoryTests: XCTestCase {
     func testAnUnreadableKeychainIsRecordedAsNotDenied() {
         let coordinator = KeychainReadCoordinator()
         coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: false)
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-1" },
+            read: { NonInteractiveKeychainRead.unavailable }
+        )
         XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), false)
+    }
+
+    func testAStaleCategoryCannotOutliveTheFailureItDescribed() {
+        // Categories are recorded by the read itself, without the sequence check that guards the
+        // cache, so an older read finishing after a newer recovery can leave one behind. It must
+        // not then be reported as this item's current verdict.
+        let coordinator = KeychainReadCoordinator()
+        coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: true)
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-1" },
+            read: { NonInteractiveKeychainRead.unavailable }
+        )
+        XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), true)
+
+        // The user approves; the interactive read clears the breaker (a background read would be
+        // answered locally by it and never reach Security at all).
+        _ = try? coordinator.interactiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-2" },
+            read: { "approved-secret" }
+        )
+        // Now the stale read lands and records its category, but its outcome was already rejected.
+        coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: true)
+        XCTAssertNil(
+            coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"),
+            "a recovered item has no failure to describe"
+        )
     }
 }
 

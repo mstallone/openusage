@@ -131,10 +131,15 @@ final class ICloudUsageSyncStore {
         optOutRetryTask = Task { [weak self] in
             guard let self else { return }
             await retryPendingOptOutDeletion()
-            // The loop ends on its own once the flag clears, which is how a completed deletion
-            // stops it — a retry must never cancel the task it is itself running inside.
-            for delay in optOutRetryDelays {
-                guard pendingOptOutDeletion else { return }
+            // Backs off, then keeps trying at the final interval for as long as the opt-out is
+            // still pending. Exhausting the list would strand the record for the rest of a session
+            // in this always-running app if the keychain or iCloud only came back later. The loop
+            // ends when the flag clears, which is how a completed deletion stops it — a retry must
+            // never cancel the task it is itself running inside.
+            var index = 0
+            while pendingOptOutDeletion, !optOutRetryDelays.isEmpty {
+                let delay = optOutRetryDelays[min(index, optOutRetryDelays.count - 1)]
+                index += 1
                 try? await Task.sleep(for: delay)
                 guard !Task.isCancelled, pendingOptOutDeletion else { return }
                 await retryPendingOptOutDeletion()
@@ -455,6 +460,16 @@ final class ICloudUsageSyncStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: pollInterval)
                 guard !Task.isCancelled, let self else { return }
+                // A Mac with every provider disabled never fires the local-state callback, so this
+                // poll is the only recurring signal that would notice the keychain coming back.
+                // Without it a provisional identity stays provisional — and publishing stays off —
+                // until an unrelated setting change or a relaunch.
+                if identityIsProvisional {
+                    resolveProvisionalIdentityIfNeeded()
+                    if !identityIsProvisional {
+                        await writeNow()
+                    }
+                }
                 await self.reload()
             }
         }

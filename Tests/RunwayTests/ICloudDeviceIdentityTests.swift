@@ -196,6 +196,33 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         )
     }
 
+    func testProvisionalIdentityRecoversFromThePollWithNoProviderActivity() async throws {
+        // A Mac with every provider disabled never fires the local-state callback, so the poll is
+        // the only recurring signal left. Nothing here calls scheduleWrite().
+        let defaults = makeDefaults("provisional-poll-recovery")
+        let recovering = RecoveringDeviceIDStore()
+        let cloudStore = RecordingUsageCloudStore()
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: recovering,
+            writeDebounce: .milliseconds(10),
+            pollInterval: .milliseconds(20)
+        )
+        XCTAssertTrue(sync.serviceError != nil, "the identity starts provisional")
+
+        recovering.recover(as: "aaaaaaaa-9999-8888-7777-666666666666")
+        let deadline = Date().addingTimeInterval(3)
+        while await cloudStore.writeCount == 0, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let writes = await cloudStore.writeCount
+        XCTAssertGreaterThan(writes, 0, "the poll must resume publishing once the identity resolves")
+        XCTAssertEqual(sync.deviceID, "aaaaaaaa-9999-8888-7777-666666666666")
+    }
+
     func testProvisionalIdentityRecoversWithinTheSameSession() async throws {
         // Reviewer-requested: once the keychain becomes readable, publishing resumes without a
         // relaunch.

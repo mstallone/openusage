@@ -44,8 +44,13 @@ struct RunwayOwnedKeychainStore: RunwayOwnedSecretStoring {
         }
         switch status {
         case errSecSuccess:
-            guard let data = item as? Data else { return "" }
-            return String(data: data, encoding: .utf8)
+            // A present-but-undecodable item must NOT read as absent. For the sync device id that
+            // would mint a fresh UUID and publish a second record for a Mac that already has one,
+            // so an unreadable value has to surface as an error and leave the identity provisional.
+            guard let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
+                throw KeychainError.readFailed("The stored value for '\(service)' is not readable text.")
+            }
+            return value
         case errSecItemNotFound:
             return nil
         default:
