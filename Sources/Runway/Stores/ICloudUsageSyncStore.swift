@@ -131,6 +131,8 @@ final class ICloudUsageSyncStore {
         optOutRetryTask = Task { [weak self] in
             guard let self else { return }
             await retryPendingOptOutDeletion()
+            // The loop ends on its own once the flag clears, which is how a completed deletion
+            // stops it — a retry must never cancel the task it is itself running inside.
             for delay in optOutRetryDelays {
                 guard pendingOptOutDeletion else { return }
                 try? await Task.sleep(for: delay)
@@ -153,7 +155,6 @@ final class ICloudUsageSyncStore {
             try await cloudStore.delete(deviceID: deviceID)
             defaults.set(false, forKey: Self.pendingOptOutKey)
             pendingOptOutDeletion = false
-            optOutRetryTask?.cancel()
             AppLog.info(.config, "iCloud opt-out completed: this Mac's record was removed")
             // The user can re-enable while this delete is in flight; without republishing, that
             // late delete would leave an enabled Mac missing until some other change schedules a
@@ -224,13 +225,15 @@ final class ICloudUsageSyncStore {
                 // Mac's record missing until the next refresh batch.
                 defaults.set(false, forKey: Self.pendingOptOutKey)
                 pendingOptOutDeletion = false
-                optOutRetryTask?.cancel()
                 if enabled {
                     await writeNow()
                 } else {
                     readError = nil
                     writeError = nil
                 }
+                // After the republish, never before: this can run while the retry task is awaiting
+                // a write of its own, and cancelling first would abort it.
+                optOutRetryTask?.cancel()
             } catch {
                 // The same stranding problem as an unresolved identity: sync is off, Settings only
                 // renders errors for the enabled state, and nothing comes back for it. Record the
