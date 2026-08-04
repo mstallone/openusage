@@ -17,7 +17,7 @@ When Cursor reports your plan name, Runway shows it beside the provider name.
 
 ## Where credentials come from
 
-Just be signed into the Cursor app. Runway reads Cursor's local state database (and its keychain entries) for the session tokens. All Cursor credentials are strictly read-only to Runway: it never refreshes a token and never writes the state database or keychain — the Cursor app owns the login and its rotation. When the token lapses, the card shows **"Cursor login needs renewal"**: open the Cursor app, then refresh Runway. Nothing extra to install or configure.
+Just be signed into the Cursor app. Runway reads Cursor's local state database (and its keychain entries) for the session tokens. All Cursor credentials are strictly read-only to Runway: it never refreshes a token and never writes the state database or keychain — the Cursor app owns the login and its rotation. When the token lapses, the card shows **"Cursor login needs renewal"**: sign in again where that login lives — open the Cursor app, or run `agent login` if you use the Cursor CLI — then refresh Runway. Nothing extra to install or configure.
 
 Automatic refreshes read the keychain entries silently and never open a macOS password dialog. If
 access hasn't been approved yet, the card says so — refresh manually once and choose **Always Allow**

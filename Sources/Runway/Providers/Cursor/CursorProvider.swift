@@ -101,6 +101,10 @@ final class CursorProvider: ProviderRuntime {
                     error: CursorAuthError.keychainPermissionRequired
                 )
             case .none:
+                AppLog.info(
+                    LogTag.auth("cursor"),
+                    "\(state.source) token rejected and this account has no other local credential; renewal required"
+                )
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
             AppLog.info(LogTag.auth("cursor"), "selected token rejected; retrying this account's other local credential")
@@ -108,6 +112,10 @@ final class CursorProvider: ProviderRuntime {
                 return try await probe(authState: alternative)
             } catch let alternativeError as CursorAuthError where alternativeError == .loginRenewalRequired {
                 // Both credentials for this account are dead: renewal really is the answer.
+                AppLog.info(
+                    LogTag.auth("cursor"),
+                    "both local Cursor credentials for this account were rejected; renewal required"
+                )
                 return ProviderSnapshot.error(provider: provider, error: alternativeError)
             } catch {
                 // The alternative may be perfectly valid and the problem is connectivity or Cursor
