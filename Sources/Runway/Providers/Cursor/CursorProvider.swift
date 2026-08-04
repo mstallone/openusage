@@ -129,6 +129,10 @@ final class CursorProvider: ProviderRuntime {
                 // The alternative may be perfectly valid and the problem is connectivity or Cursor
                 // itself. Reporting the original renewal notice here would tell the user to sign in
                 // again over a network blip, so surface what actually failed.
+                AppLog.error(
+                    LogTag.auth("cursor"),
+                    "this account's other local credential also failed: \(error.localizedDescription)"
+                )
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
         } catch {
