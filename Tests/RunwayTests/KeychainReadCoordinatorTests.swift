@@ -21,7 +21,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
     func testUnchangedFingerprintServesCachedValueWithoutASecondRead() {
         let coordinator = KeychainReadCoordinator()
         let reads = Counter()
-        func read() -> NonInteractiveKeychainRead {
+        func read(_: KeychainReadCoordinator.ReadTicket) -> NonInteractiveKeychainRead {
             reads.increment()
             return .value("secret")
         }
@@ -44,11 +44,11 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .value("old") }
+            read: { _ in reads.increment(); return .value("old") }
         )
         let updated = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-2" },
-            read: { reads.increment(); return .value("new") }
+            read: { _ in reads.increment(); return .value("new") }
         )
 
         XCTAssertEqual(updated, .value("new"))
@@ -60,7 +60,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         // keyed to it — every read goes through.
         let coordinator = KeychainReadCoordinator()
         let reads = Counter()
-        func read() -> NonInteractiveKeychainRead {
+        func read(_: KeychainReadCoordinator.ReadTicket) -> NonInteractiveKeychainRead {
             reads.increment()
             return .missing
         }
@@ -81,19 +81,19 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         let denied = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .unavailable }
+            read: { _ in reads.increment(); return .unavailable }
         )
         // Within the interval: answered locally; neither the probe nor the read runs.
         let heldBack = coordinator.nonInteractiveRead(
             service: "svc", account: nil,
             fingerprint: { XCTFail("a tripped entry must not probe the Keychain"); return "fp-2" },
-            read: { reads.increment(); return .value("never") }
+            read: { _ in reads.increment(); return .value("never") }
         )
         // Past the interval: the breaker re-checks for real (and finds the re-login).
         clock.withLock { $0 = $0.addingTimeInterval(61) }
         let retried = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-2" },
-            read: { reads.increment(); return .value("fresh") }
+            read: { _ in reads.increment(); return .value("fresh") }
         )
 
         XCTAssertEqual(denied, .unavailable)
@@ -111,7 +111,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { .unavailable }
+            read: { _ in .unavailable }
         )
 
         let suppressed: Bool? = coordinator.probe(service: "svc", account: nil) {
@@ -136,7 +136,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let stuck = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: {
+                read: { _ in
                     readStarted.signal()
                     releaseRead.wait()
                     return .unavailable
@@ -148,7 +148,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         let manual = try? coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { "approved-secret" }
+            read: { _ in "approved-secret" }
         )
         XCTAssertEqual(manual, "approved-secret")
 
@@ -157,7 +157,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let background = coordinator.nonInteractiveRead(
             service: "svc", account: nil,
             fingerprint: { XCTFail("must not probe while the flight is stuck"); return nil },
-            read: { XCTFail("must not read while the flight is stuck"); return .unavailable }
+            read: { _ in XCTFail("must not read while the flight is stuck"); return .unavailable }
         )
         releaseRead.signal()
 
@@ -171,17 +171,17 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         // Background read is denied and trips the breaker.
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { .unavailable }
+            read: { _ in .unavailable }
         )
         // The user refreshes manually and approves the prompt.
         let approved = try coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { "secret" }
+            read: { _ in "secret" }
         )
         // Later background reads are served from the cache without touching securityd.
         let background = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .unavailable }
+            read: { _ in reads.increment(); return .unavailable }
         )
 
         XCTAssertEqual(approved, "secret")
@@ -195,11 +195,11 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         XCTAssertThrowsError(try coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { throw KeychainError.readFailed("denied") }
+            read: { _ in throw KeychainError.readFailed("denied") }
         ))
         let background = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .unavailable }
+            read: { _ in reads.increment(); return .unavailable }
         )
 
         XCTAssertEqual(background, .unavailable)
@@ -218,7 +218,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let readerA = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { probes.increment(); return "fp-1" },
-                read: {
+                read: { _ in
                     readStarted.signal()
                     releaseRead.wait()
                     return .value("secret")
@@ -231,7 +231,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let blocked = coordinator.nonInteractiveRead(
             service: "svc", account: nil,
             fingerprint: { probes.increment(); return "fp-1" },
-            read: { XCTFail("must not read"); return .value("never") }
+            read: { _ in XCTFail("must not read"); return .value("never") }
         )
         releaseRead.signal()
 
@@ -250,7 +250,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let readerA = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: {
+                read: { _ in
                     readStarted.signal()
                     releaseRead.wait()
                     return .value("secret")
@@ -289,14 +289,14 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .value("old") }
+            read: { _ in reads.increment(); return .value("old") }
         )
         // Within the interval and unchanged: cache hit.
         clock.withLock { $0 = $0.addingTimeInterval(30) }
         XCTAssertEqual(
             coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: { reads.increment(); return .value("collided") }
+                read: { _ in reads.increment(); return .value("collided") }
             ),
             .value("old")
         )
@@ -305,7 +305,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(
             coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: { reads.increment(); return .value("collided") }
+                read: { _ in reads.increment(); return .value("collided") }
             ),
             .value("collided")
         )
@@ -325,7 +325,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let background = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: {
+                read: { _ in
                     readStarted.signal()
                     releaseRead.wait()
                     return .unavailable
@@ -338,7 +338,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         let manual = try? coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { "approved-secret" }
+            read: { _ in "approved-secret" }
         )
         XCTAssertEqual(manual, "approved-secret")
 
@@ -352,7 +352,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let reads = Counter()
         let afterwards = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .value("approved-secret") }
+            read: { _ in reads.increment(); return .value("approved-secret") }
         )
         XCTAssertEqual(afterwards, .value("approved-secret"))
         XCTAssertEqual(reads.value, 1, "a stale result must not leave the item tripped")
@@ -370,7 +370,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let readerA = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: {
+                read: { _ in
                     reads.increment()
                     readStarted.signal()
                     releaseRead.wait()
@@ -384,7 +384,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         // B arrives while A's read is stuck: bounded wait, then a local "unavailable".
         let blocked = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .value("never") }
+            read: { _ in reads.increment(); return .value("never") }
         )
         XCTAssertEqual(blocked, .unavailable)
 
@@ -395,7 +395,7 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         while Date() < deadline {
             cached = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: { reads.increment(); return .value("secret") }
+                read: { _ in reads.increment(); return .value("secret") }
             )
             if cached == .value("secret") { break }
         }
