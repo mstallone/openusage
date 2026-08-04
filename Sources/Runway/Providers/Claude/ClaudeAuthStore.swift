@@ -586,10 +586,31 @@ struct ClaudeAuthStore: Sendable {
                 }
             }
             if serviceReadUnavailable {
-                accessStatus.recordUnreadableItem(
-                    exists: keychain.genericPasswordExists(service: service)
-                )
+                // Probe the SAME item the read just failed on (service + current user), so this
+                // joins that read's flight and sees its breaker instead of starting an unrelated
+                // service-wide query behind it.
+                // The read's own status is authoritative and survives the breaker; a probe here
+                // would be answered locally (the failed read just tripped this item) and would
+                // wrongly downgrade a protected item to "keychain unreadable".
+                let exists: Bool?
+                switch keychain.lastReadForCurrentUserWasPermissionDenied(service: service) {
+                case true?:
+                    exists = true       // present, simply not approved yet
+                case false?:
+                    exists = nil        // the keychain itself couldn't be read
+                case nil:
+                    exists = keychain.genericPasswordForCurrentUserExists(service: service)
+                }
+                accessStatus.recordUnreadableItem(exists: exists)
                 if allowInteraction {
+                    return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
+                }
+                // Never broaden past a protected (or uncheckable) exact item, the same rule Codex
+                // and Copilot follow: the service-wide read is another Security call behind the
+                // very wedge this is containing, and with several items it could select a different
+                // account's login. The provider already refuses lower-priority credentials once the
+                // status is permissionRequired/unavailable, so nothing is lost by stopping here.
+                if exists != false {
                     return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
                 }
             }

@@ -45,12 +45,60 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
         // the gate's `SecKeychainSetUserInteractionAllowed` scope actually keeps a background read
         // prompt-free (and an interactive read must hold the gate so a racing suppressed call can't
         // disable UI beneath its open approval dialog).
+        // Through the coordinator like every other in-process secret read: single-flight per item,
+        // and a denial trips its breaker so five-minute refreshes stop starting new Security calls
+        // behind a wedged predecessor.
         var result: CFTypeRef?
-        let status = allowInteraction
-            ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
-            : KeychainUISuppression.withUISuppressed { isSuppressed in
-                isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
+        let status = try KeychainReadCoordinator.shared.externalRead(
+            service: Self.service,
+            account: Self.account,
+            interactive: allowInteraction,
+            // Replays the original category: approving Safe Storage cannot fix an
+            // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
+            unavailable: { denied in denied ? ClaudeDesktopCredentialError.permissionRequired : ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable)) }
+        ) { ticket -> OSStatus in
+            var gateEngaged = true
+            let status = allowInteraction
+                ? KeychainUISuppression.withUIAllowed { ui -> OSStatus in
+                    gateEngaged = ui == .available
+                    // A peer's dialog is open and UI is ENABLED: querying would open a second one.
+                    guard ui != .peerBusy else { return errSecNotAvailable }
+                    return SecItemCopyMatching(query as CFDictionary, &result)
+                }
+                : KeychainUISuppression.withUISuppressed { isSuppressed in
+                    gateEngaged = isSuppressed
+                    return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
+                }
+            // Only a FAILURE without the gate is contention. An already-authorized item reads fine
+            // with UI disabled, and throwing that success away would fail a manual refresh that had
+            // in fact just succeeded.
+            if !gateEngaged, status != errSecSuccess, status != errSecItemNotFound {
+                // The read never reached a prompt, so this says nothing about the item's ACL:
+                // reporting a denial would tell the user to approve an item nobody asked about, and
+                // tripping the breaker would lock out an item that was never really attempted.
+                KeychainReadCoordinator.shared.recordContention(ticket)
+                throw ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable))
             }
+            // EVERY failure throws from inside the flight so the breaker records it — a returning
+            // status would clear the breaker and let the next refresh call Security again. Only a
+            // hit or a definite miss come back for interpretation below.
+            switch status {
+            case errSecSuccess, errSecItemNotFound:
+                return status
+            case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
+                // Remember WHY, so the breaker's later replays keep giving the same advice instead
+                // of degrading a real denial into a generic "couldn't be read".
+                KeychainReadCoordinator.shared.recordFailureCategory(
+                    ticket, permissionDenied: true
+                )
+                throw ClaudeDesktopCredentialError.permissionRequired
+            default:
+                KeychainReadCoordinator.shared.recordFailureCategory(
+                    ticket, permissionDenied: false
+                )
+                throw ClaudeDesktopCredentialError.keychainFailure(Int(status))
+            }
+        }
         switch status {
         case errSecSuccess:
             guard let data = result as? Data,
@@ -62,8 +110,6 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             return password
         case errSecItemNotFound:
             return nil
-        case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
-            throw ClaudeDesktopCredentialError.permissionRequired
         default:
             throw ClaudeDesktopCredentialError.keychainFailure(Int(status))
         }

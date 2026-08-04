@@ -183,6 +183,18 @@ protocol KeychainAccessing: Sendable {
     /// `nil` means the probe failed, not that the item is absent.
     func genericPasswordExists(service: String) -> Bool?
     func genericPasswordExists(service: String, account: String) -> Bool?
+    /// Existence probe for the CURRENT-USER item specifically. It shares the exact
+    /// `(service, currentUser)` identity that `readGenericPasswordForCurrentUserWithoutUserInteraction`
+    /// uses, so a recovery probe joins that read's flight and breaker instead of launching an
+    /// unrelated service-wide query that neither waits on it nor sees it fail.
+    func genericPasswordForCurrentUserExists(service: String) -> Bool?
+    /// Why this item's last non-interactive read failed: `true` = its ACL has not approved Runway
+    /// (a manual refresh + Always Allow fixes it), `false` = the keychain itself couldn't be read
+    /// (unlock it), `nil` = no failure recorded. Taken from the read's own `OSStatus`, so it stays
+    /// answerable after the breaker trips — a follow-up probe would just be answered locally.
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool?
+    /// The same verdict for the CURRENT-USER item, whose account name only the accessor knows.
+    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool?
     /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
     /// date). Discovery binds a cached account identity to this so replacing a keyring item invalidates
     /// the old identity without reading its secret on the launch path.
@@ -254,6 +266,18 @@ extension KeychainAccessing {
         }
     }
 
+    func genericPasswordForCurrentUserExists(service: String) -> Bool? {
+        genericPasswordExists(service: service)
+    }
+
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        nil
+    }
+
+    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {
+        nil
+    }
+
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
         nil
     }
@@ -276,9 +300,14 @@ extension KeychainAccessing {
 /// Suppressed calls only ever wait on a user-attended dialog, never on each other (they refcount),
 /// so background refreshes pause at most while the user is answering a prompt they asked for.
 enum KeychainUISuppression {
+    /// How long either side waits on the other before giving up. Both directions are bounded so a
+    /// wedged or abandoned operation degrades to a friendly local failure instead of a hang.
+    private static let interactiveGateWait: TimeInterval = 2
     private static let condition = NSCondition()
     nonisolated(unsafe) private static var suppressedDepth = 0
     nonisolated(unsafe) private static var interactiveCount = 0
+    /// Whether an interactive operation currently holds the gate. See `withUIAllowed`.
+    nonisolated(unsafe) private static var interactiveInFlight = false
     /// Whether the outermost scope's disable call actually succeeded. The setter essentially never
     /// fails, but if it does, running the protected query anyway could show the exact background
     /// dialog this gate exists to prevent — so bodies receive this and skip the prompt-capable call.
@@ -292,8 +321,19 @@ enum KeychainUISuppression {
     /// and should report its non-interactive "unavailable" outcome instead.
     static func withUISuppressed<T>(_ body: (_ isSuppressed: Bool) throws -> T) rethrows -> T {
         condition.lock()
-        while interactiveCount > 0 {
-            condition.wait()
+        // Bounded, like the interactive side. An approval dialog can sit open for minutes — or be
+        // abandoned behind another window — and parking here forever would strand every concurrent
+        // refresh in exactly the contention this gate exists to prevent. Past the deadline the body
+        // runs with `isSuppressed: false`, which by contract means "do not issue a prompt-capable
+        // call": the caller reports its local unavailable outcome without touching Security.framework.
+        let deadline = Date().addingTimeInterval(interactiveGateWait)
+        while interactiveCount > 0, Date() < deadline {
+            condition.wait(until: deadline)
+        }
+        if interactiveCount > 0 {
+            condition.unlock()
+            AppLog.warn(.keychain, "keychain UI gate still held by an interactive operation; treating this background read as unavailable")
+            return try body(false)
         }
         suppressedDepth += 1
         if suppressedDepth == 1 {
@@ -330,10 +370,42 @@ enum KeychainUISuppression {
     /// already hold `suppressedDepth`, and those never wait on anything once entered. The deadline
     /// only guards against a wedged suppressed call — it cannot be extended by new entrants, because
     /// those park on `interactiveCount` instead.
-    static func withUIAllowed<T>(_ body: () throws -> T) rethrows -> T {
+    /// What the gate could give this caller. The two failure modes need OPPOSITE handling, so they
+    /// must not collapse into one flag:
+    ///
+    /// - `.suppressionStuck` — UI is still disabled by a wedged suppressed call. Running the query
+    ///   is safe and worthwhile (an already-authorized item reads fine), but a FAILURE says nothing
+    ///   about the item's ACL, because no prompt was possible.
+    /// - `.peerBusy` — another provider's approval dialog is open and UI is ENABLED. The query must
+    ///   NOT run: it would put a second dialog on screen beside the first, which is the storm this
+    ///   gate exists to prevent.
+    enum InteractiveUI {
+        case available
+        case suppressionStuck
+        case peerBusy
+    }
+
+    static func withUIAllowed<T>(_ body: (_ ui: InteractiveUI) throws -> T) rethrows -> T {
         condition.lock()
+        // Interactive operations are EXCLUSIVE of one another, not just of suppressed ones. A
+        // Refresh All starts every provider at once, so without this a single click could put
+        // several macOS approval dialogs on screen together — the prompt storm this gate exists to
+        // prevent. The wait is bounded because an approval dialog can be abandoned: waiting forever
+        // would hang every other provider's manual refresh behind an unrelated dialog. Past the
+        // deadline the caller is told UI is unavailable, so it reports "keychain busy" instead of
+        // either hanging or opening a second dialog next to the first.
+        let peerDeadline = Date().addingTimeInterval(interactiveGateWait)
+        while interactiveInFlight, Date() < peerDeadline {
+            condition.wait(until: peerDeadline)
+        }
+        guard !interactiveInFlight else {
+            condition.unlock()
+            AppLog.warn(.keychain, "interactive keychain operation skipped: another approval dialog is still open")
+            return try body(.peerBusy)
+        }
+        interactiveInFlight = true
         interactiveCount += 1
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(interactiveGateWait)
         while suppressedDepth > 0, Date() < deadline {
             condition.wait(until: deadline)
         }
@@ -349,27 +421,34 @@ enum KeychainUISuppression {
         if suppressionStuck {
             // A suppressed call has been wedged in securityd for over 2s — pathological. Still run
             // the body rather than fail preemptively or wait forever: an already-authorized item
-            // reads fine even with UI disabled, and a needs-prompt item fails into the callers'
-            // friendly "couldn't be checked" handling instead of hanging the manual refresh.
+            // reads fine even with UI disabled. But the body is told UI is unavailable, because a
+            // needs-prompt item will now fail with a status that LOOKS like an ACL denial when in
+            // truth the prompt was never possible.
             AppLog.warn(.keychain, "interactive keychain operation proceeding while a suppressed call is stuck; an approval prompt may not appear")
         }
         defer {
             condition.lock()
             interactiveCount -= 1
-            if interactiveCount == 0 {
-                condition.broadcast()
-            }
+            interactiveInFlight = false
+            condition.broadcast()
             condition.unlock()
         }
-        return try body()
+        return try body(suppressionStuck ? .suppressionStuck : .available)
     }
 }
 
 struct SecurityKeychainAccessor: KeychainAccessing {
     let processRunner: ProcessRunning
+    /// Gates every in-process secret read: change-gated caching, single-flight per item, and a
+    /// circuit breaker after denials. See `KeychainReadCoordinator`.
+    let coordinator: KeychainReadCoordinator
 
-    init(processRunner: ProcessRunning = SystemProcessRunner()) {
+    init(
+        processRunner: ProcessRunning = SystemProcessRunner(),
+        coordinator: KeychainReadCoordinator = .shared
+    ) {
         self.processRunner = processRunner
+        self.coordinator = coordinator
     }
 
     // `security find-generic-password` exits 44 (errSecItemNotFound) when no item matches — the
@@ -390,12 +469,25 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         try readGenericPasswordAllowingUserInteraction(service: service, account: currentUserAccount())
     }
 
-    /// Runs the approval query inside Runway. Keychain access-control decisions, including
-    /// "Always Allow", are attached to the requesting executable, so routing this through the
-    /// `security` command would authorize that helper rather than the app's later silent reads.
     private func readGenericPasswordAllowingUserInteraction(
         service: String,
         account: String?
+    ) throws -> String? {
+        try coordinator.interactiveRead(
+            service: service,
+            account: account,
+            fingerprint: { attributeFingerprint(service: service, account: account) },
+            read: { ticket in try performInteractiveRead(service: service, account: account, ticket: ticket) }
+        )
+    }
+
+    /// Runs the approval query inside Runway. Keychain access-control decisions, including
+    /// "Always Allow", are attached to the requesting executable, so routing this through the
+    /// `security` command would authorize that helper rather than the app's later silent reads.
+    private func performInteractiveRead(
+        service: String,
+        account: String?,
+        ticket: KeychainReadCoordinator.ReadTicket
     ) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -404,8 +496,21 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecReturnData as String: true,
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
-        let status = KeychainUISuppression.withUIAllowed {
-            SecItemCopyMatching(query as CFDictionary, &item)
+        var gateUI = KeychainUISuppression.InteractiveUI.available
+        let status = KeychainUISuppression.withUIAllowed { ui -> OSStatus in
+            gateUI = ui
+            // A peer's dialog is open and UI is ENABLED, so querying here would put a second dialog
+            // beside it. Don't call Security at all.
+            guard ui != .peerBusy else { return errSecNotAvailable }
+            return SecItemCopyMatching(query as CFDictionary, &item)
+        }
+        if gateUI == .peerBusy || (status != errSecSuccess && status != errSecItemNotFound && gateUI != .available) {
+            // Either no prompt was possible, or none was attempted. A denial-shaped status here says
+            // nothing about this item's ACL, and recording it would trip the item and hand the user
+            // an Always Allow instruction for a dialog that was never shown.
+            coordinator.recordContention(ticket)
+            AppLog.warn(.keychain, "interactive read for service '\(service)' skipped or failed while the UI gate was unavailable")
+            throw KeychainError.readFailed("The keychain was busy. Try refreshing again.")
         }
         switch status {
         case errSecSuccess:
@@ -418,6 +523,16 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         case errSecItemNotFound:
             return nil
         default:
+            // The user just answered the dialog, so a denial here is the strongest evidence about
+            // this item's ACL there is. Record it: this read trips the breaker, and every later
+            // probe is then answered locally with no status to classify.
+            coordinator.recordFailureCategory(
+                ticket,
+                permissionDenied: status == errSecAuthFailed
+                    || status == errSecInteractionNotAllowed
+                    || status == errSecUserCanceled
+                    || status == errAuthorizationDenied
+            )
             let message = SecCopyErrorMessageString(status, nil) as String?
                 ?? "Keychain read failed with status \(status)."
             AppLog.warn(.keychain, "in-process read failed for service '\(service)' (status \(status))")
@@ -437,6 +552,19 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         service: String,
         account: String?
     ) -> NonInteractiveKeychainRead {
+        coordinator.nonInteractiveRead(
+            service: service,
+            account: account,
+            fingerprint: { attributeFingerprint(service: service, account: account) },
+            read: { ticket in performNonInteractiveRead(service: service, account: account, ticket: ticket) }
+        )
+    }
+
+    private func performNonInteractiveRead(
+        service: String,
+        account: String?,
+        ticket: KeychainReadCoordinator.ReadTicket
+    ) -> NonInteractiveKeychainRead {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -445,8 +573,18 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
+        // Whether the gate actually engaged. When it didn't, another provider's approval dialog held
+        // it and this read never reached securityd — the synthetic status below says nothing about
+        // THIS item, so it must not be read as an ACL denial or trip its breaker.
+        var gateEngaged = true
         let status = KeychainUISuppression.withUISuppressed { isSuppressed in
-            isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed
+            gateEngaged = isSuppressed
+            return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed
+        }
+        guard gateEngaged else {
+            coordinator.recordContention(ticket)
+            AppLog.debug(.keychain, "read for service '\(service)' skipped: another approval dialog holds the keychain UI gate")
+            return .unavailable
         }
         switch status {
         case errSecSuccess:
@@ -459,8 +597,14 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         case errSecItemNotFound:
             return .missing
         default:
-            // Typically errSecAuthFailed: the item exists but its ACL does not (yet) authorize
-            // Runway, and UI to ask is forbidden here. Log the status only — never the item value.
+            // errSecAuthFailed / errSecInteractionNotAllowed mean the item EXISTS and its ACL does
+            // not (yet) authorize Runway — the status itself distinguishes that from a keychain we
+            // simply could not read, so remember it rather than probing again later (the breaker
+            // would answer that probe locally). Log the status only — never the item value.
+            coordinator.recordFailureCategory(
+                ticket,
+                permissionDenied: status == errSecAuthFailed || status == errSecInteractionNotAllowed
+            )
             AppLog.debug(.keychain, "non-interactive read unavailable for service '\(service)' (status \(status))")
             return .unavailable
         }
@@ -472,14 +616,33 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     /// keychain, denied) reports `nil` ("unknown"), never a definite answer, so callers can pick
     /// their safe side.
     func genericPasswordExists(service: String) -> Bool? {
-        genericPasswordExists(service: service, account: nil)
+        coordinator.probe(service: service, account: nil) {
+            rawGenericPasswordExists(service: service, account: nil)
+        }
     }
 
     func genericPasswordExists(service: String, account: String) -> Bool? {
-        genericPasswordExists(service: service, account: account as String?)
+        coordinator.probe(service: service, account: account) {
+            rawGenericPasswordExists(service: service, account: account)
+        }
     }
 
-    private func genericPasswordExists(service: String, account: String?) -> Bool? {
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        coordinator.lastFailureWasPermissionDenied(service: service, account: account)
+    }
+
+    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {
+        coordinator.lastFailureWasPermissionDenied(service: service, account: currentUserAccount())
+    }
+
+    func genericPasswordForCurrentUserExists(service: String) -> Bool? {
+        let account = currentUserAccount()
+        return coordinator.probe(service: service, account: account) {
+            rawGenericPasswordExists(service: service, account: account)
+        }
+    }
+
+    private func rawGenericPasswordExists(service: String, account: String?) -> Bool? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -536,14 +699,24 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     }
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
+        coordinator.probe(service: service, account: account) {
+            attributeFingerprint(service: service, account: account)
+        }
+    }
+
+    /// Attributes-only fingerprint (no `kSecReturnData`, so the item's ACL is never evaluated):
+    /// prompt-free, in-process, microseconds. `nil` means the item is absent or the probe failed —
+    /// the coordinator treats both as "cannot cache". Deliberately RAW (not routed through
+    /// `coordinator.probe`): the coordinated read paths invoke it while already holding the item's
+    /// flight, which the probe gate would wait on.
+    private func attributeFingerprint(service: String, account: String?) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnAttributes as String: true,
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
-        ]
+        ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
         let status = KeychainUISuppression.withUISuppressed { isSuppressed in
             isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed

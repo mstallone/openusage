@@ -36,6 +36,15 @@ and background refreshes never open the password dialog: Runway first asks you t
 choosing **Always Allow** makes later reads silent. If Desktop's short-lived token expires, open Claude
 Desktop so it can renew the login, then refresh Runway.
 
+Runway also keeps its Keychain traffic minimal. For Claude Code's credentials item it checks the
+non-secret attributes first — a prompt-free, instant probe — and reads the secret again only when
+the item actually changed (for example, Claude Code rotated its token). Several Claude cards reading
+the same item share one read. And after a denied or failed read, Runway stops asking macOS for that
+item and answers locally until a periodic re-check or a manual refresh, so a stuck or busy Keychain
+never sees a pile-up of repeated requests. Claude Desktop's `Claude Safe Storage` key is read
+separately: after you approve it once, the derived key is cached in memory, so that item is touched
+at most once per launch.
+
 A Claude Code Keychain item remains higher priority than a home-file or Desktop login even before access
 is approved. Runway reports that approval is needed instead of silently showing usage from a potentially
 stale home file or a different Desktop account. If macOS cannot even determine whether the item exists
