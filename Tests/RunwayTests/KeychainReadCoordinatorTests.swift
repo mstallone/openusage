@@ -71,20 +71,26 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(reads.value, 2)
     }
 
-    func testDeniedReadTripsTheBreakerUntilTheFingerprintChanges() {
-        let coordinator = KeychainReadCoordinator()
+    func testDeniedReadTripsTheBreakerUntilRevalidationOrUserAction() {
+        // A tripped entry answers locally with NO Keychain traffic at all — not even the attribute
+        // probe, which blocks like any other call against a wedged securityd. Change-detection for
+        // tripped items therefore happens on the revalidation cadence (or a manual refresh).
+        let clock = Locked(Date(timeIntervalSince1970: 1_000_000))
+        let coordinator = KeychainReadCoordinator(revalidateAfter: 60, now: { clock.withLock { $0 } })
         let reads = Counter()
 
         let denied = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
             read: { reads.increment(); return .unavailable }
         )
-        // Same fingerprint: answered locally, securityd is not contacted again.
+        // Within the interval: answered locally; neither the probe nor the read runs.
         let heldBack = coordinator.nonInteractiveRead(
-            service: "svc", account: nil, fingerprint: { "fp-1" },
+            service: "svc", account: nil,
+            fingerprint: { XCTFail("a tripped entry must not probe the Keychain"); return "fp-2" },
             read: { reads.increment(); return .value("never") }
         )
-        // The item changed (e.g. an external `claude` re-login): the breaker resets and a real read runs.
+        // Past the interval: the breaker re-checks for real (and finds the re-login).
+        clock.withLock { $0 = $0.addingTimeInterval(61) }
         let retried = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-2" },
             read: { reads.increment(); return .value("fresh") }
@@ -94,6 +100,45 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(heldBack, .unavailable)
         XCTAssertEqual(retried, .value("fresh"))
         XCTAssertEqual(reads.value, 2)
+    }
+
+    func testTimeoutBehindAStuckFlightServesAFreshRecoveredManualResult() {
+        // A manual read can recover while the wedged background read never returns. Later background
+        // callers give up on the stuck flight within the bounded wait — but must serve the fresh
+        // manual result instead of reporting the credentials unavailable.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        let readStarted = DispatchSemaphore(value: 0)
+        let releaseRead = DispatchSemaphore(value: 0)
+
+        let stuck = Thread {
+            _ = coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: {
+                    readStarted.signal()
+                    releaseRead.wait()
+                    return .unavailable
+                }
+            )
+        }
+        stuck.start()
+        XCTAssertEqual(readStarted.wait(timeout: .now() + 2), .success)
+
+        let manual = try? coordinator.interactiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { "approved-secret" }
+        )
+        XCTAssertEqual(manual, "approved-secret")
+
+        // The background flight is still stuck; a new background caller times out — and gets the
+        // recovered value, not `.unavailable`.
+        let background = coordinator.nonInteractiveRead(
+            service: "svc", account: nil,
+            fingerprint: { XCTFail("must not probe while the flight is stuck"); return nil },
+            read: { XCTFail("must not read while the flight is stuck"); return .unavailable }
+        )
+        releaseRead.signal()
+
+        XCTAssertEqual(background, .value("approved-secret"))
     }
 
     func testInteractiveSuccessSeedsTheCacheAndClearsTheBreaker() throws {
