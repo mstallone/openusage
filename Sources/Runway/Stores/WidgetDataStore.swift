@@ -380,9 +380,11 @@ final class WidgetDataStore {
         let timedOutSnapshot: ProviderSnapshot? = await withCheckedContinuation { continuation in
             final class RaceState { var resumed = false; var watchdog: Task<Void, Never>? }
             let state = RaceState()
-            let refreshTask = Task { [interactive] in
-                let snapshot = await ProviderRefreshContext.$isManual.withValue(interactive) {
-                    await provider.refresh()
+            let refreshTask = Task { [force, interactive] in
+                let snapshot = await ProviderRefreshContext.$isForced.withValue(force) {
+                    await ProviderRefreshContext.$isManual.withValue(interactive) {
+                        await provider.refresh()
+                    }
                 }
                 guard !state.resumed else {
                     // Lost the race: this straggler just exited, so the runtime is idle again —

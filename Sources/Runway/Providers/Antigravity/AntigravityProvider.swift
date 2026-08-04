@@ -96,9 +96,11 @@ final class AntigravityProvider: ProviderRuntime {
     }
 
     private func probe() async throws -> StrategyResult {
-        // A manual refresh (⌘R) bypasses the cooldown: the documented recovery flow is "start
-        // Antigravity, then refresh", and that must probe immediately.
-        let skipProcessScan = !ProviderRefreshContext.isManual && lastNoProcessProbe.map {
+        // A forced refresh (⌘R or `runway --force`) bypasses the cooldown: the documented recovery
+        // flow is "start Antigravity, then refresh", and that must probe immediately. This keys off
+        // `isForced`, not `isManual` — the CLI forces without being able to prompt, and it still
+        // deserves a fresh process scan.
+        let skipProcessScan = !ProviderRefreshContext.isForced && lastNoProcessProbe.map {
             now().timeIntervalSince($0) < Self.noProcessProbeCooldown
         } ?? false
         if !skipProcessScan {

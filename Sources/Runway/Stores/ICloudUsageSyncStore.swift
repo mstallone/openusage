@@ -98,6 +98,11 @@ final class ICloudUsageSyncStore {
     private let defaults: UserDefaults
     private let cloudStore: any UsageCloudStoring
     private let identityError: String?
+    /// True when this Mac's durable sync identity could not be established — the legacy lookup was
+    /// indeterminate and no saved id existed, so `deviceID` is a freshly minted UUID that may
+    /// duplicate a record this Mac already published under its real id. Reads and the UI carry on;
+    /// only publishing is withheld, because a publish is what creates the duplicate.
+    private let identityIsProvisional: Bool
     private let dataStore: WidgetDataStore
     private let writeDebounce: Duration
     /// How often to check the private database for peer updates while sync is on. CloudKit has no
@@ -147,6 +152,7 @@ final class ICloudUsageSyncStore {
         let identity = Self.resolveDeviceID(defaults: defaults, store: deviceIDStore)
         self.deviceID = identity.id
         self.identityError = identity.error
+        self.identityIsProvisional = identity.isProvisional
         self.deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         // On by default: a fresh install starts syncing; only a user's explicit choice is stored.
         self.enabled = (defaults.object(forKey: Self.enabledKey) as? Bool) ?? true
@@ -223,6 +229,11 @@ final class ICloudUsageSyncStore {
 
     private func performWrite() async {
         guard enabled else { return }
+        // A provisional identity would publish a SECOND record for a Mac that already has one.
+        guard !identityIsProvisional else {
+            AppLog.warn(.config, "iCloud publish skipped: this Mac's sync identity is unresolved")
+            return
+        }
         await withSyncActivity {
             let updatedAt = Date()
             let deviceRecord = DeviceSyncRecord(
@@ -305,12 +316,12 @@ final class ICloudUsageSyncStore {
     private static func resolveDeviceID(
         defaults: UserDefaults,
         store: any ICloudDeviceIDStoring
-    ) -> (id: String, error: String?) {
+    ) -> (id: String, error: String?, isProvisional: Bool) {
         let saved = normalizedDeviceID(defaults.string(forKey: deviceIDKey))
         do {
             if let stored = normalizedDeviceID(try store.readDeviceID()) {
                 defaults.set(stored, forKey: deviceIDKey)
-                return (stored, nil)
+                return (stored, nil, false)
             }
 
             // The saved preference is the same id the Keychain held, so on upgrades it seeds the
@@ -320,24 +331,38 @@ final class ICloudUsageSyncStore {
             // freshly minted one is saved, so no later launch reaches it again.
             if let saved {
                 try store.writeDeviceID(saved)
-                return (saved, nil)
+                return (saved, nil, false)
             }
             if let migrated = normalizedDeviceID(try store.migrateLegacyDeviceID()) {
                 defaults.set(migrated, forKey: deviceIDKey)
-                return (migrated, nil)
+                return (migrated, nil, false)
             }
 
             let id = UUID().uuidString.lowercased()
             try store.writeDeviceID(id)
             defaults.set(id, forKey: deviceIDKey)
-            return (id, nil)
+            return (id, nil, false)
         } catch {
-            let id = saved ?? UUID().uuidString.lowercased()
-            defaults.set(id, forKey: deviceIDKey)
-            let message = "Runway couldn’t save this Mac’s sync identity in Keychain. "
-                + "Sync can create a duplicate device if you reset app preferences."
             AppLog.warn(.keychain, "iCloud device identity failed: \(error.localizedDescription)")
-            return (id, message)
+            if let saved {
+                // A known id: publishing under it is still correct, it just isn't durable against a
+                // preferences reset.
+                defaults.set(saved, forKey: deviceIDKey)
+                return (
+                    saved,
+                    "Runway couldn’t save this Mac’s sync identity in Keychain. "
+                        + "Sync can create a duplicate device if you reset app preferences.",
+                    false
+                )
+            }
+            // Nothing to go on: any id minted here can duplicate a record this Mac already
+            // published. Keep it out of the defaults and out of the cloud until the lookup works.
+            return (
+                UUID().uuidString.lowercased(),
+                "Runway couldn’t identify this Mac for iCloud Sync. It won’t publish usage until "
+                    + "Keychain access is available again.",
+                true
+            )
         }
     }
 

@@ -58,9 +58,11 @@ final class WidgetDataStoreTests: XCTestCase {
 
         await store.refresh(providerID: provider.id, force: true)
         XCTAssertEqual(runtime.capturedIsManual, [false])
+        XCTAssertEqual(runtime.capturedIsForced, [true], "a CLI/automated force is still a forced refresh")
 
         await store.refresh(providerID: provider.id, force: true, interactive: true)
         XCTAssertEqual(runtime.capturedIsManual, [false, true])
+        XCTAssertEqual(runtime.capturedIsForced, [true, true])
     }
 
     func testSoftWarningSurfacesOnHeaderWhilePartialDataStillLoads() async {
@@ -960,6 +962,7 @@ private final class ManualContextCapturingRuntime: ProviderRuntime {
     let provider: Provider
     let widgetDescriptors: [WidgetDescriptor] = []
     var capturedIsManual: [Bool] = []
+    var capturedIsForced: [Bool] = []
 
     init(provider: Provider) {
         self.provider = provider
@@ -967,6 +970,7 @@ private final class ManualContextCapturingRuntime: ProviderRuntime {
 
     func refresh() async -> ProviderSnapshot {
         capturedIsManual.append(ProviderRefreshContext.isManual)
+        capturedIsForced.append(ProviderRefreshContext.isForced)
         return ProviderSnapshot(providerID: provider.id, displayName: provider.displayName, lines: [])
     }
 }

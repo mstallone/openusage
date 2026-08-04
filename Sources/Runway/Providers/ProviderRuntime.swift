@@ -1,7 +1,16 @@
 import Foundation
 
+/// What kind of refresh a provider is running inside. The two flags are deliberately separate:
+/// `runway --force` and automated retries bypass caches with nobody watching, so they must never
+/// unlock credential UI (a prompt from the separately signed CLI would also authorize the wrong
+/// binary), while a GUI refresh is user-attended and may ask once.
 enum ProviderRefreshContext {
+    /// A user-attended refresh from the app. The ONLY context in which a provider may raise a
+    /// Keychain approval dialog.
     @TaskLocal static var isManual = false
+    /// The caller bypassed the snapshot cache — ⌘R, `runway --force`, or an automated retry. Use
+    /// this for non-UI "the user asked for fresh data" behavior such as skipping a negative cache.
+    @TaskLocal static var isForced = false
 }
 
 /// One AI provider Runway can track. A conformer reads credentials already on the machine, calls the
