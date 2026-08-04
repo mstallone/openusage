@@ -206,6 +206,12 @@ struct SakanaAuthStore: Sendable {
                 return SakanaBrowserSession(token: token, browserName: candidate.source.browserName)
             } catch SakanaBrowserCredentialError.permissionRequired {
                 throw SakanaAuthError.permissionRequired
+            } catch SakanaBrowserCredentialError.keychainFailure {
+                // The Safe Storage key could not be read — a locked keychain, or another provider's
+                // approval dialog holding the UI gate. The cookie itself was never examined, so
+                // "invalid cookie, sign in again" would send the user to redo a login that is fine.
+                sawUnreadableKey = true
+                AppLog.error(LogTag.auth("sakana"), "Sakana Safe Storage key could not be read; the cookie was not examined")
             } catch {
                 sawInvalidCookie = true
                 AppLog.error(LogTag.auth("sakana"), "Sakana browser credential read failed: \(error.localizedDescription)")
