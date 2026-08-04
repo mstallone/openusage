@@ -25,6 +25,34 @@ final class CursorAuthStoreTests: XCTestCase {
         XCTAssertEqual(state?.accessToken, liveKeychain)
     }
 
+    func testExpiredPaidSQLiteLoginCanStillReachAProtectedKeychainToken() {
+        // A usable paid SQLite login suppresses keychain prompts, but an EXPIRED one must not: the
+        // protected item may hold this account's still-valid token, and it is the only thing that
+        // can save the refresh. Automatic passes stay silent and report the approval need.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiredSQLite = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 - 60)
+        let liveKeychain = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
+        let keychain = ApprovableCursorKeychain(approvedValue: liveKeychain)
+        let store = CursorAuthStore(
+            sqlite: FakeSQLite(values: [
+                CursorAuthStore.accessTokenKey: expiredSQLite,
+                CursorAuthStore.membershipTypeKey: "pro"
+            ]),
+            keychain: keychain,
+            now: { now }
+        )
+
+        // Automatic: silent, and the protected item is surfaced as needing approval.
+        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+        XCTAssertEqual(keychain.interactiveReads, 0)
+
+        // Manual: the prompt is allowed, and the same-account token wins over the dead one.
+        let approved = store.loadCredentials(allowKeychainInteraction: true).state
+        XCTAssertEqual(approved?.source, .keychain)
+        XCTAssertEqual(approved?.accessToken, liveKeychain)
+        XCTAssertEqual(keychain.interactiveReads, 1)
+    }
+
     func testExpiredSQLiteTokenNeverCrossesToADifferentAccountsKeychainToken() {
         // The same fallback must not bridge accounts: a different subject keeps SQLite selected (a
         // paid membership here), so the card reports renewal for its own account instead of
@@ -531,6 +559,37 @@ private final class DenyingCursorKeychain: KeychainReading, @unchecked Sendable 
     func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
         lock.withLock { interactive += 1 }
         throw KeychainError.readFailed("denied")
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+}
+
+/// A protected Cursor keychain item that becomes readable once the user approves the prompt.
+private final class ApprovableCursorKeychain: KeychainReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let approvedValue: String
+    private var interactive = 0
+
+    init(approvedValue: String) {
+        self.approvedValue = approvedValue
+    }
+
+    var interactiveReads: Int { lock.withLock { interactive } }
+
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { interactive += 1 }
+        return approvedValue
     }
 
     func genericPasswordExists(service: String) -> Bool? {

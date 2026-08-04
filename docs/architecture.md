@@ -48,10 +48,12 @@ way and doesn't need to know provider-specific details. To add one, see
 ### Credential ownership
 
 The app that owns a credential is the only app allowed to change it. Provider credentials belong to
-the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …), and Runway
-never writes any of their credential stores — the type system enforces it, because every credential
+the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …). Runway never
+writes any provider's **Keychain** item — the type system enforces that, because every credential
 store holds the read-only `KeychainReading` and no Keychain write API exists in the app outside
-`RunwayOwnedKeychainStore` (Runway's own secrets, currently the iCloud-sync device id).
+`RunwayOwnedKeychainStore` (Runway's own secrets, currently the iCloud-sync device id). Grok and
+Kimi remain the exception on the file side: Runway still refreshes those logins and saves them back
+to their CLIs' own credential files.
 
 For Claude, Codex, Cursor, and Copilot, Runway never calls their OAuth token endpoints either,
 because two apps rotating the same login can trip the server's token-reuse protection and sign the

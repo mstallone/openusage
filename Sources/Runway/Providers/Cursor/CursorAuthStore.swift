@@ -74,10 +74,13 @@ struct CursorAuthStore: Sendable {
 
         let hasSQLiteAuth = sqliteAccessToken != nil
 
-        // Prompt only when the keychain can actually win source selection: a paid SQLite login is
-        // returned unconditionally below, so a manual refresh must not raise approval dialogs for
-        // stale `agent` keychain entries it would then ignore.
-        let keychainCanWin = !hasSQLiteAuth || sqliteMembershipType == "free"
+        // Prompt only when the keychain can actually win source selection: a usable paid SQLite
+        // login is returned unconditionally below, so a manual refresh must not raise approval
+        // dialogs for stale `agent` keychain entries it would then ignore. An EXPIRED SQLite login
+        // is the opposite case — the keychain may hold this same account's still-valid token, which
+        // is the only thing that can save the refresh, so it is allowed to ask.
+        let sqliteExpired = sqliteAccessToken.map(isExpired) ?? false
+        let keychainCanWin = !hasSQLiteAuth || sqliteMembershipType == "free" || sqliteExpired
         let allowKeychainPrompt = allowKeychainInteraction && keychainCanWin
         let accessRead = readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainPrompt)
         let keychainAccessToken = accessRead.trimmedValue
@@ -119,6 +122,13 @@ struct CursorAuthStore: Sendable {
                subject == Self.tokenSubject(keychainAccessToken)
             {
                 return .state(CursorAuthState(accessToken: keychainAccessToken, source: .keychain))
+            }
+
+            // The selected token is dead and a protected item may hold a live one for this account.
+            // Asking for approval is actionable; reporting renewal here would not be, because the
+            // usable credential is exactly the one Runway cannot read yet.
+            if sqliteExpired, anyProtected {
+                return .keychainPermissionRequired
             }
 
             return .state(CursorAuthState(accessToken: sqliteAccessToken, source: .sqlite))
