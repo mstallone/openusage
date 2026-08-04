@@ -33,14 +33,15 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     }
 
     private struct Entry {
-        /// Fingerprint the cached outcome belongs to. Outcomes without a fingerprint are not cached
-        /// at all (an absent fingerprint cannot distinguish "item missing" from "probe failed", so
-        /// nothing can be safely keyed to it).
-        var fingerprint: String
+        /// Fingerprint the cached outcome belongs to. `nil` (the probe failed or was skipped, e.g.
+        /// an interactive read that proceeded past a stuck flight) never matches the change-gated
+        /// cache path — a nil-fingerprint value is served ONLY by the stale-flight fallback, and
+        /// only while fresh.
+        var fingerprint: String?
         /// Last successful read, served while the fingerprint is unchanged and the entry is fresh.
         var value: NonInteractiveKeychainRead?
         /// Tripped by a failed/denied read; answers `.unavailable` without touching the Keychain
-        /// until the fingerprint changes, revalidation is due, or an interactive read succeeds.
+        /// until revalidation is due or an interactive read succeeds.
         var tripped: Bool
         var updatedAt: Date
     }
@@ -80,8 +81,23 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         condition.lock()
         guard waitWhileInFlight(key, deadline: now().addingTimeInterval(inFlightWait)) else {
             // Someone else's read of this item has been stuck past the deadline (an open approval
-            // dialog or a wedged securityd). Report unavailable instead of piling on — without
-            // touching the Keychain at all.
+            // dialog or a wedged securityd). Serve a fresh recovered value when one exists (a
+            // manual read can succeed while the stale flight never returns), else report
+            // unavailable — logged, because the wedged call may never produce its own diagnostic.
+            let entry = entries[key]
+            condition.unlock()
+            if let entry, !entry.tripped, let value = entry.value,
+               now().timeIntervalSince(entry.updatedAt) < revalidateAfter {
+                return value
+            }
+            AppLog.warn(.keychain, "keychain read timed out behind a stuck operation for one item; reporting unavailable")
+            return .unavailable
+        }
+        // Breaker short-circuit BEFORE any Keychain traffic: a freshly tripped entry answers
+        // locally — not even the attribute probe runs — until revalidation is due or the user acts.
+        // Change-detection for tripped items therefore happens on the revalidation cadence.
+        if let entry = entries[key], entry.tripped,
+           now().timeIntervalSince(entry.updatedAt) < revalidateAfter {
             condition.unlock()
             return .unavailable
         }
@@ -154,18 +170,24 @@ final class KeychainReadCoordinator: @unchecked Sendable {
             }
         }
 
-        // Inside the flight, like the read itself — see `nonInteractiveRead`.
-        let fingerprint = fingerprint()
+        // Inside the flight, like the read itself — see `nonInteractiveRead`. When the flight was
+        // NOT acquired (a stuck background read), the probe is deferred: it is one more Security
+        // call that could wedge BEFORE the user's read, and manual recovery must never hang on it.
+        let preFingerprint = acquired ? fingerprint() : nil
 
         do {
             let value = try read()
+            // An unacquired flight probes only after the read succeeded: securityd just answered
+            // this caller, so the probe cannot block the recovery it follows — and it gives the
+            // result a fingerprint for the change-gated cache.
+            let storedFingerprint = preFingerprint ?? fingerprint()
             condition.lock()
-            store(key: key, fingerprint: fingerprint, value: value.map(NonInteractiveKeychainRead.value) ?? .missing, tripped: false)
+            store(key: key, fingerprint: storedFingerprint, value: value.map(NonInteractiveKeychainRead.value) ?? .missing, tripped: false)
             condition.unlock()
             return value
         } catch {
             condition.lock()
-            store(key: key, fingerprint: fingerprint, value: nil, tripped: true)
+            store(key: key, fingerprint: preFingerprint, value: nil, tripped: true)
             condition.unlock()
             throw error
         }
@@ -212,10 +234,6 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// Must be called under `condition`'s lock.
     private func store(key: Key, fingerprint: String?, value: NonInteractiveKeychainRead?, tripped: Bool) {
         epochs[key, default: 0] += 1
-        guard let fingerprint else {
-            entries[key] = nil
-            return
-        }
         entries[key] = Entry(fingerprint: fingerprint, value: value, tripped: tripped, updatedAt: now())
     }
 }
