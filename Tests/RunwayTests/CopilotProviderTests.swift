@@ -2122,6 +2122,16 @@ final class ReadModeTrackingKeychain: KeychainReading, @unchecked Sendable {
         lock.withLock { interactive += 1 }
         return value
     }
+
+    /// Attributes-only probes are not secret reads — model them explicitly so they don't fall
+    /// through the protocol default onto the subprocess path this fake asserts against.
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        true
+    }
 }
 
 /// A Keychain holding a gh item Runway isn't authorized to read prompt-free: non-interactive reads
