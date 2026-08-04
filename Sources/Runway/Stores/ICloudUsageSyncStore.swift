@@ -94,6 +94,9 @@ struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
 final class ICloudUsageSyncStore {
     private static let enabledKey = "runway.icloudSync.enabled.v1"
     private static let deviceIDKey = "runway.icloudSync.deviceID.v1"
+    /// Set when an opt-out could not remove this Mac's record because its identity was unresolvable.
+    /// Persisted, because the retry has to survive a relaunch: sync is off, so nothing else runs.
+    private static let pendingOptOutKey = "runway.icloudSync.pendingOptOutDeletion.v1"
 
     private let defaults: UserDefaults
     private let cloudStore: any UsageCloudStoring
@@ -106,6 +109,9 @@ final class ICloudUsageSyncStore {
     /// The store used to resolve this Mac's identity, kept so a provisional identity can be retried
     /// once Keychain access comes back rather than staying stuck until relaunch.
     private let deviceIDStore: any ICloudDeviceIDStoring
+    /// An opt-out that couldn't delete this Mac's record yet. Retried at launch — sync being off
+    /// means nothing else would ever come back for it.
+    private var pendingOptOutDeletion: Bool
     private let dataStore: WidgetDataStore
     private let writeDebounce: Duration
     /// How often to check the private database for peer updates while sync is on. CloudKit has no
@@ -139,7 +145,11 @@ final class ICloudUsageSyncStore {
     /// The subset of `serviceError` that still matters once sync is switched OFF: an unresolved
     /// identity means this Mac's existing iCloud record could not be removed, and nothing retries
     /// while sync is disabled — so Settings keeps showing it instead of appearing cleanly off.
-    var disabledStateWarning: String? { identityIsProvisional ? identityError : nil }
+    var disabledStateWarning: String? {
+        guard !enabled, pendingOptOutDeletion else { return identityIsProvisional ? identityError : nil }
+        return "Runway couldn’t remove this Mac’s existing iCloud record yet. It will try again "
+            + "while your login keychain is available."
+    }
     private(set) var invalidRecordMessages: [String] = []
     private(set) var documents: [UsageHistoryDocument] = []
 
@@ -161,12 +171,32 @@ final class ICloudUsageSyncStore {
         self.identityError = identity.error
         self.identityIsProvisional = identity.isProvisional
         self.deviceIDStore = deviceIDStore
+        self.pendingOptOutDeletion = defaults.bool(forKey: Self.pendingOptOutKey)
         self.deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         // On by default: a fresh install starts syncing; only a user's explicit choice is stored.
         self.enabled = (defaults.object(forKey: Self.enabledKey) as? Bool) ?? true
         dataStore.onLocalStateChanged = { [weak self] in self?.scheduleWrite() }
         if enabled {
             Task { await applyEnabledChange() }
+        } else if pendingOptOutDeletion {
+            // Sync is off, so nothing else would ever come back for this: finish the opt-out the
+            // moment the identity is knowable again.
+            Task { await retryPendingOptOutDeletion() }
+        }
+    }
+
+    /// Completes an opt-out that couldn't identify this Mac earlier. No-op while the identity is
+    /// still provisional — the flag stays set and the next launch tries again.
+    private func retryPendingOptOutDeletion() async {
+        resolveProvisionalIdentityIfNeeded()
+        guard !identityIsProvisional else { return }
+        do {
+            try await cloudStore.delete(deviceID: deviceID)
+            defaults.set(false, forKey: Self.pendingOptOutKey)
+            pendingOptOutDeletion = false
+            AppLog.info(.config, "iCloud opt-out completed: this Mac's record was removed")
+        } catch {
+            AppLog.warn(.config, "iCloud opt-out retry failed: \(error.localizedDescription)")
         }
     }
 
@@ -206,8 +236,10 @@ final class ICloudUsageSyncStore {
             resolveProvisionalIdentityIfNeeded()
             guard !identityIsProvisional else {
                 AppLog.warn(.config, "iCloud opt-out could not remove this Mac's record: its sync identity is unresolved")
+                defaults.set(true, forKey: Self.pendingOptOutKey)
+                pendingOptOutDeletion = true
                 identityError = "Runway couldn’t identify this Mac, so its existing iCloud record "
-                    + "wasn’t removed. Unlock your login keychain and turn Sync Across Macs off again."
+                    + "wasn’t removed. It will be removed once your login keychain is available."
                 return
             }
             do {
@@ -215,6 +247,8 @@ final class ICloudUsageSyncStore {
                 // Re-enabling can race this deletion: if the toggle came back on while the delete
                 // was in flight, publish again so a late-landing delete cannot leave an enabled
                 // Mac's record missing until the next refresh batch.
+                defaults.set(false, forKey: Self.pendingOptOutKey)
+                pendingOptOutDeletion = false
                 if enabled {
                     await writeNow()
                 } else {
