@@ -7,7 +7,8 @@ import SwiftUI
 /// header's trailing edge (beside the hover-revealed copy control) whose hover tooltip carries the
 /// message (e.g. "Not logged in. Run `codex` to authenticate."). With `onWarningRefresh` supplied that
 /// triangle is also a button: clicking it refreshes just that provider, so the notice sits on the
-/// action that clears it. The
+/// action that clears it — supplied only for notices a refresh can move, never for one that asks the
+/// user to wait. The
 /// optional `staleness` is the dashboard-only hint that the values shown are an aged snapshot still
 /// revalidating: a short "Outdated" tag whose hover tooltip carries the precise age ("Last updated 3h
 /// 12m ago"), so fossilized plan/limits never pass for current data.
@@ -23,8 +24,10 @@ struct ProviderSectionHeader: View {
     /// (dashboard only; `nil` in the reorder preview, which never surfaces staleness). Its tooltip carries
     /// the precise age.
     var staleness: StalenessHint?
-    /// Forced refresh of this provider, run when the warning triangle is clicked. Supplied by the
-    /// dashboard; `nil` in the reorder preview, whose triangle stays a plain status glyph.
+    /// Forced refresh of this provider, run when the warning triangle is clicked. `nil` leaves the
+    /// triangle the plain status glyph it has always been — the reorder preview (inert by
+    /// construction), and any notice a refresh cannot move, which the dashboard decides via
+    /// `WidgetDataStore.headerNoticeAction(for:)`.
     var onWarningRefresh: (() -> Void)?
     /// Dashboard-only screenshot action. The reorder preview omits it, while Customize uses its own
     /// row type and is unaffected by this header.
@@ -187,19 +190,25 @@ struct ProviderSectionHeader: View {
             .foregroundStyle(Theme.notice)
         if let onWarningRefresh {
             Button(action: onWarningRefresh) {
-                // The pointer target grows in height only: the fixed slot width stays the layout
-                // contract the copy overlay offsets past, and 16pt matches the name's line height, so
-                // a comfortably clickable glyph can't grow the header row.
                 glyph
-                    .frame(width: Self.warningSlotWidth, height: 16, alignment: .trailing)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // The copy control's trick, for the same reason: a 10pt glyph is a poor click target, so
+            // the button owns a 28pt hit rectangle while the negative padding collapses its LAYOUT
+            // footprint back to the fixed slot. The slot width stays the constant the copy overlay
+            // offsets past, and the row height is unchanged. Where the two rectangles overlap the
+            // copy button wins — it is drawn in the overlay above this row, which is the right
+            // outcome: that band is where the copy glyph is.
+            .padding(-((28 - Self.warningSlotWidth) / 2))
             .hoverTooltip(Self.warningTooltip(for: warning, refreshable: true))
             .accessibilityLabel(warning)
         } else {
+            // Centered in the same slot as the button branch above, so the glyph sits in exactly one
+            // place whether or not it carries an action.
             glyph
-                .frame(width: Self.warningSlotWidth, alignment: .trailing)
+                .frame(width: Self.warningSlotWidth)
                 .hoverTooltip(warning)
                 .accessibilityLabel(warning)
         }

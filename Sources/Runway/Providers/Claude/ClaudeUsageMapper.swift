@@ -6,6 +6,10 @@ struct ClaudeMappedUsage: Equatable, Sendable {
     /// Provider header notice (amber triangle + tooltip) riding along with this usage, e.g. the
     /// rate-limited warning. `nil` for a clean fetch.
     var warning: String?
+    /// What the user can do about `warning` — see `ProviderSnapshot.WarningAction`. The rate-limited
+    /// notice is the one that must stay `.wait`: it tells the user manual refreshes make things worse,
+    /// so the header triangle it drives must not offer one.
+    var warningAction: ProviderSnapshot.WarningAction = .refresh
 }
 
 enum ClaudeUsageMapper {
@@ -47,14 +51,17 @@ enum ClaudeUsageMapper {
                 .badge(label: "Status", text: waitText, colorHex: "#F59E0B"),
                 rateLimitedNote(retryAfterSeconds: retryAfterSeconds)
             ],
-            warning: rateLimitedWarning(retryAfterSeconds: retryAfterSeconds)
+            warning: rateLimitedWarning(retryAfterSeconds: retryAfterSeconds),
+            warningAction: .wait
         )
     }
 
     /// Provider header warning (the amber triangle + tooltip) for the rate-limited state. The badge/note
     /// lines above only render when their metrics are enabled in the layout, so without this the default
     /// dashboard showed bare "No data" rows with no hint of why. Also warns the
-    /// user off manual refreshes, which extend Anthropic's rate limiting.
+    /// user off manual refreshes, which extend Anthropic's rate limiting — which is why every snapshot
+    /// carrying it marks itself `.wait`, leaving the header triangle inert instead of offering the
+    /// refresh this very sentence warns against.
     static func rateLimitedWarning(retryAfterSeconds: Int?) -> String {
         let base = "Updates blocked by Anthropic. Be patient — manual refreshes will make it worse."
         guard let retryText = retryAfterSeconds.map(formatRateLimitMinutes) else { return base }

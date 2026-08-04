@@ -67,13 +67,17 @@ struct WidgetGroupedListView: View {
     }
 
     private func header(_ group: ProviderGroup) -> some View {
-        ProviderSectionHeader(
+        // Only a notice a refresh can actually move gets the clickable triangle. A `.wait` notice
+        // (Claude's "manual refreshes will make it worse" during an Anthropic rate limit) keeps the
+        // inert glyph, so the app never offers the action its own tooltip warns against.
+        let canRefreshNotice = dataStore.headerNoticeAction(for: group.provider.id) == .refresh
+        return ProviderSectionHeader(
             provider: group.provider,
             plan: dataStore.plan(for: group.provider.id),
             warning: dataStore.headerNotice(for: group.provider.id),
             refreshing: dataStore.refreshingProviderIDs.contains(group.provider.id),
             staleness: dataStore.stalenessHint(for: group.provider.id),
-            onWarningRefresh: { refreshProvider(group.provider.id) },
+            onWarningRefresh: canRefreshNotice ? { refreshProvider(group.provider.id) } : nil,
             onCopyScreenshot: { shareCard(group) }
         )
         // Keep the provider mark and hover-revealed copy control aligned with the card's content edges.

@@ -750,6 +750,17 @@ final class WidgetDataStore {
         errorMessage(for: providerID) ?? warningMessage(for: providerID)
     }
 
+    /// What the user can do about `headerNotice(for:)`, which decides whether the header's triangle is a
+    /// refresh button. Follows the same precedence: a hard refresh error is always something a manual
+    /// retry can move (that retry is the one gesture allowed to raise a Keychain prompt), so it reports
+    /// `.refresh` even when the last successful snapshot's soft warning said `.wait`. Otherwise the
+    /// warning speaks for itself — Claude's rate-limit notice says manual refreshes make it worse, and
+    /// must not be handed a refresh button.
+    func headerNoticeAction(for providerID: String) -> ProviderSnapshot.WarningAction {
+        if errorMessage(for: providerID) != nil { return .refresh }
+        return snapshots[providerID]?.resolvedWarningAction ?? .refresh
+    }
+
     /// A snapshot that carries only error lines is a failed refresh; its message comes from the badge.
     private static func errorMessage(in snapshot: ProviderSnapshot) -> String? {
         guard !snapshot.lines.isEmpty, snapshot.lines.allSatisfy(\.isError) else { return nil }

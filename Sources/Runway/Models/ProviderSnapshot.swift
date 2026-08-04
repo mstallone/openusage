@@ -24,6 +24,25 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
     /// (spend tiles) still loads, so this surfaces as the provider header's amber triangle rather than
     /// blanking the provider. Cached with the snapshot; cleared on the next refresh when the condition resolves.
     var warning: String?
+    /// What the user can actually do about `warning`, which decides whether the header's amber
+    /// triangle is a refresh button or an inert status glyph. Most notices name a fix and then want a
+    /// refresh, so `.refresh` is the default; a notice that tells the user to WAIT — Claude's "manual
+    /// refreshes will make it worse" during an Anthropic rate limit — must mark itself `.wait`, or the
+    /// triangle would offer the exact action its own text warns against.
+    ///
+    /// Optional because snapshots are cached to disk and synced from peer Macs: one written before
+    /// this existed decodes as `nil` and reads as `.refresh` through `resolvedWarningAction`.
+    enum WarningAction: String, Hashable, Sendable, Codable {
+        /// A manual refresh can clear the notice (a login awaiting Keychain approval, a token the
+        /// user just renewed in their terminal, a transient failure).
+        case refresh
+        /// The notice resolves on its own schedule; refreshing does nothing or actively hurts.
+        case wait
+    }
+    var warningAction: WarningAction?
+
+    /// `warningAction` with its default applied — see the property.
+    var resolvedWarningAction: WarningAction { warningAction ?? .refresh }
 
     init(
         providerID: String,
@@ -33,7 +52,8 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         refreshedAt: Date = Date(),
         usageHistory: ProviderUsageHistory? = nil,
         applicableMetricIDs: Set<String>? = nil,
-        warning: String? = nil
+        warning: String? = nil,
+        warningAction: WarningAction? = nil
     ) {
         self.providerID = providerID
         self.displayName = displayName
@@ -43,6 +63,7 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         self.usageHistory = usageHistory
         self.applicableMetricIDs = applicableMetricIDs
         self.warning = warning
+        self.warningAction = warningAction
     }
 
     func line(label: String) -> MetricLine? {
@@ -59,7 +80,8 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         refreshedAt: Date,
         usageHistory: ProviderUsageHistory? = nil,
         applicableMetricIDs: Set<String>? = nil,
-        warning: String? = nil
+        warning: String? = nil,
+        warningAction: WarningAction? = nil
     ) -> ProviderSnapshot {
         ProviderSnapshot(
             providerID: provider.id,
@@ -69,7 +91,8 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
             refreshedAt: refreshedAt,
             usageHistory: usageHistory,
             applicableMetricIDs: applicableMetricIDs,
-            warning: warning
+            warning: warning,
+            warningAction: warningAction
         )
     }
 

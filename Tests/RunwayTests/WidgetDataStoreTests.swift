@@ -137,6 +137,74 @@ final class WidgetDataStoreTests: XCTestCase {
         XCTAssertEqual(store.headerNotice(for: provider.id), "Token expired. Run `claude` to log in again.")  // error wins
     }
 
+    func testRateLimitedWarningIsNotActionableButAHardErrorAlwaysIs() async {
+        // The header triangle became a refresh button, so a notice that tells the user NOT to refresh
+        // must say so: Claude's rate-limited snapshot carries `.wait`, and the dashboard leaves that
+        // triangle inert rather than offering the action its own text warns against. A later hard
+        // error overrides it — a manual retry is exactly what moves that one, even though the stale
+        // `.wait` warning is still on the kept snapshot.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let rateLimited = ClaudeUsageMapper.rateLimitedWarning(retryAfterSeconds: 300)
+        let runtime = TogglingProviderRuntime(
+            provider: provider,
+            descriptors: [meter],
+            first: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Session", used: 42, limit: 100, format: .percent)],
+                warning: rateLimited,
+                warningAction: .wait
+            ),
+            second: ProviderSnapshot.error(provider: provider, message: "Token expired. Run `claude` to log in again.")
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [runtime],
+            defaults: makeUserDefaults("header-notice-action")
+        )
+
+        await store.refreshAll(force: true)  // success, rate-limited notice
+        XCTAssertEqual(store.headerNotice(for: provider.id), rateLimited)
+        XCTAssertEqual(store.headerNoticeAction(for: provider.id), .wait)
+
+        await store.refreshAll(force: true)  // failure
+        XCTAssertEqual(store.headerNotice(for: provider.id), "Token expired. Run `claude` to log in again.")
+        XCTAssertEqual(store.headerNoticeAction(for: provider.id), .refresh)
+    }
+
+    func testProviderWithoutAWarningActionIsTreatedAsRefreshable() async {
+        // Every other provider (and every snapshot cached before `warningAction` existed) omits the
+        // field. Those notices name a fix and then want a refresh, so the triangle stays clickable.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let snapshot = ProviderSnapshot(
+            providerID: provider.id,
+            displayName: provider.displayName,
+            lines: [.progress(label: "Session", used: 42, limit: 100, format: .percent)],
+            warning: ClaudeUsageMapper.missingProfileScopeWarning
+        )
+        XCTAssertNil(snapshot.warningAction)
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [TestProviderRuntime(provider: provider, descriptors: [meter], snapshot: snapshot)],
+            defaults: makeUserDefaults("header-notice-action-default")
+        )
+
+        await store.refreshAll(force: true)
+        XCTAssertEqual(store.headerNoticeAction(for: provider.id), .refresh)
+    }
+
     func testEmptyStateErrorShowsOnlyWhileNoLastGoodDataExists() async {
         // A provider that has never refreshed successfully (a Keychain item awaiting approval, a
         // fresh not-signed-in install) surfaces its error as the card body via `emptyStateError`.
