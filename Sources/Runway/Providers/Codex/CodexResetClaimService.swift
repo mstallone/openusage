@@ -28,7 +28,7 @@ final class CodexResetClaimService {
     typealias Credentials = (accessToken: String, accountID: String?)
 
     private let usageClient: CodexUsageClient
-    private let credentialCandidates: () async -> [Credentials]
+    private let credentialCandidates: (_ allowKeychainInteraction: Bool) async -> [Credentials]
     private let refreshAfterClaim: () async -> Void
     /// The credit id each idempotency key was matched to, kept for the key's retries: if a consume
     /// succeeded but its response was lost, the credit is gone from a re-fetched list — a fresh match
@@ -40,7 +40,7 @@ final class CodexResetClaimService {
     /// go through. Candidates are tried in order until one authenticates (see `claim`).
     init(
         usageClient: CodexUsageClient,
-        credentialCandidates: @escaping () async -> [Credentials],
+        credentialCandidates: @escaping (_ allowKeychainInteraction: Bool) async -> [Credentials],
         refreshAfterClaim: @escaping () async -> Void = {}
     ) {
         self.usageClient = usageClient
@@ -61,16 +61,14 @@ final class CodexResetClaimService {
     ) {
         self.init(
             usageClient: usageClient,
-            credentialCandidates: {
+            credentialCandidates: { allowKeychainInteraction in
                 var candidates = authStore.loadAuthCandidates()
                 // Claiming a reset credit is an explicit user action, so — like a manual refresh —
-                // it may ask macOS to approve a protected keyring item. Without that the claim
-                // reported a generic failure while the credential that could serve it sat unread.
-                // But only ask when nothing on disk can serve the claim: prompting a user whose
-                // auth.json already works would be a dialog for nothing.
-                let needsKeychain = !candidates.contains(where: \.hasUsableAccessToken)
+                // it may ask macOS to approve a protected keyring item. The caller only sets the
+                // flag once the file credentials have actually been rejected, so a user whose
+                // auth.json works never sees a dialog.
                 let keychainLoad = await loadOffMainActor {
-                    authStore.loadKeychainCredentials(allowKeychainInteraction: needsKeychain)
+                    authStore.loadKeychainCredentials(allowKeychainInteraction: allowKeychainInteraction)
                 }
                 if case .permissionRequired = keychainLoad {
                     AppLog.warn(
@@ -95,7 +93,32 @@ final class CodexResetClaimService {
     /// Claims the credit expiring at `expiry`. Never throws — every failure mode is logged loudly and
     /// collapsed to an outcome the popover can render.
     func claim(creditExpiringAt expiry: Date, redeemRequestID: String) async -> ResetClaimOutcome {
-        let candidates = await credentialCandidates()
+        // Prompt-free first, so a user whose `auth.json` works never sees a dialog and the happy
+        // path costs exactly the same requests as before.
+        let candidates = await credentialCandidates(false)
+        let outcome = await claim(
+            creditExpiringAt: expiry,
+            redeemRequestID: redeemRequestID,
+            candidates: candidates
+        )
+        guard outcome == .failed else { return outcome }
+
+        // Everything local was rejected (or there was nothing). A file token can be structurally
+        // fine and still be dead, and the protected keyring item may hold the live one — so for
+        // this explicit user action, ask for approval and try once more with whatever that adds.
+        let approved = await credentialCandidates(true)
+        let seen = Set(candidates.map { "\($0.accessToken)|\($0.accountID ?? "")" })
+        let fresh = approved.filter { !seen.contains("\($0.accessToken)|\($0.accountID ?? "")") }
+        guard !fresh.isEmpty else { return outcome }
+        AppLog.info(LogTag.plugin("codex"), "reset claim: retrying with a newly approved credential")
+        return await claim(creditExpiringAt: expiry, redeemRequestID: redeemRequestID, candidates: fresh)
+    }
+
+    private func claim(
+        creditExpiringAt expiry: Date,
+        redeemRequestID: String,
+        candidates: [Credentials]
+    ) async -> ResetClaimOutcome {
         guard !candidates.isEmpty else {
             AppLog.error(LogTag.plugin("codex"), "reset claim: no usable Codex credentials")
             return .failed
