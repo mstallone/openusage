@@ -80,10 +80,12 @@ final class KeychainFailureCategoryTests: XCTestCase {
 
         XCTAssertNil(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"))
 
-        coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: true)
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: "acct", fingerprint: { "fp-1" },
-            read: { NonInteractiveKeychainRead.unavailable }
+            read: { ticket in
+                coordinator.recordFailureCategory(ticket, permissionDenied: true)
+                return NonInteractiveKeychainRead.unavailable
+            }
         )
         // The item is tripped now — a probe answers nil locally — but the category still reads back.
         XCTAssertNil(coordinator.probe(service: "svc", account: "acct") { true })
@@ -93,7 +95,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         clock.advance(61)
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: "acct", fingerprint: { "fp-2" },
-            read: { NonInteractiveKeychainRead.value("secret") }
+            read: { _ in NonInteractiveKeychainRead.value("secret") }
         )
         XCTAssertNil(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"))
     }
@@ -109,7 +111,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let readerA = Thread {
             _ = try? coordinator.interactiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: {
+                read: { _ in
                     aStarted.signal()
                     releaseA.wait()
                     throw KeychainError.readFailed("denied")
@@ -122,7 +124,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
 
         let recovered = try? coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { "approved-secret" }
+            read: { _ in "approved-secret" }
         )
         XCTAssertEqual(recovered, "approved-secret")
 
@@ -132,7 +134,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let reads = Counter()
         let after = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .value("approved-secret") }
+            read: { _ in reads.increment(); return .value("approved-secret") }
         )
         XCTAssertEqual(after, .value("approved-secret"))
         XCTAssertEqual(reads.value, 1, "the stale failure must not have re-tripped the breaker")
@@ -151,7 +153,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let readerA = Thread {
             _ = try? coordinator.interactiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: {
+                read: { _ in
                     aStarted.signal()
                     releaseA.wait()
                     throw KeychainError.readFailed("denied")
@@ -166,7 +168,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         // B starts second and succeeds, but lets A store first.
         let recovered = try? coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: {
+            read: { _ in
                 releaseA.signal()
                 XCTAssertEqual(aFinished.wait(timeout: .now() + 2), .success)
                 return "approved-secret"
@@ -178,7 +180,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let reads = Counter()
         let after = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { reads.increment(); return .value("approved-secret") }
+            read: { _ in reads.increment(); return .value("approved-secret") }
         )
         XCTAssertEqual(after, .value("approved-secret"))
         XCTAssertEqual(reads.value, 1, "the older read's failure must not have won the store")
@@ -191,7 +193,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { .value("cached-under-fp-1") }
+            read: { _ in .value("cached-under-fp-1") }
         )
 
         let started = DispatchSemaphore(value: 0)
@@ -200,7 +202,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let stuck = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-2" },
-                read: {
+                read: { _ in
                     started.signal()
                     release.wait()
                     return .value("rotated")
@@ -213,7 +215,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
 
         let timedOut = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { XCTFail("must not probe behind a stuck flight"); return nil },
-            read: { XCTFail("must not read behind a stuck flight"); return .unavailable }
+            read: { _ in XCTFail("must not read behind a stuck flight"); return .unavailable }
         )
         XCTAssertEqual(timedOut, .unavailable, "a superseded secret must never be served as current")
 
@@ -229,7 +231,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil,
             fingerprint: { nil },
-            read: { .value("background-value") }
+            read: { _ in .value("background-value") }
         )
 
         let started = DispatchSemaphore(value: 0)
@@ -238,7 +240,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let stuck = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-2" },
-                read: { started.signal(); release.wait(); return .value("rotated") }
+                read: { _ in started.signal(); release.wait(); return .value("rotated") }
             )
             stuckDone.fulfill()
         }
@@ -248,7 +250,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
         let timedOut = coordinator.nonInteractiveRead(
             service: "svc", account: nil,
             fingerprint: { XCTFail("must not probe behind a stuck flight"); return nil },
-            read: { XCTFail("must not read behind a stuck flight"); return .unavailable }
+            read: { _ in XCTFail("must not read behind a stuck flight"); return .unavailable }
         )
         XCTAssertEqual(timedOut, .unavailable, "a background value is no evidence the secret is current")
 
@@ -258,7 +260,13 @@ final class KeychainFailureCategoryTests: XCTestCase {
 
     func testAnUnreadableKeychainIsRecordedAsNotDenied() {
         let coordinator = KeychainReadCoordinator()
-        coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: false)
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: "acct", fingerprint: { "fp-1" },
+            read: { ticket in
+                coordinator.recordFailureCategory(ticket, permissionDenied: false)
+                return NonInteractiveKeychainRead.unavailable
+            }
+        )
         XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), false)
     }
 }
@@ -270,10 +278,13 @@ final class KeychainContentionTests: XCTestCase {
         var reads = 0
 
         // A read that never reached securityd because another provider's dialog held the gate.
-        coordinator.recordContention(service: "svc", account: "acct")
         let first = coordinator.nonInteractiveRead(
             service: "svc", account: "acct", fingerprint: { "fp-1" },
-            read: { reads += 1; return .unavailable }
+            read: { ticket in
+                coordinator.recordContention(ticket)
+                reads += 1
+                return .unavailable
+            }
         )
         XCTAssertEqual(first, .unavailable)
         XCTAssertNil(
@@ -284,7 +295,7 @@ final class KeychainContentionTests: XCTestCase {
         // The very next pass must try for real rather than being locked out for 15 minutes.
         let second = coordinator.nonInteractiveRead(
             service: "svc", account: "acct", fingerprint: { "fp-1" },
-            read: { reads += 1; return .value("secret") }
+            read: { _ in reads += 1; return .value("secret") }
         )
         XCTAssertEqual(second, .value("secret"))
         XCTAssertEqual(reads, 2, "an item that was never attempted must not be circuit-broken")
@@ -304,12 +315,12 @@ final class KeychainContentionTests: XCTestCase {
         let stale = Thread {
             _ = coordinator.nonInteractiveRead(
                 service: "svc", account: nil, fingerprint: { "fp-1" },
-                read: {
+                read: { ticket in
                     started.signal()
                     release.wait()
                     // Turned away by the UI gate only now — AFTER the newer read already stored,
                     // so nothing else consumes this marker before the stale store is discarded.
-                    coordinator.recordContention(service: "svc", account: nil)
+                    coordinator.recordContention(ticket)
                     return .unavailable
                 }
             )
@@ -321,7 +332,7 @@ final class KeychainContentionTests: XCTestCase {
         // B bypasses the stuck flight and recovers the item, so A's outcome is discarded.
         _ = try? coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { "approved-secret" }
+            read: { _ in "approved-secret" }
         )
         release.signal()
         wait(for: [staleDone], timeout: 2)
@@ -331,13 +342,56 @@ final class KeychainContentionTests: XCTestCase {
         var reads = 0
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-2" },
-            read: { reads += 1; return .unavailable }
+            read: { _ in reads += 1; return .unavailable }
         )
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-3" },
-            read: { reads += 1; return .unavailable }
+            read: { _ in reads += 1; return .unavailable }
         )
         XCTAssertEqual(reads, 1, "the second read must be answered by the breaker, not sent to Security")
+    }
+
+    func testOneReadsContentionCannotExcuseAnotherReadsGenuineFailure() {
+        // The inverse of the stale-marker case. A is turned away by the UI gate; B overlaps it and
+        // hits a REAL Security failure. If the marker is item-wide, B consumes A's and its own
+        // genuine failure is excused — so the breaker never trips and the next refresh calls
+        // securityd again. Contention is evidence about a READ, not about the item.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        let aStarted = DispatchSemaphore(value: 0)
+        let releaseA = DispatchSemaphore(value: 0)
+        let aDone = expectation(description: "contended read finished")
+
+        let readerA = Thread {
+            _ = coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: { ticket in
+                    coordinator.recordContention(ticket)
+                    aStarted.signal()
+                    releaseA.wait()
+                    return .unavailable
+                }
+            )
+            aDone.fulfill()
+        }
+        readerA.start()
+        XCTAssertEqual(aStarted.wait(timeout: .now() + 2), .success)
+
+        // B bypasses A's stuck flight and fails for real — a denial, not contention.
+        _ = try? coordinator.interactiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { _ in throw KeychainError.readFailed("denied") }
+        )
+        releaseA.signal()
+        wait(for: [aDone], timeout: 2)
+
+        // B's denial must have tripped the item: no further Security call until revalidation.
+        var reads = 0
+        let after = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-2" },
+            read: { _ in reads += 1; return .unavailable }
+        )
+        XCTAssertEqual(after, .unavailable)
+        XCTAssertEqual(reads, 0, "a genuine failure must trip the breaker even alongside a contended read")
     }
 
     /// The Safe Storage readers go through `externalRead`, which used to trip on every thrown
@@ -347,19 +401,22 @@ final class KeychainContentionTests: XCTestCase {
         struct Unreadable: Error {}
         var reads = 0
 
-        coordinator.recordContention(service: "svc", account: nil)
         XCTAssertThrowsError(
             try coordinator.externalRead(
                 service: "svc", account: nil, interactive: false,
                 unavailable: { _ in Unreadable() },
-                read: { reads += 1; throw Unreadable() }
+                read: { ticket in
+                    coordinator.recordContention(ticket)
+                    reads += 1
+                    throw Unreadable()
+                }
             )
         )
 
         let recovered = try? coordinator.externalRead(
             service: "svc", account: nil, interactive: false,
             unavailable: { _ in Unreadable() },
-            read: { reads += 1; return "safe-storage-key" }
+            read: { _ in reads += 1; return "safe-storage-key" }
         )
         XCTAssertEqual(recovered, "safe-storage-key")
         XCTAssertEqual(reads, 2, "the skipped read must not lock the item out")
@@ -375,8 +432,8 @@ final class KeychainContentionTests: XCTestCase {
             try coordinator.externalRead(
                 service: "svc", account: nil, interactive: false,
                 unavailable: { $0 ? Failure.denied : Failure.unreadable },
-                read: {
-                    coordinator.recordFailureCategory(service: "svc", account: nil, permissionDenied: true)
+                read: { ticket in
+                    coordinator.recordFailureCategory(ticket, permissionDenied: true)
                     throw Failure.denied
                 }
             )
@@ -387,7 +444,7 @@ final class KeychainContentionTests: XCTestCase {
             try coordinator.externalRead(
                 service: "svc", account: nil, interactive: false,
                 unavailable: { $0 ? Failure.denied : Failure.unreadable },
-                read: { XCTFail("the breaker must answer without calling Security"); return "" }
+                read: { _ in XCTFail("the breaker must answer without calling Security"); return "" }
             )
         ) { XCTAssertEqual($0 as? Failure, .denied) }
     }

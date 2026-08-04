@@ -71,7 +71,7 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             // Replays the original category: approving Safe Storage cannot fix an
             // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
             unavailable: { denied in denied ? SakanaBrowserCredentialError.permissionRequired : SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable)) }
-        ) { () -> OSStatus in
+        ) { ticket -> OSStatus in
             var gateEngaged = true
             let status = allowInteraction
                 ? KeychainUISuppression.withUIAllowed { ui -> OSStatus in
@@ -91,7 +91,7 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
                 // The read never reached a prompt, so this says nothing about the item's ACL:
                 // reporting a denial would tell the user to approve an item nobody asked about, and
                 // tripping the breaker would lock out an item that was never really attempted.
-                KeychainReadCoordinator.shared.recordContention(service: service, account: nil)
+                KeychainReadCoordinator.shared.recordContention(ticket)
                 throw SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable))
             }
             // EVERY failure throws from inside the flight so the breaker records it — a returning
@@ -104,12 +104,12 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
                 // Remember WHY, so the breaker's later replays keep giving the same advice instead
                 // of degrading a real denial into a generic "couldn't be read".
                 KeychainReadCoordinator.shared.recordFailureCategory(
-                    service: service, account: nil, permissionDenied: true
+                    ticket, permissionDenied: true
                 )
                 throw SakanaBrowserCredentialError.permissionRequired
             default:
                 KeychainReadCoordinator.shared.recordFailureCategory(
-                    service: service, account: nil, permissionDenied: false
+                    ticket, permissionDenied: false
                 )
                 throw SakanaBrowserCredentialError.keychainFailure(Int(status))
             }

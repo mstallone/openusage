@@ -35,6 +35,14 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         var account: String?
     }
 
+    /// Identifies one in-flight read. Passed to the read closure so anything it observes —
+    /// UI-gate contention, the failing `OSStatus` — is attributed to that read and travels with
+    /// its sequenced outcome, instead of being left in an item-wide side channel that a concurrent
+    /// read could consume.
+    struct ReadTicket {
+        fileprivate let sequence: Int
+    }
+
     private struct Entry {
         /// Fingerprint the cached outcome belongs to. `nil` (the probe failed or was skipped) never
         /// matches the change-gated cache path.
@@ -67,9 +75,13 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// keychain itself could not be read. Captured from the read's own `OSStatus`, because a second
     /// attributes probe cannot recover it — the breaker answers those locally once tripped.
     private var lastFailureDenied: [Key: Bool] = [:]
-    /// Items whose last read failed only because another provider's approval dialog held the
-    /// process-wide UI gate. That says nothing about this item, so it must not trip its breaker.
-    private var contendedKeys: Set<Key> = []
+    /// Reads that never reached securityd because another provider's approval dialog held the
+    /// process-wide UI gate. Keyed by READ, not by item: two reads of the same item overlap
+    /// routinely, and one read's contention must never excuse another read's genuine failure.
+    private var contendedSequences: Set<Int> = []
+    /// Failure categories reported by a read that has not stored its outcome yet, keyed the same
+    /// way and for the same reason — a category belongs to the read that observed the status.
+    private var pendingCategories: [Int: Bool] = [:]
     private let inFlightWait: TimeInterval
     private let revalidateAfter: TimeInterval
     private let now: @Sendable () -> Date
@@ -92,7 +104,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         service: String,
         account: String?,
         fingerprint: () -> String?,
-        read: () -> NonInteractiveKeychainRead
+        read: (ReadTicket) -> NonInteractiveKeychainRead
     ) -> NonInteractiveKeychainRead {
         let key = Key(service: service, account: account)
 
@@ -153,7 +165,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         }
         condition.unlock()
 
-        let result = read()
+        let result = read(ReadTicket(sequence: sequence))
 
         condition.lock()
         storeIfCurrent(
@@ -176,7 +188,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         service: String,
         account: String?,
         fingerprint: () -> String?,
-        read: () throws -> String?
+        read: (ReadTicket) throws -> String?
     ) throws -> String? {
         let key = Key(service: service, account: account)
 
@@ -205,7 +217,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         let fingerprint = acquired ? fingerprint() : nil
 
         do {
-            let value = try read()
+            let value = try read(ReadTicket(sequence: sequence))
             condition.lock()
             storeIfCurrent(
                 key: key,
@@ -239,7 +251,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         account: String?,
         interactive: Bool,
         unavailable: (_ permissionDenied: Bool) -> Error,
-        read: () throws -> T
+        read: (ReadTicket) throws -> T
     ) throws -> T {
         let key = Key(service: service, account: account)
 
@@ -274,7 +286,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         }
 
         do {
-            let value = try read()
+            let value = try read(ReadTicket(sequence: sequence))
             condition.lock()
             storeIfCurrent(key: key, sequence: sequence, value: nil, tripped: false)
             condition.unlock()
@@ -300,41 +312,42 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         value: NonInteractiveKeychainRead?,
         tripped: Bool
     ) {
-        // Consumed BEFORE the sequence guard, because the marker belongs to the read now reporting
-        // its outcome — every path that records contention reaches this method. Leaving it behind
-        // when that outcome is discarded would let the NEXT read's genuine Security failure absorb
-        // it and skip tripping the breaker, which is the safety guarantee inverted: Runway would
-        // keep calling securityd exactly when it should be backing off.
-        let wasContention = contendedKeys.remove(key) != nil
+        // This read's OWN observations, taken by sequence — a concurrent read of the same item
+        // cannot consume them. Removed even when the outcome is discarded below, so nothing leaks.
+        let wasContention = contendedSequences.remove(sequence) != nil
+        let category = pendingCategories.removeValue(forKey: sequence)
         // `>=` and not `>`: a read stores at most once, so the only way to match is to be that
         // same read writing its own outcome.
         guard sequence >= storedSequences[key, default: Int.min] else { return }
         storedSequences[key] = sequence
+        // A read the UI gate turned away never reached securityd, so it is not evidence about this
+        // item and must not trip the breaker.
+        let failed = tripped && !wasContention
         store(
             key: key,
             fingerprint: fingerprint,
             fromUserAction: fromUserAction,
             value: value,
-            tripped: tripped && !wasContention
+            tripped: failed
         )
+        // The category describes the failure just stored, so it lands with it or not at all.
+        lastFailureDenied[key] = failed ? category : nil
     }
 
     /// Marks the next stored outcome for this item as UI-gate contention rather than a real
     /// failure: the read never reached securityd, so tripping the breaker would lock out an item
     /// that was never attempted.
-    func recordContention(service: String, account: String?) {
-        let key = Key(service: service, account: account)
+    func recordContention(_ ticket: ReadTicket) {
         condition.lock()
-        contendedKeys.insert(key)
+        contendedSequences.insert(ticket.sequence)
         condition.unlock()
     }
 
     /// Records why a read failed, so callers can tell "not approved yet" from "couldn't be read"
     /// without a follow-up probe.
-    func recordFailureCategory(service: String, account: String?, permissionDenied: Bool) {
-        let key = Key(service: service, account: account)
+    func recordFailureCategory(_ ticket: ReadTicket, permissionDenied: Bool) {
         condition.lock()
-        lastFailureDenied[key] = permissionDenied
+        pendingCategories[ticket.sequence] = permissionDenied
         condition.unlock()
     }
 
@@ -410,7 +423,6 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         value: NonInteractiveKeychainRead?,
         tripped: Bool
     ) {
-        if !tripped { lastFailureDenied[key] = nil }
         entries[key] = Entry(
             fingerprint: fingerprint,
             fromUserAction: fromUserAction,

@@ -488,7 +488,7 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             service: service,
             account: account,
             fingerprint: { attributeFingerprint(service: service, account: account) },
-            read: { try performInteractiveRead(service: service, account: account) }
+            read: { ticket in try performInteractiveRead(service: service, account: account, ticket: ticket) }
         )
     }
 
@@ -497,7 +497,8 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     /// `security` command would authorize that helper rather than the app's later silent reads.
     private func performInteractiveRead(
         service: String,
-        account: String?
+        account: String?,
+        ticket: KeychainReadCoordinator.ReadTicket
     ) throws -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -518,7 +519,7 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             // Either no prompt was possible, or none was attempted. A denial-shaped status here says
             // nothing about this item's ACL, and recording it would trip the item and hand the user
             // an Always Allow instruction for a dialog that was never shown.
-            coordinator.recordContention(service: service, account: account)
+            coordinator.recordContention(ticket)
             AppLog.warn(.keychain, "interactive read for service '\(service)' skipped or failed while the UI gate was unavailable")
             throw KeychainError.readFailed("The keychain was busy. Try refreshing again.")
         }
@@ -537,8 +538,7 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             // this item's ACL there is. Record it: this read trips the breaker, and every later
             // probe is then answered locally with no status to classify.
             coordinator.recordFailureCategory(
-                service: service,
-                account: account,
+                ticket,
                 permissionDenied: status == errSecAuthFailed
                     || status == errSecInteractionNotAllowed
                     || status == errSecUserCanceled
@@ -567,13 +567,14 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             service: service,
             account: account,
             fingerprint: { attributeFingerprint(service: service, account: account) },
-            read: { performNonInteractiveRead(service: service, account: account) }
+            read: { ticket in performNonInteractiveRead(service: service, account: account, ticket: ticket) }
         )
     }
 
     private func performNonInteractiveRead(
         service: String,
-        account: String?
+        account: String?,
+        ticket: KeychainReadCoordinator.ReadTicket
     ) -> NonInteractiveKeychainRead {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -592,7 +593,7 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed
         }
         guard gateEngaged else {
-            coordinator.recordContention(service: service, account: account)
+            coordinator.recordContention(ticket)
             AppLog.debug(.keychain, "read for service '\(service)' skipped: another approval dialog holds the keychain UI gate")
             return .unavailable
         }
@@ -612,8 +613,7 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             // simply could not read, so remember it rather than probing again later (the breaker
             // would answer that probe locally). Log the status only — never the item value.
             coordinator.recordFailureCategory(
-                service: service,
-                account: account,
+                ticket,
                 permissionDenied: status == errSecAuthFailed || status == errSecInteractionNotAllowed
             )
             AppLog.debug(.keychain, "non-interactive read unavailable for service '\(service)' (status \(status))")
