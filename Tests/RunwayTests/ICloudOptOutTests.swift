@@ -5,6 +5,60 @@ import XCTest
 /// user flips the switch: sync is off afterwards, so nothing else comes back for it.
 @MainActor
 final class ICloudOptOutTests: XCTestCase {
+    func testAFailedCompensatingDeletionIsRememberedRatherThanLost() async throws {
+        // The race: a publish is in flight when the user opts out, so the record lands AFTER the
+        // opt-out deletion already succeeded. The compensating deletion removes it — but if THAT
+        // fails, the user would otherwise be told nothing and believe their record is gone when it
+        // is still in iCloud. The first delete (the opt-out itself) succeeds; the compensating one
+        // fails, which is the only way to exercise this path.
+        let defaults = makeDefaults("compensating-delete-fails")
+        let cloudStore = RecordingUsageCloudStore(deletionsBeforeFailure: 1)
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: MemoryDeviceIDStore(),
+            writeDebounce: .milliseconds(10),
+            pollInterval: nil,
+            optOutRetryDelays: []
+        )
+
+        await cloudStore.holdNextWrite()
+        sync.scheduleWrite()
+        let deadline = Date().addingTimeInterval(2)
+        while await cloudStore.writeInFlight == false, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let writeStarted = await cloudStore.writeInFlight
+        XCTAssertTrue(writeStarted, "the publish must be in flight for this race")
+
+        // Opt out while that write is still in flight, and let the opt-out's own deletion finish
+        // FIRST — otherwise the compensating deletion could be the one that succeeds and this would
+        // pass for the wrong reason.
+        sync.enabled = false
+        let optOutDeleted = Date().addingTimeInterval(2)
+        while await cloudStore.deletedDeviceIDs.isEmpty, Date() < optOutDeleted {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(
+            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
+            "the opt-out's own deletion succeeded, so nothing is pending yet"
+        )
+
+        // Now the in-flight write lands, recreating the record, and its compensating delete fails.
+        await cloudStore.releaseWrite()
+        let settle = Date().addingTimeInterval(2)
+        while !defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"), Date() < settle {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertTrue(
+            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
+            "a failed compensating deletion must persist the unfinished opt-out"
+        )
+        XCTAssertNotNil(sync.disabledStateWarning, "and stay visible to the user")
+    }
+
     func testOptOutWithAProvisionalIdentityReportsThatNothingWasRemoved() async throws {
         // Deleting the provisional UUID would remove nothing and quietly strand the record this Mac
         // really published — and opting out also stops the retries that would resolve it.
