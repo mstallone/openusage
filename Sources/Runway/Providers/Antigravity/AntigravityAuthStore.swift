@@ -60,8 +60,10 @@ struct AntigravityAuthStore: Sendable {
             case .missing:
                 raw = nil
             case .unavailable:
+                // Present but not approved: only an in-app manual refresh + Always Allow fixes it,
+                // so don't send the user to unlock Keychain or sign in again.
                 AppLog.error(LogTag.auth("antigravity"), "keychain credential unavailable without interaction; refresh manually to approve access")
-                throw AntigravityError.credentialStoreUnreadable
+                throw AntigravityError.keychainPermissionRequired
             }
         }
         guard let raw else { return nil }
