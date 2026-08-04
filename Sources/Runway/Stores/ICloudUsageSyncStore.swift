@@ -165,13 +165,15 @@ final class ICloudUsageSyncStore {
         cloudStore: any UsageCloudStoring = CloudKitUsageHistoryStore(),
         deviceIDStore: any ICloudDeviceIDStoring = KeychainICloudDeviceIDStore(),
         writeDebounce: Duration = .seconds(3),
-        pollInterval: Duration? = .seconds(300)
+        pollInterval: Duration? = .seconds(300),
+        optOutRetryDelays: [Duration] = [.seconds(60), .seconds(300), .seconds(900), .seconds(1800)]
     ) {
         self.dataStore = dataStore
         self.defaults = defaults
         self.cloudStore = cloudStore
         self.writeDebounce = writeDebounce
         self.pollInterval = pollInterval
+        self.optOutRetryDelays = optOutRetryDelays
         let identity = Self.resolveDeviceID(defaults: defaults, store: deviceIDStore)
         self.deviceID = identity.id
         self.identityError = identity.error
@@ -187,12 +189,29 @@ final class ICloudUsageSyncStore {
         } else if pendingOptOutDeletion {
             // Sync is off, so nothing else would ever come back for this: finish the opt-out the
             // moment the identity is knowable again.
-            Task { await retryPendingOptOutDeletion() }
+            startPendingOptOutRetries()
+        }
+    }
+
+    /// Keeps trying a stranded opt-out on its own schedule. The local-state callback fires only
+    /// when a provider actually refreshed or failed, so a Mac with every provider disabled — or one
+    /// sitting on cached results — would otherwise get no retry signal at all until it relaunched.
+    private func startPendingOptOutRetries() {
+        optOutRetryTask?.cancel()
+        optOutRetryTask = Task { [weak self] in
+            guard let self else { return }
+            await retryPendingOptOutDeletion()
+            for delay in optOutRetryDelays {
+                guard pendingOptOutDeletion else { return }
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled, pendingOptOutDeletion else { return }
+                await retryPendingOptOutDeletion()
+            }
         }
     }
 
     /// Completes an opt-out that couldn't identify this Mac earlier. No-op while the identity is
-    /// still provisional — the flag stays set and the next launch tries again.
+    /// still provisional — the flag stays set and a later attempt tries again.
     private func retryPendingOptOutDeletion() async {
         guard !isRetryingOptOut else { return }
         isRetryingOptOut = true
@@ -204,6 +223,7 @@ final class ICloudUsageSyncStore {
             try await cloudStore.delete(deviceID: deviceID)
             defaults.set(false, forKey: Self.pendingOptOutKey)
             pendingOptOutDeletion = false
+            optOutRetryTask?.cancel()
             AppLog.info(.config, "iCloud opt-out completed: this Mac's record was removed")
             // The user can re-enable while this delete is in flight; without republishing, that
             // late delete would leave an enabled Mac missing until some other change schedules a
@@ -264,6 +284,7 @@ final class ICloudUsageSyncStore {
                 pendingOptOutDeletion = true
                 identityError = "Runway couldn’t identify this Mac, so its existing iCloud record "
                     + "wasn’t removed. It will be removed once your login keychain is available."
+                startPendingOptOutRetries()
                 return
             }
             do {
@@ -273,6 +294,7 @@ final class ICloudUsageSyncStore {
                 // Mac's record missing until the next refresh batch.
                 defaults.set(false, forKey: Self.pendingOptOutKey)
                 pendingOptOutDeletion = false
+                optOutRetryTask?.cancel()
                 if enabled {
                     await writeNow()
                 } else {
@@ -286,6 +308,7 @@ final class ICloudUsageSyncStore {
                 defaults.set(true, forKey: Self.pendingOptOutKey)
                 pendingOptOutDeletion = true
                 report(error, .disable)
+                startPendingOptOutRetries()
             }
         }
     }
@@ -396,6 +419,11 @@ final class ICloudUsageSyncStore {
     /// Guards against a second retry starting while one is in flight — every local state change
     /// calls `scheduleWrite`, and a slow CloudKit delete would otherwise stack up duplicates.
     private var isRetryingOptOut = false
+    private var optOutRetryTask: Task<Void, Never>?
+    /// Backoff after the immediate attempt. Deletion is idempotent, so a few widely spaced retries
+    /// cost nothing and cover the realistic recoveries — unlocking the keychain, iCloud coming
+    /// back — without spinning.
+    private let optOutRetryDelays: [Duration]
 
     private enum SyncOperation: String { case read, write, disable }
 
