@@ -55,6 +55,10 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// wedged read finishing after a successful manual read) must not clobber the fresher entry.
     private var epochs: [Key: Int] = [:]
     private var inFlight: Set<Key> = []
+    /// Why an item's last read failed: `true` = its ACL has not approved this app, `false` = the
+    /// keychain itself could not be read. Captured from the read's own `OSStatus`, because a second
+    /// attributes probe cannot recover it — the breaker answers those locally once tripped.
+    private var lastFailureDenied: [Key: Bool] = [:]
     private let inFlightWait: TimeInterval
     private let revalidateAfter: TimeInterval
     private let now: @Sendable () -> Date
@@ -274,6 +278,24 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         store(key: key, fingerprint: fingerprint, value: value, tripped: tripped)
     }
 
+    /// Records why a read failed, so callers can tell "not approved yet" from "couldn't be read"
+    /// without a follow-up probe.
+    func recordFailureCategory(service: String, account: String?, permissionDenied: Bool) {
+        let key = Key(service: service, account: account)
+        condition.lock()
+        lastFailureDenied[key] = permissionDenied
+        condition.unlock()
+    }
+
+    /// `true` when the last failed read of this item was an ACL denial, `false` when the keychain
+    /// was unreadable, `nil` when no failure has been seen.
+    func lastFailureWasPermissionDenied(service: String, account: String?) -> Bool? {
+        let key = Key(service: service, account: account)
+        condition.lock()
+        defer { condition.unlock() }
+        return lastFailureDenied[key]
+    }
+
     /// Bounded, single-flighted metadata query (existence or fingerprint probes). Such probes are
     /// prompt-free by construction, but they are still securityd round trips — against a wedged
     /// securityd they block like any other call, so they must not stack behind a stuck read of the
@@ -323,6 +345,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// Must be called under `condition`'s lock.
     private func store(key: Key, fingerprint: String?, value: NonInteractiveKeychainRead?, tripped: Bool) {
         epochs[key, default: 0] += 1
+        if !tripped { lastFailureDenied[key] = nil }
         entries[key] = Entry(fingerprint: fingerprint, value: value, tripped: tripped, updatedAt: now())
     }
 }
