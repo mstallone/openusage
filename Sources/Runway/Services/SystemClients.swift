@@ -192,6 +192,8 @@ protocol KeychainReading: Sendable {
     /// (unlock it), `nil` = no failure recorded. Taken from the read's own `OSStatus`, so it stays
     /// answerable after the breaker trips — a follow-up probe would just be answered locally.
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool?
+    /// The same verdict for the CURRENT-USER item, whose account name only the accessor knows.
+    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool?
     /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
     /// date). Discovery binds a cached account identity to this so replacing a keyring item invalidates
     /// the old identity without reading its secret on the launch path.
@@ -270,6 +272,10 @@ extension KeychainReading {
     }
 
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        nil
+    }
+
+    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {
         nil
     }
 
@@ -519,8 +525,18 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecUseAuthenticationContext as String: Self.nonInteractiveAuthenticationContext(),
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
+        // Whether the gate actually engaged. When it didn't, another provider's approval dialog held
+        // it and this read never reached securityd — the synthetic status below says nothing about
+        // THIS item, so it must not be read as an ACL denial or trip its breaker.
+        var gateEngaged = true
         let status = KeychainUISuppression.withUISuppressed { isSuppressed in
-            isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed
+            gateEngaged = isSuppressed
+            return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &item) : errSecInteractionNotAllowed
+        }
+        guard gateEngaged else {
+            coordinator.recordContention(service: service, account: account)
+            AppLog.debug(.keychain, "read for service '\(service)' skipped: another approval dialog holds the keychain UI gate")
+            return .unavailable
         }
         switch status {
         case errSecSuccess:
@@ -566,6 +582,10 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
         coordinator.lastFailureWasPermissionDenied(service: service, account: account)
+    }
+
+    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {
+        coordinator.lastFailureWasPermissionDenied(service: service, account: currentUserAccount())
     }
 
     func genericPasswordForCurrentUserExists(service: String) -> Bool? {
