@@ -149,8 +149,11 @@ struct CursorAuthStore: Sendable {
         return .none
     }
 
+    /// `nil` from the probe means "cannot check" (locked keychain, a stuck flight), not "absent" —
+    /// treating it as logged-out would report a real login as signed out, or let a free SQLite
+    /// account win over a paid keychain one. Only a confirmed-absent item reads as no footprint.
     private func protectedItemExists(_ read: NonInteractiveKeychainRead, service: String) -> Bool {
-        read == .unavailable && keychain.genericPasswordExists(service: service) == true
+        read == .unavailable && keychain.genericPasswordExists(service: service) != false
     }
 
     func needsRefresh(_ accessToken: String?) -> Bool {
