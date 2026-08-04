@@ -67,11 +67,13 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
                     gateEngaged = isSuppressed
                     return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
                 }
-            guard gateEngaged else {
-                // Another provider's approval dialog held the process-wide UI gate, so this read
-                // never reached securityd. That is not evidence about this item's ACL: reporting a
-                // denial would tell the user to approve an item nobody asked about, and tripping
-                // the breaker would lock out an item that was never attempted.
+            // Only a FAILURE without the gate is contention. An already-authorized item reads fine
+            // with UI disabled, and throwing that success away would fail a manual refresh that had
+            // in fact just succeeded.
+            if !gateEngaged, status != errSecSuccess, status != errSecItemNotFound {
+                // The read never reached a prompt, so this says nothing about the item's ACL:
+                // reporting a denial would tell the user to approve an item nobody asked about, and
+                // tripping the breaker would lock out an item that was never really attempted.
                 KeychainReadCoordinator.shared.recordContention(service: Self.service, account: Self.account)
                 throw ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable))
             }
