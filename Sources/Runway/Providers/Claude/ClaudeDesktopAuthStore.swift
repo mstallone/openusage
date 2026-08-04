@@ -59,8 +59,10 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
         ) { () -> OSStatus in
             var gateEngaged = true
             let status = allowInteraction
-                ? KeychainUISuppression.withUIAllowed { uiAvailable in
-                    gateEngaged = uiAvailable
+                ? KeychainUISuppression.withUIAllowed { ui -> OSStatus in
+                    gateEngaged = ui == .available
+                    // A peer's dialog is open and UI is ENABLED: querying would open a second one.
+                    guard ui != .peerBusy else { return errSecNotAvailable }
                     return SecItemCopyMatching(query as CFDictionary, &result)
                 }
                 : KeychainUISuppression.withUISuppressed { isSuppressed in
