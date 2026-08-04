@@ -350,6 +350,32 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertEqual(approvals.value, 1, "approval is requested once, only after the file token failed")
     }
 
+    func testTransientServerFailureNeverAsksForKeychainApproval() async {
+        // A 5xx says nothing about whether an unreadable credential would have worked, so prompting
+        // through an outage would be a dialog the user cannot act on.
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private(set) var value = 0
+            func increment() { lock.withLock { value += 1 } }
+        }
+        let approvals = Counter()
+        let http = RoutingHTTPClient { _ in
+            HTTPResponse(statusCode: 503, headers: [:], body: Data())
+        }
+        let service = CodexResetClaimService(
+            usageClient: CodexUsageClient(http: http),
+            credentialCandidates: { allowInteraction in
+                if allowInteraction { approvals.increment() }
+                return [("live-file-token", "acct-456")]
+            }
+        )
+
+        let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
+
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(approvals.value, 0, "a transient failure must not raise an approval dialog")
+    }
+
     func testClaimFailsWhenEveryCandidateIsRejected() async {
         let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
         let service = CodexResetClaimService(
