@@ -49,12 +49,16 @@ way and doesn't need to know provider-specific details. To add one, see
 
 The app that owns a credential is the only app allowed to change it. Provider credentials belong to
 the provider's own tool (Claude Code, GitHub CLI, …), so the stores that read them hold a read-only
-Keychain type (`KeychainReading`) — a write simply does not compile there. Claude is fully read-only:
-Runway never refreshes its OAuth tokens and never writes its credential stores, because two apps
-rotating the same login can trip the server's token-reuse protection and sign the user out. The only
-secrets Runway writes are its own (`RunwayOwnedKeychainStore`, currently the iCloud-sync device id),
-kept under a Runway-specific service and account. Codex and Cursor still rotate their providers'
-tokens; moving them to the same read-only model is planned follow-up work.
+Keychain type (`KeychainReading`) — a write simply does not compile there. Claude is fully
+read-only: Runway never refreshes its OAuth tokens and never writes its credential stores, because
+two apps rotating the same login can trip the server's token-reuse protection and sign the user out.
+Copilot and Antigravity read-only stores work the same way.
+
+Two exceptions remain, both explicit. Runway's own secrets live in `RunwayOwnedKeychainStore`
+(currently the iCloud-sync device id) under a Runway-specific service and account — that is the only
+store Runway is *supposed* to write. And Codex and Cursor still rotate their providers' tokens and
+write them back through the writing `KeychainAccessing` type; moving them to the same read-only
+model is the next step in this work, after which that type can be deleted outright.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,
