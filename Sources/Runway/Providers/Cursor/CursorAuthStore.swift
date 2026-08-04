@@ -15,6 +15,7 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case sessionExpired
     case tokenExpired
+    case keychainPermissionRequired
 
     var errorDescription: String? {
         switch self {
@@ -24,7 +25,23 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
             return "Session expired. Sign in via Cursor app or run `agent login`."
         case .tokenExpired:
             return "Token expired. Sign in via Cursor app or run `agent login`."
+        case .keychainPermissionRequired:
+            return "Cursor login found in Keychain. Refresh manually and choose Always Allow to connect it."
         }
+    }
+}
+
+/// Outcome of a credential load. `keychainPermissionRequired` means a Cursor Keychain item exists
+/// but Runway isn't authorized to read it prompt-free yet — a real login footprint that only an
+/// explicit manual refresh may convert into access.
+enum CursorCredentialLoad: Equatable, Sendable {
+    case state(CursorAuthState)
+    case keychainPermissionRequired
+    case none
+
+    var state: CursorAuthState? {
+        guard case .state(let state) = self else { return nil }
+        return state
     }
 }
 
@@ -51,7 +68,10 @@ struct CursorAuthStore: Sendable {
         self.now = now
     }
 
-    func loadAuthState() -> CursorAuthState? {
+    /// Keychain reads are in-process, never the `/usr/bin/security` subprocess: automatic refreshes
+    /// use the prompt-free form, and only a manual refresh (`allowKeychainInteraction`) may raise
+    /// the approval prompt — once, for Runway itself.
+    func loadCredentials(allowKeychainInteraction: Bool = false) -> CursorCredentialLoad {
         // One `sqlite3` subprocess for all three keys instead of one per key — this runs on every
         // Cursor refresh, and each spawn costs a process launch plus pipe drains.
         let stateValues = readStateValues([
@@ -61,40 +81,79 @@ struct CursorAuthStore: Sendable {
         let sqliteRefreshToken = stateValues[Self.refreshTokenKey]
         let sqliteMembershipType = stateValues[Self.membershipTypeKey]?.lowercased()
 
-        let keychainAccessToken = readKeychainValue(Self.keychainAccessTokenService)
-        let keychainRefreshToken = readKeychainValue(Self.keychainRefreshTokenService)
-
         let hasSQLiteAuth = sqliteAccessToken != nil || sqliteRefreshToken != nil
+
+        // Prompt only when the keychain can actually win source selection: a paid SQLite login is
+        // returned unconditionally below, so a manual refresh must not raise approval dialogs for
+        // stale `agent` keychain entries it would then ignore.
+        let keychainCanWin = !hasSQLiteAuth || sqliteMembershipType == "free"
+        let allowKeychainPrompt = allowKeychainInteraction && keychainCanWin
+        let accessRead = readKeychainValue(Self.keychainAccessTokenService, allowInteraction: allowKeychainPrompt)
+        let refreshRead = readKeychainValue(Self.keychainRefreshTokenService, allowInteraction: allowKeychainPrompt)
+        let keychainAccessToken = accessRead.trimmedValue
+        let keychainRefreshToken = refreshRead.trimmedValue
+
         let hasKeychainAuth = keychainAccessToken != nil || keychainRefreshToken != nil
 
+        // Whether an item is confirmed present but unreadable without approval — checked per item,
+        // so a half-approved pair (access approved, refresh denied) still counts. The existence
+        // probes are attributes-only and prompt-free.
+        let anyProtected = protectedItemExists(accessRead, service: Self.keychainAccessTokenService)
+            || protectedItemExists(refreshRead, service: Self.keychainRefreshTokenService)
+
         if hasSQLiteAuth {
-            let sqliteSubject = Self.tokenSubject(sqliteAccessToken)
-            let keychainSubject = Self.tokenSubject(keychainAccessToken)
-            let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
-            if hasKeychainAuth, sqliteMembershipType == "free", subjectsDiffer {
-                return CursorAuthState(
-                    accessToken: keychainAccessToken,
-                    refreshToken: keychainRefreshToken,
-                    source: .keychain
-                )
+            if sqliteMembershipType == "free" {
+                // The free-membership preference exists because the keychain (agent CLI) login can
+                // be the real paid account. A protected item makes that comparison impossible —
+                // silently accepting the free SQLite token could show the wrong account — and a
+                // partial keychain pair would fail later as a misleading "token expired". Either
+                // way, surface the approval need. A paid SQLite login keeps winning, as it always
+                // has.
+                if anyProtected {
+                    return .keychainPermissionRequired
+                }
+                let sqliteSubject = Self.tokenSubject(sqliteAccessToken)
+                let keychainSubject = Self.tokenSubject(keychainAccessToken)
+                let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
+                if hasKeychainAuth, subjectsDiffer {
+                    return .state(CursorAuthState(
+                        accessToken: keychainAccessToken,
+                        refreshToken: keychainRefreshToken,
+                        source: .keychain
+                    ))
+                }
             }
 
-            return CursorAuthState(
+            return .state(CursorAuthState(
                 accessToken: sqliteAccessToken,
                 refreshToken: sqliteRefreshToken,
                 source: .sqlite
-            )
+            ))
+        }
+
+        // A protected item outranks a partial keychain pair: returning only the readable half would
+        // work until the access token expires and then fail as "token expired" instead of naming
+        // the remaining approval. It is also a real login footprint (`hasLocalCredentials` must see
+        // it); only a manual refresh may convert it into access.
+        if anyProtected {
+            return .keychainPermissionRequired
         }
 
         if hasKeychainAuth {
-            return CursorAuthState(
+            return .state(CursorAuthState(
                 accessToken: keychainAccessToken,
                 refreshToken: keychainRefreshToken,
                 source: .keychain
-            )
+            ))
         }
+        return .none
+    }
 
-        return nil
+    /// `nil` from the probe means "cannot check" (locked keychain, a stuck flight), not "absent" —
+    /// treating it as logged-out would report a real login as signed out, or let a free SQLite
+    /// account win over a paid keychain one. Only a confirmed-absent item reads as no footprint.
+    private func protectedItemExists(_ read: NonInteractiveKeychainRead, service: String) -> Bool {
+        read == .unavailable && keychain.genericPasswordExists(service: service) != false
     }
 
     func needsRefresh(_ accessToken: String?) -> Bool {
@@ -140,10 +199,25 @@ struct CursorAuthStore: Sendable {
         try sqlite.execute(path: Self.stateDBPath, sql: sql)
     }
 
-    private func readKeychainValue(_ service: String) -> String? {
-        guard let value = try? keychain.readGenericPassword(service: service) else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    private func readKeychainValue(_ service: String, allowInteraction: Bool) -> NonInteractiveKeychainRead {
+        guard allowInteraction else {
+            return keychain.readGenericPasswordWithoutUserInteraction(service: service)
+        }
+        do {
+            guard let value = try keychain.readGenericPasswordAllowingUserInteraction(service: service) else {
+                return .missing
+            }
+            return .value(value)
+        } catch {
+            return .unavailable
+        }
+    }
+
+    fileprivate static func trimmed(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func tokenExpiration(_ token: String) -> Date? {
@@ -163,5 +237,13 @@ struct CursorAuthStore: Sendable {
 
     private static func sqlEscaped(_ value: String) -> String {
         value.replacingOccurrences(of: "'", with: "''")
+    }
+}
+
+private extension NonInteractiveKeychainRead {
+    /// The read value trimmed to nil-if-empty, matching Cursor's historical normalization.
+    var trimmedValue: String? {
+        guard case .value(let value) = self else { return nil }
+        return CursorAuthStore.trimmed(value)
     }
 }

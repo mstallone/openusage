@@ -2082,8 +2082,9 @@ private func countValue(_ lines: [MetricLine], _ label: String) -> Double? {
 }
 
 /// Records which read mode each Keychain call used, so tests can prove automatic loads stay on the
-/// prompt-free in-process path and only manual loads use the prompt-capable one.
-final class ReadModeTrackingKeychain: KeychainReading, @unchecked Sendable {
+/// prompt-free in-process path and only manual loads use the prompt-capable one. Conforms to the
+/// full writing protocol (with a no-op write) so writer stores like Codex/Cursor accept it too.
+final class ReadModeTrackingKeychain: KeychainAccessing, @unchecked Sendable {
     private let lock = NSLock()
     private let value: String
     private var plain = 0
@@ -2147,6 +2148,8 @@ final class ReadModeTrackingKeychain: KeychainReading, @unchecked Sendable {
     func genericPasswordExists(service: String, account: String) -> Bool? {
         true
     }
+
+    func writeGenericPassword(service: String, value: String) throws {}
 }
 
 /// A Keychain holding a gh item Runway isn't authorized to read prompt-free: non-interactive reads

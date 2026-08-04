@@ -16,7 +16,7 @@ final class CursorAuthStoreTests: XCTestCase {
         ])
         let store = CursorAuthStore(sqlite: sqlite, keychain: keychain)
 
-        let state = store.loadAuthState()
+        let state = store.loadCredentials().state
 
         XCTAssertEqual(state?.source, .keychain)
         XCTAssertEqual(state?.accessToken, keychainToken)
@@ -314,3 +314,119 @@ private final class FakeSQLite: SQLiteAccessing, @unchecked Sendable {
 }
 
 // RoutingHTTPClient lives in TestSupport.swift (shared, records requests).
+
+@MainActor
+final class CursorKeychainReadModeTests: XCTestCase {
+    func testAutomaticKeychainLoadIsPromptFreeAndManualLoadMayPrompt() {
+        // Regression for the 2026-08-03 prompt loop: Cursor's keychain items must never be read
+        // through a prompt-capable path on an automatic refresh or at launch. Only a manual refresh
+        // may use the interactive read (which prompts once, for Runway itself).
+        let keychain = ReadModeTrackingKeychain(value: "cursor-token")
+        let store = CursorAuthStore(sqlite: EmptySQLite(), keychain: keychain)
+
+        XCTAssertEqual(store.loadCredentials().state?.accessToken, "cursor-token")
+        XCTAssertEqual(keychain.interactiveReads, 0)
+        XCTAssertGreaterThan(keychain.nonInteractiveReads, 0)
+        XCTAssertEqual(keychain.plainReads, 0, "the subprocess-style read path must not be used")
+
+        XCTAssertEqual(store.loadCredentials(allowKeychainInteraction: true).state?.accessToken, "cursor-token")
+        XCTAssertGreaterThan(keychain.interactiveReads, 0)
+        XCTAssertEqual(keychain.plainReads, 0)
+    }
+
+    func testProtectedKeychainItemsCountAsPermissionRequiredNotLoggedOut() {
+        // A Cursor login stored only in protected Keychain items must be reported as
+        // permission-required — a real footprint the user connects via manual refresh — never
+        // silently collapsed into "not logged in".
+        let store = CursorAuthStore(sqlite: EmptySQLite(), keychain: UnavailableCursorKeychain())
+
+        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+    }
+
+    func testFreeSQLiteTokenDoesNotSilentlyBypassAProtectedKeychainLogin() {
+        // The keychain (agent CLI) login can be the real paid account; with its items protected the
+        // free-vs-different-subject comparison is impossible, so the load surfaces the approval need
+        // instead of silently showing the free SQLite account. A paid SQLite login keeps winning.
+        let sqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: "sqlite-free-token",
+            CursorAuthStore.membershipTypeKey: "free"
+        ])
+        let protected = CursorAuthStore(sqlite: sqlite, keychain: UnavailableCursorKeychain())
+        XCTAssertEqual(protected.loadCredentials(), .keychainPermissionRequired)
+
+        let paidSqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: "sqlite-pro-token",
+            CursorAuthStore.membershipTypeKey: "pro"
+        ])
+        let paid = CursorAuthStore(sqlite: paidSqlite, keychain: UnavailableCursorKeychain())
+        XCTAssertEqual(paid.loadCredentials().state?.accessToken, "sqlite-pro-token")
+    }
+
+    func testManualRefreshWithAPaidSQLiteLoginNeverPromptsForStaleKeychainEntries() {
+        // A paid SQLite login is returned unconditionally, so a manual refresh must not raise
+        // approval dialogs for keychain entries it would then ignore.
+        let sqlite = FakeSQLite(values: [
+            CursorAuthStore.accessTokenKey: "sqlite-pro-token",
+            CursorAuthStore.membershipTypeKey: "pro"
+        ])
+        let keychain = ReadModeTrackingKeychain(value: "stale-agent-token")
+        let store = CursorAuthStore(sqlite: sqlite, keychain: keychain)
+
+        let state = store.loadCredentials(allowKeychainInteraction: true).state
+
+        XCTAssertEqual(state?.accessToken, "sqlite-pro-token")
+        XCTAssertEqual(keychain.interactiveReads, 0, "keychain entries that cannot win must not prompt")
+    }
+
+    func testHalfApprovedKeychainPairSurfacesTheRemainingApprovalNotAPartialLogin() {
+        // Access approved, refresh still protected: a partial login would work until the access
+        // token expires and then fail as a misleading "token expired". The remaining approval is
+        // the actionable state.
+        let store = CursorAuthStore(sqlite: EmptySQLite(), keychain: HalfApprovedCursorKeychain())
+
+        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+    }
+}
+
+private final class EmptySQLite: SQLiteAccessing, @unchecked Sendable {
+    func queryValue(path: String, sql: String) throws -> String? { nil }
+    func queryJSONRows(path: String, sql: String) throws -> String? { nil }
+    func execute(path: String, sql: String) throws {}
+}
+
+/// Cursor keychain items Runway isn't authorized to read prompt-free: non-interactive reads report
+/// `.unavailable` while the attributes-only existence probe still confirms the items.
+private final class UnavailableCursorKeychain: KeychainAccessing, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
+}
+
+/// The access-token item is approved and readable; the refresh-token item exists but is protected.
+private final class HalfApprovedCursorKeychain: KeychainAccessing, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        service == CursorAuthStore.keychainAccessTokenService ? .value("approved-access") : .unavailable
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        true
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {}
+}

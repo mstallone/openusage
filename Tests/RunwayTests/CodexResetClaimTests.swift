@@ -49,7 +49,7 @@ final class CodexResetClaimTests: XCTestCase {
         }
         let service = CodexResetClaimService(
             usageClient: CodexUsageClient(http: http),
-            credentialCandidates: { [("token-123", "acct-456")] },
+            credentialCandidates: { _ in [("token-123", "acct-456")] },
             refreshAfterClaim: { refreshes.count += 1 }
         )
         return (service, http)
@@ -187,7 +187,7 @@ final class CodexResetClaimTests: XCTestCase {
                 XCTFail("no request should be sent without credentials")
                 return HTTPResponse(statusCode: 500, headers: [:], body: Data())
             }),
-            credentialCandidates: { [] },
+            credentialCandidates: { _ in [] },
             refreshAfterClaim: { refreshes.count += 1 }
         )
         let credentialOutcome = await noCredentials.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
@@ -235,7 +235,7 @@ final class CodexResetClaimTests: XCTestCase {
         }
         let service = CodexResetClaimService(
             usageClient: CodexUsageClient(http: http),
-            credentialCandidates: { [("token-123", "acct-456")] }
+            credentialCandidates: { _ in [("token-123", "acct-456")] }
         )
 
         let first = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
@@ -272,7 +272,7 @@ final class CodexResetClaimTests: XCTestCase {
         }
         let service = CodexResetClaimService(
             usageClient: CodexUsageClient(http: http),
-            credentialCandidates: { [("stale-token", "acct-old"), ("live-token", "acct-456")] }
+            credentialCandidates: { _ in [("stale-token", "acct-old"), ("live-token", "acct-456")] }
         )
 
         let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
@@ -302,7 +302,7 @@ final class CodexResetClaimTests: XCTestCase {
         }
         let service = CodexResetClaimService(
             usageClient: CodexUsageClient(http: http),
-            credentialCandidates: { [("shared-token", "acct-A"), ("shared-token", "acct-B")] }
+            credentialCandidates: { _ in [("shared-token", "acct-A"), ("shared-token", "acct-B")] }
         )
 
         let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
@@ -312,11 +312,75 @@ final class CodexResetClaimTests: XCTestCase {
         XCTAssertEqual(consume.headers["ChatGPT-Account-Id"], "acct-B")
     }
 
+    func testRejectedFileCredentialFallsThroughToAnApprovedKeychainCredential() async throws {
+        // A structurally usable auth.json whose token the server rejects, plus a keyring item that
+        // needs approval. The prompt-free pass runs first (a working file never triggers a dialog),
+        // and only its failure may ask — then the approved credential completes the claim.
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private(set) var value = 0
+            func increment() { lock.withLock { value += 1 } }
+        }
+        let approvals = Counter()
+        let http = RoutingHTTPClient { request in
+            let authorized = request.headers["Authorization"]?.contains("approved-keyring-token") == true
+            guard authorized else { return HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
+            switch request.url {
+            case CodexUsageClient.resetCreditsURL:
+                return HTTPResponse(statusCode: 200, headers: [:], body: Self.listBody())
+            case CodexUsageClient.consumeResetCreditURL:
+                return HTTPResponse(statusCode: 200, headers: [:], body: Self.consumeBody(code: "reset"))
+            default:
+                XCTFail("unexpected request: \(request.url)")
+                return HTTPResponse(statusCode: 500, headers: [:], body: Data())
+            }
+        }
+        let service = CodexResetClaimService(
+            usageClient: CodexUsageClient(http: http),
+            credentialCandidates: { allowInteraction in
+                guard allowInteraction else { return [("rejected-file-token", nil)] }
+                approvals.increment()
+                return [("rejected-file-token", nil), ("approved-keyring-token", "acct-456")]
+            }
+        )
+
+        let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
+
+        XCTAssertEqual(outcome, .success)
+        XCTAssertEqual(approvals.value, 1, "approval is requested once, only after the file token failed")
+    }
+
+    func testTransientServerFailureNeverAsksForKeychainApproval() async {
+        // A 5xx says nothing about whether an unreadable credential would have worked, so prompting
+        // through an outage would be a dialog the user cannot act on.
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private(set) var value = 0
+            func increment() { lock.withLock { value += 1 } }
+        }
+        let approvals = Counter()
+        let http = RoutingHTTPClient { _ in
+            HTTPResponse(statusCode: 503, headers: [:], body: Data())
+        }
+        let service = CodexResetClaimService(
+            usageClient: CodexUsageClient(http: http),
+            credentialCandidates: { allowInteraction in
+                if allowInteraction { approvals.increment() }
+                return [("live-file-token", "acct-456")]
+            }
+        )
+
+        let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
+
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(approvals.value, 0, "a transient failure must not raise an approval dialog")
+    }
+
     func testClaimFailsWhenEveryCandidateIsRejected() async {
         let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
         let service = CodexResetClaimService(
             usageClient: CodexUsageClient(http: http),
-            credentialCandidates: { [("stale-1", nil), ("stale-2", nil)] }
+            credentialCandidates: { _ in [("stale-1", nil), ("stale-2", nil)] }
         )
 
         let outcome = await service.claim(creditExpiringAt: Self.expiry, redeemRequestID: "redeem-1")
@@ -331,11 +395,11 @@ final class CodexResetClaimTests: XCTestCase {
         })
         let personal = CodexResetClaimService(
             usageClient: client,
-            credentialCandidates: { [("personal", "personal")] }
+            credentialCandidates: { _ in [("personal", "personal")] }
         )
         let work = CodexResetClaimService(
             usageClient: client,
-            credentialCandidates: { [("work", "work")] }
+            credentialCandidates: { _ in [("work", "work")] }
         )
         let router = CodexResetClaimRouter(servicesByProviderID: [
             "codex": personal,

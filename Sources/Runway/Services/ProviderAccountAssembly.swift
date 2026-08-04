@@ -459,7 +459,19 @@ struct ProviderAccountAssembly {
                     scope: .home(path: home),
                     identityCache: codexIdentityCache
                 )
-                guard let state = store.loadKeychainAuth(),
+                let load = store.loadKeychainCredentials()
+                if case .permissionRequired = load {
+                    // The unattended warm task must never prompt, and with the home's card hidden
+                    // there is no manual refresh to approve through yet — surface the exact fix
+                    // loudly instead of a generic bind failure. An interactive binding flow for
+                    // hidden keyring homes is tracked as follow-up work.
+                    AppLog.warn(
+                        .keychain,
+                        "a Codex keyring home exists but Runway isn't approved to read it; its card stays hidden — approve the 'Codex Auth' Keychain item for Runway to bind it"
+                    )
+                    continue
+                }
+                guard let state = load.state,
                       store.recordSelectedIdentity(state) != nil
                 else {
                     AppLog.warn(

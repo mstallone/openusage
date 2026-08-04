@@ -28,7 +28,7 @@ final class CodexResetClaimService {
     typealias Credentials = (accessToken: String, accountID: String?)
 
     private let usageClient: CodexUsageClient
-    private let credentialCandidates: () async -> [Credentials]
+    private let credentialCandidates: (_ allowKeychainInteraction: Bool) async -> [Credentials]
     private let refreshAfterClaim: () async -> Void
     /// The credit id each idempotency key was matched to, kept for the key's retries: if a consume
     /// succeeded but its response was lost, the credit is gone from a re-fetched list — a fresh match
@@ -40,7 +40,7 @@ final class CodexResetClaimService {
     /// go through. Candidates are tried in order until one authenticates (see `claim`).
     init(
         usageClient: CodexUsageClient,
-        credentialCandidates: @escaping () async -> [Credentials],
+        credentialCandidates: @escaping (_ allowKeychainInteraction: Bool) async -> [Credentials],
         refreshAfterClaim: @escaping () async -> Void = {}
     ) {
         self.usageClient = usageClient
@@ -61,9 +61,34 @@ final class CodexResetClaimService {
     ) {
         self.init(
             usageClient: usageClient,
-            credentialCandidates: {
+            credentialCandidates: { allowKeychainInteraction in
                 var candidates = authStore.loadAuthCandidates()
-                if let keychain = await loadOffMainActor({ authStore.loadKeychainAuth() }) {
+                // Don't touch the Keychain at all while a usable file credential exists. The read
+                // is a synchronous securityd round trip, so a wedged securityd would otherwise
+                // block this claim indefinitely — leaving the row on "Resetting…" — even though the
+                // file credential could have completed it on its own.
+                if !allowKeychainInteraction, candidates.contains(where: \.hasUsableAccessToken) {
+                    return candidates.compactMap { candidate in
+                        guard candidate.hasUsableAccessToken, let token = candidate.auth.tokens?.accessToken else {
+                            return nil
+                        }
+                        return (token, candidate.auth.tokens?.accountID)
+                    }
+                }
+                // Claiming a reset credit is an explicit user action, so — like a manual refresh —
+                // it may ask macOS to approve a protected keyring item. The caller only sets the
+                // flag once the file credentials have actually been rejected, so a user whose
+                // auth.json works never sees a dialog.
+                let keychainLoad = await loadOffMainActor {
+                    authStore.loadKeychainCredentials(allowKeychainInteraction: allowKeychainInteraction)
+                }
+                if case .permissionRequired = keychainLoad {
+                    AppLog.warn(
+                        LogTag.auth("codex"),
+                        "reset claim could not read the Codex keyring item; approve it for Runway and try again"
+                    )
+                }
+                if let keychain = keychainLoad.state {
                     candidates.append(keychain)
                 }
                 return candidates.compactMap { candidate in
@@ -80,10 +105,46 @@ final class CodexResetClaimService {
     /// Claims the credit expiring at `expiry`. Never throws — every failure mode is logged loudly and
     /// collapsed to an outcome the popover can render.
     func claim(creditExpiringAt expiry: Date, redeemRequestID: String) async -> ResetClaimOutcome {
-        let candidates = await credentialCandidates()
+        // Prompt-free first, so a user whose `auth.json` works never sees a dialog and the happy
+        // path costs exactly the same requests as before.
+        let candidates = await credentialCandidates(false)
+        let attempt = await claim(
+            creditExpiringAt: expiry,
+            redeemRequestID: redeemRequestID,
+            candidates: candidates
+        )
+        // ONLY auth exhaustion justifies a dialog. A timeout or a 5xx says nothing about whether a
+        // credential Runway can't read would have worked, and prompting through an outage would be
+        // a dialog the user cannot act on.
+        guard attempt.allRejected else { return attempt.outcome }
+
+        // Every local credential was refused. A file token can be structurally fine and still be
+        // dead, and the protected keyring item may hold the live one — so for this explicit user
+        // action, ask for approval and try once more with whatever that adds.
+        let approved = await credentialCandidates(true)
+        let seen = Set(candidates.map { "\($0.accessToken)|\($0.accountID ?? "")" })
+        let fresh = approved.filter { !seen.contains("\($0.accessToken)|\($0.accountID ?? "")") }
+        guard !fresh.isEmpty else { return attempt.outcome }
+        AppLog.info(LogTag.plugin("codex"), "reset claim: retrying with a newly approved credential")
+        return await claim(
+            creditExpiringAt: expiry,
+            redeemRequestID: redeemRequestID,
+            candidates: fresh
+        ).outcome
+    }
+
+    /// `allRejected` is true only when every credential was refused as unauthenticated — the sole
+    /// case where asking for Keychain approval could change the answer. A timeout, a 5xx, or a
+    /// non-auth consume failure must never raise a dialog.
+    private func claim(
+        creditExpiringAt expiry: Date,
+        redeemRequestID: String,
+        candidates: [Credentials]
+    ) async -> (outcome: ResetClaimOutcome, allRejected: Bool) {
         guard !candidates.isEmpty else {
             AppLog.error(LogTag.plugin("codex"), "reset claim: no usable Codex credentials")
-            return .failed
+            // Nothing local at all: an approved keyring item is exactly what could supply one.
+            return (.failed, true)
         }
 
         // A retry of an idempotency key that already matched replays the exact same (key, credit) pair
@@ -95,6 +156,8 @@ final class CodexResetClaimService {
             creditID = replayID
         } else {
             switch await matchCredit(expiringAt: expiry, candidates: candidates) {
+            case .allRejected:
+                return (.failed, true)
             case .matched(let id, let authenticated):
                 creditID = id
                 matchedCreditIDs[redeemRequestID] = id
@@ -109,21 +172,21 @@ final class CodexResetClaimService {
                 // rendered. The refresh reconciles the timeline with reality.
                 AppLog.warn(LogTag.plugin("codex"), "reset claim: no available credit matches the picked expiry")
                 await refreshAfterClaim()
-                return .noCredit
+                return (.noCredit, false)
             case .failed:
-                return .failed
+                return (.failed, false)
             }
         }
 
-        let outcome = await consume(
+        let consumed = await consume(
             creditID: creditID, redeemRequestID: redeemRequestID, candidates: preferredCandidates
         )
-        if outcome != .failed {
+        if consumed.outcome != .failed {
             // The world changed (or turned out different from the snapshot): refresh before returning,
             // so the result banner appears over already-reconciled meters and credit count.
             await refreshAfterClaim()
         }
-        return outcome
+        return consumed
     }
 
     /// POSTs the consume, falling back across credential candidates on an auth rejection (401/403).
@@ -131,7 +194,7 @@ final class CodexResetClaimService {
     /// spent no matter how many candidates are tried.
     private func consume(
         creditID: String, redeemRequestID: String, candidates: [Credentials]
-    ) async -> ResetClaimOutcome {
+    ) async -> (outcome: ResetClaimOutcome, allRejected: Bool) {
         var lastRejection: Int?
         for credentials in candidates {
             let response: HTTPResponse
@@ -144,7 +207,7 @@ final class CodexResetClaimService {
                 )
             } catch {
                 AppLog.error(LogTag.plugin("codex"), "reset claim: consume request failed: \(error.localizedDescription)")
-                return .failed
+                return (.failed, false)
             }
             if response.statusCode == 401 || response.statusCode == 403 {
                 lastRejection = response.statusCode
@@ -158,15 +221,18 @@ final class CodexResetClaimService {
                         + LogRedaction.bodyPreview(String(decoding: response.body, as: UTF8.self), limit: 300)
                 )
             }
-            return outcome
+            return (outcome, false)
         }
         AppLog.error(LogTag.plugin("codex"), "reset claim: consume rejected for every credential (last: \(lastRejection.map(String.init) ?? "none"))")
-        return .failed
+        return (.failed, true)
     }
 
     private enum MatchResult {
         case matched(creditID: String, credentials: Credentials)
         case noCredit
+        /// Every candidate was rejected as unauthenticated (401/403) — the only failure where a
+        /// credential Runway cannot read yet might be the one that works.
+        case allRejected
         case failed
     }
 
@@ -198,7 +264,7 @@ final class CodexResetClaimService {
             return .matched(creditID: matched, credentials: credentials)
         }
         AppLog.error(LogTag.plugin("codex"), "reset claim: \(lastFailure)")
-        return .failed
+        return .allRejected
     }
 
     /// The id of the still-available credit whose `expires_at` matches `expiry` (±1s — the popover's
