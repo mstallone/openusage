@@ -10,6 +10,11 @@ enum ShareCardRenderer {
     /// ships as a 1440px image — without authoring a separate large-format layout.
     static let scale: CGFloat = 4
 
+    /// The audible failure cue for a share action that couldn't produce or copy its PNG. Indirect so
+    /// the test suite can silence it — the failure paths are unit-tested, and an automated run must
+    /// not play the system alert sound.
+    static var playAlertSound: () -> Void = { NSSound.beep() }
+
     /// The card rendered to an `NSImage`, or `nil` if `ImageRenderer` produces no CGImage. The image's
     /// point size is the card's natural (flexible) size; its pixel size is that times `scale`.
     static func image<Card: View>(for view: Card) -> NSImage? {
@@ -39,14 +44,14 @@ enum ShareCardRenderer {
     static func copyToPasteboard(_ image: NSImage) -> Bool {
         guard let png = pngData(from: image) else {
             AppLog.error(.lifecycle, "share card: failed to encode PNG for clipboard")
-            NSSound.beep()
+            playAlertSound()
             return false
         }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.setData(png, forType: .png) else {
             AppLog.error(.lifecycle, "share card: pasteboard rejected the PNG")
-            NSSound.beep()
+            playAlertSound()
             return false
         }
         return true
@@ -134,7 +139,7 @@ enum ShareCardRenderer {
     ) -> Bool {
         let projection = total.projection(for: metric)
         guard !projection.isEmpty else {
-            NSSound.beep()
+            playAlertSound()
             return false
         }
         let view = TotalSpendShareCardView(total: total, metric: metric, appearance: appearance)
@@ -149,7 +154,7 @@ enum ShareCardRenderer {
     private static func renderAndCopy<Card: View>(_ view: Card, label: String, layout: LayoutStore) -> Bool {
         guard let image = image(for: view) else {
             AppLog.error(.lifecycle, "share card: ImageRenderer produced no image for \(label)")
-            NSSound.beep()
+            playAlertSound()
             return false
         }
         guard copyToPasteboard(image) else { return false }
