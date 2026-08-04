@@ -395,6 +395,11 @@ actor RecordingUsageCloudStore: UsageCloudStoring {
     private(set) var deletedDeviceIDs: [String] = []
     private let unavailable: Bool
     private let failWrites: Bool
+    /// Number of deletions to let succeed before failing the rest, so a test can have the opt-out
+    /// deletion succeed and the *compensating* one fail — the race where a user believes they
+    /// opted out but a late-landing write left their record behind. `nil` never fails.
+    private let deletionsBeforeFailure: Int?
+    private var deleteAttempts = 0
     private(set) var loadInFlight = false
     private(set) var writeInFlight = false
     private(set) var deleteInFlight = false
@@ -408,11 +413,13 @@ actor RecordingUsageCloudStore: UsageCloudStoring {
     init(
         unavailable: Bool = false,
         failWrites: Bool = false,
+        deletionsBeforeFailure: Int? = nil,
         seedDocuments: [UsageHistoryDocument] = [],
         invalidRecordMessages: [String] = []
     ) {
         self.unavailable = unavailable
         self.failWrites = failWrites
+        self.deletionsBeforeFailure = deletionsBeforeFailure
         self.documents = seedDocuments
         self.invalidRecordMessages = invalidRecordMessages
     }
@@ -452,6 +459,10 @@ actor RecordingUsageCloudStore: UsageCloudStoring {
 
     func delete(deviceID: String) async throws {
         if unavailable { throw CloudKitUsageSyncError.accountUnavailable }
+        deleteAttempts += 1
+        if let deletionsBeforeFailure, deleteAttempts > deletionsBeforeFailure {
+            throw CloudKitUsageSyncError.accountUnavailable
+        }
         deleteInFlight = true
         defer { deleteInFlight = false }
         if shouldHoldNextDelete {
