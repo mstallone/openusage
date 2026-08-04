@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 private func fail(_ message: String, status: Int32 = 1) -> Never {
@@ -46,10 +47,15 @@ guard arguments.count == 2 else {
 let namePrefix = arguments[0]
 let teamID = arguments[1]
 
+// Identity discovery is non-interactive. A prompt here would authorize this short-lived Swift
+// helper rather than codesign or Runway, and a locked Keychain should fail the build explicitly.
+let authenticationContext = LAContext()
+authenticationContext.interactionNotAllowed = true
 let query: [String: Any] = [
     kSecClass as String: kSecClassIdentity,
     kSecMatchLimit as String: kSecMatchLimitAll,
     kSecReturnRef as String: true,
+    kSecUseAuthenticationContext as String: authenticationContext,
 ]
 var result: CFTypeRef?
 let queryStatus = SecItemCopyMatching(query as CFDictionary, &result)
