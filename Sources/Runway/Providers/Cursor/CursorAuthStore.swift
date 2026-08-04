@@ -105,7 +105,13 @@ struct CursorAuthStore: Sendable {
                 let sqliteSubject = Self.tokenSubject(sqliteAccessToken)
                 let keychainSubject = Self.tokenSubject(keychainAccessToken)
                 let subjectsDiffer = sqliteSubject != nil && keychainSubject != nil && sqliteSubject != keychainSubject
-                if hasKeychainAuth, subjectsDiffer {
+                // The agent login usually IS the paid account, so it wins a free SQLite membership
+                // — but only while it can still serve a request. Runway can't refresh an expired
+                // one, so preferring it there would trade live data for a renewal notice.
+                if hasKeychainAuth,
+                   subjectsDiffer,
+                   let keychainAccessToken,
+                   !isExpired(keychainAccessToken) {
                     return .state(CursorAuthState(accessToken: keychainAccessToken, source: .keychain))
                 }
             }

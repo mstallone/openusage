@@ -713,3 +713,30 @@ final class CursorRevokedTokenFallbackTests: XCTestCase {
         )
     }
 }
+
+@MainActor
+final class CursorExpiredKeychainPreferenceTests: XCTestCase {
+    func testFreeSQLiteLoginIsKeptWhenTheAgentTokenHasExpired() {
+        // The agent login usually is the paid account and wins a free SQLite membership — but not
+        // when it's expired, because Runway can't refresh it and would trade live data for a
+        // renewal notice.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let liveSQLite = makeCursorJWT(sub: "auth0|free-user", exp: now.timeIntervalSince1970 + 3_600)
+        let expiredAgent = makeCursorJWT(sub: "auth0|paid-user", exp: now.timeIntervalSince1970 - 60)
+        let store = CursorAuthStore(
+            sqlite: FakeSQLite(values: [
+                CursorAuthStore.accessTokenKey: liveSQLite,
+                CursorAuthStore.membershipTypeKey: "free"
+            ]),
+            keychain: ServiceKeychain(values: [
+                CursorAuthStore.keychainAccessTokenService: expiredAgent
+            ]),
+            now: { now }
+        )
+
+        let state = store.loadCredentials().state
+
+        XCTAssertEqual(state?.source, .sqlite)
+        XCTAssertEqual(state?.accessToken, liveSQLite)
+    }
+}

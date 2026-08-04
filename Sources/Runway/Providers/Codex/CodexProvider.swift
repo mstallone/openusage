@@ -129,8 +129,13 @@ final class CodexProvider: ProviderRuntime {
         case .permissionRequired:
             // The keyring likely holds the freshest rotated credential (it is Codex CLI's source of
             // truth in keyring mode), so approving it is the actionable fix — surface it over a
-            // stale file candidate's token error.
-            return ProviderSnapshot.error(provider: provider, error: CodexAuthError.keychainPermissionRequired)
+            // stale file candidate's token error. Like the renewal path, the local spend tiles are
+            // still trustworthy, so this rides as a header warning rather than an error card.
+            AppLog.info(LogTag.auth("codex"), "keyring approval pending; serving local usage with a permission notice")
+            return await localUsageSnapshot(
+                mapped: CodexMappedUsage(plan: nil, lines: []),
+                warning: CodexAuthError.keychainPermissionRequired.localizedDescription
+            )
         case .none:
             break
         }
