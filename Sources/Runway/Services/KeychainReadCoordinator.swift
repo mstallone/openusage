@@ -144,12 +144,13 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         let result = read()
 
         condition.lock()
-        // Contention is not evidence about this item, so it never trips the breaker.
-        let wasContention = contendedKeys.remove(key) != nil
-        if epochs[key, default: 0] == epoch {
-            let failed = result == .unavailable && !wasContention
-            store(key: key, fingerprint: fingerprint, value: failed ? nil : (result == .unavailable ? nil : result), tripped: failed)
-        }
+        storeIfCurrent(
+            key: key,
+            epoch: epoch,
+            fingerprint: fingerprint,
+            value: result == .unavailable ? nil : result,
+            tripped: result == .unavailable
+        )
         condition.unlock()
         return result
     }
@@ -274,8 +275,9 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     }
 
     /// Must be called under `condition`'s lock. Drops the write when a newer one already landed —
-    /// a stuck read finishing after a successful recovery must not re-trip the breaker. Every path
-    /// (background, interactive, external) goes through this for that reason.
+    /// a stuck read finishing after a successful recovery must not re-trip the breaker — and
+    /// downgrades a failure that never reached securityd. Every path (background, interactive,
+    /// external) goes through this so both rules hold everywhere rather than on one path.
     private func storeIfCurrent(
         key: Key,
         epoch: Int,
@@ -284,7 +286,10 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         tripped: Bool
     ) {
         guard epochs[key, default: 0] == epoch else { return }
-        store(key: key, fingerprint: fingerprint, value: value, tripped: tripped)
+        // A read the UI gate turned away says nothing about this item, so it must not trip the
+        // breaker and lock the item out for the whole revalidation window.
+        let wasContention = contendedKeys.remove(key) != nil
+        store(key: key, fingerprint: fingerprint, value: value, tripped: tripped && !wasContention)
     }
 
     /// Marks the next stored outcome for this item as UI-gate contention rather than a real
@@ -329,6 +334,9 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         condition.lock()
         guard waitWhileInFlight(key, deadline: now().addingTimeInterval(inFlightWait)) else {
             condition.unlock()
+            // The wedged operation may never produce a diagnostic of its own, so an unexplained
+            // "unknown" here would be the only trace of it. Same reasoning as the read paths.
+            AppLog.warn(.keychain, "keychain probe timed out behind a stuck operation for one item; reporting unknown")
             return nil
         }
         // The breaker covers metadata queries as well: an item whose read just failed must not keep
