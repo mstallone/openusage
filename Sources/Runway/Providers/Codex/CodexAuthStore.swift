@@ -236,10 +236,14 @@ struct CodexAuthStore: Sendable {
                 case false?:
                     unreadable = true
                 case nil:
-                    // No category recorded (an older cached failure, or a fake in tests): fall back
-                    // to the prompt-free attributes probe, where nil still means "cannot check".
-                    if keychain.genericPasswordExists(service: Self.keychainService, account: account) != false {
-                        permissionRequired = true
+                    // No category recorded — which is exactly what UI-gate contention leaves — so
+                    // fall back to the prompt-free attributes probe. Only a confirmed-present item
+                    // asks for approval; an indeterminate probe means the item was never examined,
+                    // and a confirmed absence is no footprint at all.
+                    switch keychain.genericPasswordExists(service: Self.keychainService, account: account) {
+                    case true?: permissionRequired = true
+                    case nil: unreadable = true
+                    case false?: break
                     }
                 }
             case .missing:
@@ -275,12 +279,15 @@ struct CodexAuthStore: Sendable {
             case false?:
                 return .unreadable
             case nil:
-                // `nil` from the probe means "cannot check" (locked keychain), not "absent" —
-                // treating it as logged-out would silently swallow an access problem. Only a
-                // confirmed-absent item reports none.
-                return keychain.genericPasswordExists(service: Self.keychainService) != false
-                    ? .permissionRequired
-                    : .none
+                // `nil` from the probe means "cannot check" (locked keychain, or the same UI gate
+                // that left no category), not "absent" — treating it as logged-out would silently
+                // swallow an access problem, and treating it as denied would ask the user to
+                // approve an item nothing examined. Only a confirmed-absent item reports none.
+                switch keychain.genericPasswordExists(service: Self.keychainService) {
+                case true?: return .permissionRequired
+                case nil: return .unreadable
+                case false?: return .none
+                }
             }
         }
     }
