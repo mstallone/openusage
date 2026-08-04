@@ -7,7 +7,7 @@ set -euo pipefail
 # (imported into the keychain beforehand) and an App Store provisioning profile, mirroring the
 # macOS release's cert+profile secrets. Cloud signing is deliberately not used: an App Manager API
 # key cannot use cloud-managed distribution certificates ("Cloud signing permission error"), so the
-# API key here only authenticates the upload itself. Runs in CI (release.yml) and locally on a Mac
+# API key here only authenticates the upload itself. Runs in CI (release-ios.yml) and locally on a Mac
 # with the same env. The one-time App Store Connect setup lives in .agents/skills/release-swift/.
 #
 # Required env:
