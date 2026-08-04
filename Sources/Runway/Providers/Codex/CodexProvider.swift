@@ -85,7 +85,9 @@ final class CodexProvider: ProviderRuntime {
         switch await loadOffMainActor({ [authStore] in authStore.loadKeychainCredentials() }) {
         case .state(let state):
             return state.hasUsableAccessToken
-        case .permissionRequired:
+        case .permissionRequired, .unreadable:
+            // Both mean an item may well be there and Runway simply could not read it. Reporting
+            // "no credential" would hide the provider on first run over an access problem.
             return true
         case .none:
             return false
@@ -135,6 +137,14 @@ final class CodexProvider: ProviderRuntime {
             return await localUsageSnapshot(
                 mapped: CodexMappedUsage(plan: nil, lines: []),
                 warning: CodexAuthError.keychainPermissionRequired.localizedDescription
+            )
+        case .unreadable:
+            // Approval cannot fix a locked keychain or a failing securityd, so don't ask for it.
+            // The local tiles survive the same way they do for a pending approval.
+            AppLog.error(LogTag.auth("codex"), "keyring item could not be read; serving local usage with an unreadable-keychain notice")
+            return await localUsageSnapshot(
+                mapped: CodexMappedUsage(plan: nil, lines: []),
+                warning: CodexAuthError.credentialStoreUnreadable.localizedDescription
             )
         case .none:
             break

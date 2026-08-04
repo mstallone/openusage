@@ -190,6 +190,9 @@ protocol KeychainReading: Sendable {
     /// (unlock it), `nil` = no failure recorded. Taken from the read's own `OSStatus`, so it stays
     /// answerable after the breaker trips — a follow-up probe would just be answered locally.
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool?
+    /// The same verdict for a SERVICE-WIDE read (no account), which is a distinct coordinator key
+    /// from any account-scoped read of the same service.
+    func lastReadWasPermissionDenied(service: String) -> Bool?
     /// The same verdict for the CURRENT-USER item, whose account name only the accessor knows.
     func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool?
     /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
@@ -276,6 +279,10 @@ extension KeychainReading {
     }
 
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        nil
+    }
+
+    func lastReadWasPermissionDenied(service: String) -> Bool? {
         nil
     }
 
@@ -484,6 +491,17 @@ struct SecurityKeychainAccessor: KeychainReading {
         case errSecItemNotFound:
             return nil
         default:
+            // The user just answered the dialog, so a denial here is the strongest evidence about
+            // this item's ACL there is. Record it: this read trips the breaker, and every later
+            // probe is then answered locally with no status to classify.
+            coordinator.recordFailureCategory(
+                service: service,
+                account: account,
+                permissionDenied: status == errSecAuthFailed
+                    || status == errSecInteractionNotAllowed
+                    || status == errSecUserCanceled
+                    || status == errAuthorizationDenied
+            )
             let message = SecCopyErrorMessageString(status, nil) as String?
                 ?? "Keychain read failed with status \(status)."
             AppLog.warn(.keychain, "in-process read failed for service '\(service)' (status \(status))")
@@ -584,6 +602,10 @@ struct SecurityKeychainAccessor: KeychainReading {
 
     func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
         coordinator.lastFailureWasPermissionDenied(service: service, account: account)
+    }
+
+    func lastReadWasPermissionDenied(service: String) -> Bool? {
+        coordinator.lastFailureWasPermissionDenied(service: service, account: nil)
     }
 
     func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {

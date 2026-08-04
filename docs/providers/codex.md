@@ -21,7 +21,8 @@ Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or 
 
 Automatic refreshes read the keyring item silently and never open a macOS password dialog. If access
 hasn't been approved yet, the card says so — refresh manually once and choose **Always Allow** when
-macOS asks; later reads stay silent.
+macOS asks; later reads stay silent. If the login keychain itself can't be read (it's locked, say),
+the card asks you to unlock it instead — approving nothing would fix that one.
 
 ## Multiple accounts
 
