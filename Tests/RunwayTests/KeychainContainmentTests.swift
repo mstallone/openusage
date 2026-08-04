@@ -184,6 +184,43 @@ final class KeychainFailureCategoryTests: XCTestCase {
         XCTAssertEqual(reads.value, 1, "the older read's failure must not have won the store")
     }
 
+    func testAStuckFlightNeverServesAFingerprintedCacheEntry() {
+        // The stuck read may be fetching a rotation of exactly the secret the cache holds, so a
+        // fingerprinted entry (cached against the item's PREVIOUS attributes) must not be served.
+        // Only an interactive recovery's entry, which carries no fingerprint, may answer here.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { .value("cached-under-fp-1") }
+        )
+
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let stuckDone = expectation(description: "stuck read finished")
+        let stuck = Thread {
+            _ = coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-2" },
+                read: {
+                    started.signal()
+                    release.wait()
+                    return .value("rotated")
+                }
+            )
+            stuckDone.fulfill()
+        }
+        stuck.start()
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
+
+        let timedOut = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { XCTFail("must not probe behind a stuck flight"); return nil },
+            read: { XCTFail("must not read behind a stuck flight"); return .unavailable }
+        )
+        XCTAssertEqual(timedOut, .unavailable, "a superseded secret must never be served as current")
+
+        release.signal()
+        wait(for: [stuckDone], timeout: 2)
+    }
+
     func testAnUnreadableKeychainIsRecordedAsNotDenied() {
         let coordinator = KeychainReadCoordinator()
         coordinator.recordFailureCategory(service: "svc", account: "acct", permissionDenied: false)
