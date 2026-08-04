@@ -852,7 +852,7 @@ final class CodexKeychainReadModeTests: XCTestCase {
 
 /// The item could not be read for a reason approval cannot fix: the recorded category says the
 /// failure was NOT an ACL denial.
-private final class UnreadableKeyringKeychain: KeychainAccessing, @unchecked Sendable {
+private final class UnreadableKeyringKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
         return nil
@@ -880,8 +880,6 @@ private final class UnreadableKeyringKeychain: KeychainAccessing, @unchecked Sen
         XCTFail("the recorded category answers this; no probe should be needed")
         return nil
     }
-
-    func writeGenericPassword(service: String, value: String) throws {}
 }
 
 /// Models Codex keyring items Runway isn't authorized to read prompt-free. The service-only lookup
