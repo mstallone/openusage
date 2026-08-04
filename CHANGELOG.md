@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.8.8
+
+### Bug Fixes
+- Refresh the provider when its header warning triangle is clicked ([#92](https://github.com/mstallone/runway/pull/92)) by @mstallone
+- Make Codex and Cursor credentials strictly read-only; delete the Keychain write path ([#90](https://github.com/mstallone/runway/pull/90)) by @mstallone
+- Read Codex and Cursor credentials in-process, never through `/usr/bin/security` ([#89](https://github.com/mstallone/runway/pull/89)) by @mstallone
+- Silence the share-card failure beep in the test suite ([#88](https://github.com/mstallone/runway/pull/88)) by @mstallone
+- Read Copilot and Antigravity credentials in-process, never through `/usr/bin/security` ([#87](https://github.com/mstallone/runway/pull/87)) by @mstallone
+- Enforce credential ownership at the type level; move Runway-owned secrets in-process ([#86](https://github.com/mstallone/runway/pull/86)) by @mstallone
+- Coordinate Keychain secret reads: change-gated, single-flight, circuit-broken ([#85](https://github.com/mstallone/runway/pull/85)) by @mstallone
+- Make Claude credentials strictly read-only (no refresh, no writeback) ([#84](https://github.com/mstallone/runway/pull/84)) by @mstallone
+
+---
+
+### Changelog
+**Full Changelog**: [v0.8.7...v0.8.8](https://github.com/mstallone/runway/compare/v0.8.7...v0.8.8)
+
+- [514d8f7](https://github.com/mstallone/runway/commit/514d8f7acccf9909ae32ed7470bc9a55b6eaea91) Refresh the provider when its header warning triangle is clicked (#92) by @mstallone
+- [50c74d8](https://github.com/mstallone/runway/commit/50c74d8e96544e96622d8f955a92c24d4eb1078b) Make Codex and Cursor credentials strictly read-only; delete the Keychain write path (#90) by @mstallone
+- [7f9c85a](https://github.com/mstallone/runway/commit/7f9c85a73f5c2f8e0252c0b11a88e7a8f437e226) Read Codex and Cursor credentials in-process, never through /usr/bin/security (#89) by @mstallone
+- [92f9a9c](https://github.com/mstallone/runway/commit/92f9a9c220fe961dfb65e3cc542a8afeb8baa84f) Silence the share-card failure beep in the test suite (#88) by @mstallone
+- [9b0e043](https://github.com/mstallone/runway/commit/9b0e043b865bad5facd62c367c6f3c931a8820f6) Read Copilot and Antigravity credentials in-process, never through /usr/bin/security (#87) by @mstallone
+- [bf8d6fc](https://github.com/mstallone/runway/commit/bf8d6fc4d26c9c4e68cca084a7ba5da220a44d1c) Enforce credential ownership at the type level; move Runway-owned secrets in-process (#86) by @mstallone
+- [23c0703](https://github.com/mstallone/runway/commit/23c07037d23554f8f0e3f79de918f47d56c2de9c) Coordinate Keychain secret reads: change-gated, single-flight, circuit-broken (#85) by @mstallone
+- [a4f5e1c](https://github.com/mstallone/runway/commit/a4f5e1cd6df7c2b0d572900ab3c43876dc5d4232) Make Claude credentials strictly read-only (no refresh, no writeback) (#84) by @mstallone
+
 ## v0.8.7
 
 ### New Features
