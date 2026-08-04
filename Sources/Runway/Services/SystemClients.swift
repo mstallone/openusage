@@ -183,6 +183,11 @@ protocol KeychainAccessing: Sendable {
     /// `nil` means the probe failed, not that the item is absent.
     func genericPasswordExists(service: String) -> Bool?
     func genericPasswordExists(service: String, account: String) -> Bool?
+    /// Existence probe for the CURRENT-USER item specifically. It shares the exact
+    /// `(service, currentUser)` identity that `readGenericPasswordForCurrentUserWithoutUserInteraction`
+    /// uses, so a recovery probe joins that read's flight and breaker instead of launching an
+    /// unrelated service-wide query that neither waits on it nor sees it fail.
+    func genericPasswordForCurrentUserExists(service: String) -> Bool?
     /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
     /// date). Discovery binds a cached account identity to this so replacing a keyring item invalidates
     /// the old identity without reading its secret on the launch path.
@@ -254,6 +259,10 @@ extension KeychainAccessing {
         }
     }
 
+    func genericPasswordForCurrentUserExists(service: String) -> Bool? {
+        genericPasswordExists(service: service)
+    }
+
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
         nil
     }
@@ -276,6 +285,9 @@ extension KeychainAccessing {
 /// Suppressed calls only ever wait on a user-attended dialog, never on each other (they refcount),
 /// so background refreshes pause at most while the user is answering a prompt they asked for.
 enum KeychainUISuppression {
+    /// How long either side waits on the other before giving up. Both directions are bounded so a
+    /// wedged or abandoned operation degrades to a friendly local failure instead of a hang.
+    private static let interactiveGateWait: TimeInterval = 2
     private static let condition = NSCondition()
     nonisolated(unsafe) private static var suppressedDepth = 0
     nonisolated(unsafe) private static var interactiveCount = 0
@@ -292,8 +304,19 @@ enum KeychainUISuppression {
     /// and should report its non-interactive "unavailable" outcome instead.
     static func withUISuppressed<T>(_ body: (_ isSuppressed: Bool) throws -> T) rethrows -> T {
         condition.lock()
-        while interactiveCount > 0 {
-            condition.wait()
+        // Bounded, like the interactive side. An approval dialog can sit open for minutes — or be
+        // abandoned behind another window — and parking here forever would strand every concurrent
+        // refresh in exactly the contention this gate exists to prevent. Past the deadline the body
+        // runs with `isSuppressed: false`, which by contract means "do not issue a prompt-capable
+        // call": the caller reports its local unavailable outcome without touching Security.framework.
+        let deadline = Date().addingTimeInterval(interactiveGateWait)
+        while interactiveCount > 0, Date() < deadline {
+            condition.wait(until: deadline)
+        }
+        if interactiveCount > 0 {
+            condition.unlock()
+            AppLog.warn(.keychain, "keychain UI gate still held by an interactive operation; treating this background read as unavailable")
+            return try body(false)
         }
         suppressedDepth += 1
         if suppressedDepth == 1 {
@@ -333,7 +356,7 @@ enum KeychainUISuppression {
     static func withUIAllowed<T>(_ body: () throws -> T) rethrows -> T {
         condition.lock()
         interactiveCount += 1
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(interactiveGateWait)
         while suppressedDepth > 0, Date() < deadline {
             condition.wait(until: deadline)
         }
@@ -510,6 +533,13 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func genericPasswordExists(service: String, account: String) -> Bool? {
         coordinator.probe(service: service, account: account) {
+            rawGenericPasswordExists(service: service, account: account)
+        }
+    }
+
+    func genericPasswordForCurrentUserExists(service: String) -> Bool? {
+        let account = currentUserAccount()
+        return coordinator.probe(service: service, account: account) {
             rawGenericPasswordExists(service: service, account: account)
         }
     }

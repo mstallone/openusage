@@ -586,8 +586,11 @@ struct ClaudeAuthStore: Sendable {
                 }
             }
             if serviceReadUnavailable {
+                // Probe the SAME item the read just failed on (service + current user), so this
+                // joins that read's flight and sees its breaker instead of starting an unrelated
+                // service-wide query behind it.
                 accessStatus.recordUnreadableItem(
-                    exists: keychain.genericPasswordExists(service: service)
+                    exists: keychain.genericPasswordForCurrentUserExists(service: service)
                 )
                 if allowInteraction {
                     return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
