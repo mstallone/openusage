@@ -300,6 +300,31 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         XCTAssertEqual(owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"], "not-a-uuid")
     }
 
+    func testAnInvalidLegacyIdentityNeverMintsAReplacement() async throws {
+        // Same rule as the v2 item, on the legacy path: a recovered value that is not a UUID is a
+        // corrupt identity. Normalizing it to nil would take the fresh-install branch and publish a
+        // second record for a Mac that already has one.
+        let defaults = makeDefaults("invalid-legacy-device-id")
+        let cloudStore = RecordingUsageCloudStore()
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: InvalidLegacyDeviceIDStore(),
+            pollInterval: nil
+        )
+
+        try await Task.sleep(for: .milliseconds(120))
+
+        XCTAssertNotNil(sync.serviceError, "a corrupt legacy identity must be reported")
+        XCTAssertNil(
+            defaults.string(forKey: "runway.icloudSync.deviceID.v1"),
+            "no replacement identity may be persisted"
+        )
+        let writes = await cloudStore.writeCount
+        XCTAssertEqual(writes, 0, "and nothing may be published under a minted id")
+    }
+
     func testAnUndecodableOwnedValueIsAReadFailureNotAnAbsentItem() throws {
         // The owned store must surface a present-but-undecodable item as an error. Returning nil
         // would put the store on the same "fresh install" path as a genuinely missing item.
@@ -398,6 +423,13 @@ final class IndeterminateProbeKeychain: KeychainReading, @unchecked Sendable {
 
 /// Unresolvable until `recover` is called, then returns a real id — models a keychain that becomes
 /// readable during the session.
+/// No v2 item, and the legacy recovery hands back a value that is readable but not a UUID.
+private final class InvalidLegacyDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
+    func readDeviceID() throws -> String? { nil }
+    func writeDeviceID(_ deviceID: String) throws {}
+    func migrateLegacyDeviceID() throws -> String? { "definitely-not-a-uuid" }
+}
+
 final class RecoveringDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: String?

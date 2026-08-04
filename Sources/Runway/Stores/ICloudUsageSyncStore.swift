@@ -423,9 +423,16 @@ final class ICloudUsageSyncStore {
                 try store.writeDeviceID(saved)
                 return (saved, nil, false)
             }
-            if let migrated = normalizedDeviceID(try store.migrateLegacyDeviceID()) {
-                defaults.set(migrated, forKey: deviceIDKey)
-                return (migrated, nil, false)
+            // Same rule the v2 item follows: a legacy value that is present but not a UUID is a
+            // corrupt identity, not an absent one. Normalizing it to nil here would fall through to
+            // the fresh-install path below and mint a replacement, overwriting the evidence that
+            // this Mac already published under an id we failed to recover.
+            if let migrated = try store.migrateLegacyDeviceID() {
+                guard let normalized = normalizedDeviceID(migrated) else {
+                    throw KeychainError.readFailed("This Mac's previous sync identity is not a valid identifier.")
+                }
+                defaults.set(normalized, forKey: deviceIDKey)
+                return (normalized, nil, false)
             }
 
             let id = UUID().uuidString.lowercased()
