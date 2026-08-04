@@ -171,23 +171,21 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         }
 
         // Inside the flight, like the read itself — see `nonInteractiveRead`. When the flight was
-        // NOT acquired (a stuck background read), the probe is deferred: it is one more Security
-        // call that could wedge BEFORE the user's read, and manual recovery must never hang on it.
-        let preFingerprint = acquired ? fingerprint() : nil
+        // NOT acquired (a stuck background read), the probe is skipped ENTIRELY: it is one more
+        // Security call that can wedge, and `securityd` answering the read is no guarantee the next
+        // query returns. The outcome is then stored without a fingerprint — only the stale-flight
+        // fallback serves those, and the next clean background read re-reads for real.
+        let fingerprint = acquired ? fingerprint() : nil
 
         do {
             let value = try read()
-            // An unacquired flight probes only after the read succeeded: securityd just answered
-            // this caller, so the probe cannot block the recovery it follows — and it gives the
-            // result a fingerprint for the change-gated cache.
-            let storedFingerprint = preFingerprint ?? fingerprint()
             condition.lock()
-            store(key: key, fingerprint: storedFingerprint, value: value.map(NonInteractiveKeychainRead.value) ?? .missing, tripped: false)
+            store(key: key, fingerprint: fingerprint, value: value.map(NonInteractiveKeychainRead.value) ?? .missing, tripped: false)
             condition.unlock()
             return value
         } catch {
             condition.lock()
-            store(key: key, fingerprint: preFingerprint, value: nil, tripped: true)
+            store(key: key, fingerprint: fingerprint, value: nil, tripped: true)
             condition.unlock()
             throw error
         }
@@ -206,6 +204,14 @@ final class KeychainReadCoordinator: @unchecked Sendable {
 
         condition.lock()
         guard waitWhileInFlight(key, deadline: now().addingTimeInterval(inFlightWait)) else {
+            condition.unlock()
+            return nil
+        }
+        // The breaker covers metadata queries as well: an item whose read just failed must not keep
+        // issuing `SecItemCopyMatching` into the same wedged securityd. `nil` ("unknown") is the
+        // honest answer, and callers already take their safe side on it.
+        if let entry = entries[key], entry.tripped,
+           now().timeIntervalSince(entry.updatedAt) < revalidateAfter {
             condition.unlock()
             return nil
         }
