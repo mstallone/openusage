@@ -517,12 +517,12 @@ private final class UnavailableKeychain: KeychainReading, @unchecked Sendable {
         .unavailable
     }
 
-    func genericPasswordExists(service: String, account: String) -> Bool? {
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
         true
     }
 }
 
-/// Reads are unavailable and the existence probe cannot answer — the locked-keychain shape.
+/// Reads are unavailable and the failure was NOT an ACL denial — the locked-keychain shape.
 private final class IndeterminateAntigravityKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
@@ -533,7 +533,7 @@ private final class IndeterminateAntigravityKeychain: KeychainReading, @unchecke
         .unavailable
     }
 
-    func genericPasswordExists(service: String, account: String) -> Bool? {
-        nil
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        false
     }
 }
