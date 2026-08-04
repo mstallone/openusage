@@ -196,6 +196,16 @@ final class ICloudUsageSyncStore {
             dataStore.clearPeerHistoryDocuments()
             documents = []
             invalidRecordMessages = []
+            // A provisional id is not the id this Mac published under, so deleting it would remove
+            // nothing and quietly strand the real record — and turning sync off also stops the
+            // retries that would have resolved it. Try once more, and say so if it still can't.
+            resolveProvisionalIdentityIfNeeded()
+            guard !identityIsProvisional else {
+                AppLog.warn(.config, "iCloud opt-out could not remove this Mac's record: its sync identity is unresolved")
+                identityError = "Runway couldn’t identify this Mac, so its existing iCloud record "
+                    + "wasn’t removed. Unlock your login keychain and turn Sync Across Macs off again."
+                return
+            }
             do {
                 try await cloudStore.delete(deviceID: deviceID)
                 // Re-enabling can race this deletion: if the toggle came back on while the delete
