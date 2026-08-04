@@ -108,7 +108,8 @@ final class WidgetDataStore {
     /// too). Wired by `ICloudUsageSyncStore`; debounced there so a concurrent provider batch
     /// produces one write.
     @ObservationIgnored var onLocalStateChanged: (@MainActor () -> Void)?
-    @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
+    /// Readable (not writable) so the sync tests can assert what peers actually contribute.
+    @ObservationIgnored private(set) var peerHistoryDocuments: [UsageHistoryDocument] = []
     /// Non-zero while `refreshAll` is coalescing per-provider completion work into short debounced
     /// rebuilds plus one batch-end rebuild + cache persist. Plain counters — everything here is
     /// MainActor-serialized.

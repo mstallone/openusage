@@ -18,14 +18,14 @@ struct DefaultAccountObserver: Sendable {
 
     var environment: EnvironmentReading
     var files: TextFileAccessing
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
     var codexIdentityCache: (any CodexHomeIdentityCaching)?
     var homeDirectory: @Sendable () -> URL
 
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         files: TextFileAccessing = LocalTextFileAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        keychain: KeychainReading = SecurityKeychainAccessor(),
         codexIdentityCache: (any CodexHomeIdentityCaching)? = nil,
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser }
     ) {

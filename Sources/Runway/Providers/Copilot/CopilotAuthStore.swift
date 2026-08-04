@@ -33,11 +33,11 @@ struct CopilotAuthStore: Sendable {
     static let ghKeychainService = "gh:github.com"
 
     var files: TextFileAccessing
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
 
     init(
         files: TextFileAccessing = LocalTextFileAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor()
+        keychain: KeychainReading = SecurityKeychainAccessor()
     ) {
         self.files = files
         self.keychain = keychain

@@ -156,11 +156,13 @@ enum NonInteractiveKeychainRead: Equatable, Sendable {
     case unavailable
 }
 
-protocol KeychainAccessing: Sendable {
+/// Read-only view of the Keychain. Stores that consume another app's credentials (Claude, Copilot,
+/// Antigravity, the default-account observer) receive ONLY this type, so writing a foreign
+/// credential store is unrepresentable there at compile time — the ownership rule "only the app
+/// that owns a credential may modify it", enforced by the type system.
+protocol KeychainReading: Sendable {
     func readGenericPassword(service: String) throws -> String?
-    func writeGenericPassword(service: String, value: String) throws
     func readGenericPasswordForCurrentUser(service: String) throws -> String?
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws
     /// Interactive Security.framework reads used only after an explicit user action. These are
     /// separate requirements from the historical `security`-CLI reads so another app's Keychain ACL
     /// grants access to Runway itself, not to the `/usr/bin/security` helper process.
@@ -174,11 +176,8 @@ protocol KeychainAccessing: Sendable {
     /// item under a known account name (e.g. Antigravity's `agy` token under service `gemini`,
     /// account `antigravity`) rather than the current user.
     func readGenericPassword(service: String, account: String) throws -> String?
-    /// Write one explicitly addressed item. Codex keyring mode stores every home under the shared
-    /// `Codex Auth` service with a home-derived account, so token rotation must preserve that account.
-    func writeGenericPassword(service: String, account: String, value: String) throws
     /// Attributes-only existence probes. Keeping both overloads as protocol requirements is essential:
-    /// callers hold `any KeychainAccessing`, so an extension-only service overload would statically call
+    /// callers hold `any KeychainReading`, so an extension-only service overload would statically call
     /// the fallback secret read instead of production's prompt-free Security.framework implementation.
     /// `nil` means the probe failed, not that the item is absent.
     func genericPasswordExists(service: String) -> Bool?
@@ -201,13 +200,19 @@ protocol KeychainAccessing: Sendable {
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String?
 }
 
-extension KeychainAccessing {
+/// Full Keychain access. Only stores that legitimately write remain on this type: Codex and Cursor
+/// (their read-only ownership audit is planned follow-up work) and test fakes.
+protocol KeychainAccessing: KeychainReading {
+    func writeGenericPassword(service: String, value: String) throws
+    func writeGenericPasswordForCurrentUser(service: String, value: String) throws
+    /// Write one explicitly addressed item. Codex keyring mode stores every home under the shared
+    /// `Codex Auth` service with a home-derived account, so token rotation must preserve that account.
+    func writeGenericPassword(service: String, account: String, value: String) throws
+}
+
+extension KeychainReading {
     func readGenericPasswordForCurrentUser(service: String) throws -> String? {
         try readGenericPassword(service: service)
-    }
-
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
-        try writeGenericPassword(service: service, value: value)
     }
 
     func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
@@ -239,10 +244,6 @@ extension KeychainAccessing {
     /// `SecurityKeychainAccessor` overrides this to pass `-a <account>`.
     func readGenericPassword(service: String, account: String) throws -> String? {
         try readGenericPassword(service: service)
-    }
-
-    func writeGenericPassword(service: String, account: String, value: String) throws {
-        try writeGenericPassword(service: service, value: value)
     }
 
     /// Whether an item exists for `service`, without reading its secret. `nil` means the probe
@@ -280,6 +281,16 @@ extension KeychainAccessing {
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
         nil
+    }
+}
+
+extension KeychainAccessing {
+    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
+        try writeGenericPassword(service: service, value: value)
+    }
+
+    func writeGenericPassword(service: String, account: String, value: String) throws {
+        try writeGenericPassword(service: service, value: value)
     }
 }
 

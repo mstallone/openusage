@@ -337,51 +337,6 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         try await waitUntil { !sync.isSyncing }
     }
 
-    func testDeviceIdentitySurvivesPreferencesResetThroughKeychainStore() {
-        let expectedID = UUID().uuidString.lowercased()
-        let firstDefaults = makeDefaults("identity-first")
-        firstDefaults.set(expectedID, forKey: "runway.icloudSync.deviceID.v1")
-        let deviceIDStore = MemoryDeviceIDStore()
-
-        let first = ICloudUsageSyncStore(
-            dataStore: makeDataStore(firstDefaults),
-            defaults: firstDefaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: deviceIDStore,
-            pollInterval: nil
-        )
-        let resetDefaults = makeDefaults("identity-after-reset")
-        let afterReset = ICloudUsageSyncStore(
-            dataStore: makeDataStore(resetDefaults),
-            defaults: resetDefaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: deviceIDStore,
-            pollInterval: nil
-        )
-
-        XCTAssertEqual(first.deviceID, expectedID)
-        XCTAssertEqual(afterReset.deviceID, expectedID)
-        XCTAssertEqual(resetDefaults.string(forKey: "runway.icloudSync.deviceID.v1"), expectedID)
-    }
-
-    func testKeychainIdentityIsScopedToDevelopmentAndProductionBundles() throws {
-        let keychain = ServiceKeychain()
-        let development = KeychainICloudDeviceIDStore(
-            keychain: keychain,
-            bundleIdentifier: "com.mattstallone.runway.dev"
-        )
-        let production = KeychainICloudDeviceIDStore(
-            keychain: keychain,
-            bundleIdentifier: "com.mattstallone.runway"
-        )
-
-        try development.writeDeviceID("development-id")
-        try production.writeDeviceID("production-id")
-
-        XCTAssertEqual(try development.readDeviceID(), "development-id")
-        XCTAssertEqual(try production.readDeviceID(), "production-id")
-    }
-
     private func makeDataStore(_ defaults: UserDefaults) -> WidgetDataStore {
         WidgetDataStore(
             registry: WidgetRegistry(providers: [], descriptors: []),
@@ -419,7 +374,7 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
     }
 }
 
-private final class MemoryDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
+final class MemoryDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
     private var deviceID: String?
 
     func readDeviceID() throws -> String? {
@@ -431,7 +386,7 @@ private final class MemoryDeviceIDStore: ICloudDeviceIDStoring, @unchecked Senda
     }
 }
 
-private actor RecordingUsageCloudStore: UsageCloudStoring {
+actor RecordingUsageCloudStore: UsageCloudStoring {
     private(set) var documents: [UsageHistoryDocument]
     private(set) var invalidRecordMessages: [String]
     private(set) var writeCount = 0
@@ -440,6 +395,11 @@ private actor RecordingUsageCloudStore: UsageCloudStoring {
     private(set) var deletedDeviceIDs: [String] = []
     private let unavailable: Bool
     private let failWrites: Bool
+    /// Number of deletions to let succeed before failing the rest, so a test can have the opt-out
+    /// deletion succeed and the *compensating* one fail — the race where a user believes they
+    /// opted out but a late-landing write left their record behind. `nil` never fails.
+    private let deletionsBeforeFailure: Int?
+    private var deleteAttempts = 0
     private(set) var loadInFlight = false
     private(set) var writeInFlight = false
     private(set) var deleteInFlight = false
@@ -453,11 +413,13 @@ private actor RecordingUsageCloudStore: UsageCloudStoring {
     init(
         unavailable: Bool = false,
         failWrites: Bool = false,
+        deletionsBeforeFailure: Int? = nil,
         seedDocuments: [UsageHistoryDocument] = [],
         invalidRecordMessages: [String] = []
     ) {
         self.unavailable = unavailable
         self.failWrites = failWrites
+        self.deletionsBeforeFailure = deletionsBeforeFailure
         self.documents = seedDocuments
         self.invalidRecordMessages = invalidRecordMessages
     }
@@ -497,6 +459,10 @@ private actor RecordingUsageCloudStore: UsageCloudStoring {
 
     func delete(deviceID: String) async throws {
         if unavailable { throw CloudKitUsageSyncError.accountUnavailable }
+        deleteAttempts += 1
+        if let deletionsBeforeFailure, deleteAttempts > deletionsBeforeFailure {
+            throw CloudKitUsageSyncError.accountUnavailable
+        }
         deleteInFlight = true
         defer { deleteInFlight = false }
         if shouldHoldNextDelete {

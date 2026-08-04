@@ -20,12 +20,12 @@ struct AntigravityAuthStore: Sendable {
     /// Treat a token with less than this left as already expired (skip straight to refresh).
     static let refreshBuffer: TimeInterval = 60
 
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
     var files: TextFileAccessing
     var now: @Sendable () -> Date
 
     init(
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        keychain: KeychainReading = SecurityKeychainAccessor(),
         files: TextFileAccessing = LocalTextFileAccessor(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {

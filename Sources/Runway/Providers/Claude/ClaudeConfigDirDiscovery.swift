@@ -33,7 +33,7 @@ struct ClaudeConfigDirDiscovery {
 
     var environment: EnvironmentReading
     var files: TextFileAccessing
-    var keychain: KeychainAccessing
+    var keychain: KeychainReading
     var homeDirectory: @Sendable () -> URL
     var listSubdirectories: @Sendable (URL) -> [URL]
     /// Wall-clock budget; on overrun the scan returns what it has (and the next launch resumes).
@@ -43,7 +43,7 @@ struct ClaudeConfigDirDiscovery {
     init(
         environment: EnvironmentReading = ProcessEnvironmentReader(),
         files: TextFileAccessing = LocalTextFileAccessor(),
-        keychain: KeychainAccessing = SecurityKeychainAccessor(),
+        keychain: KeychainReading = SecurityKeychainAccessor(),
         homeDirectory: @escaping @Sendable () -> URL = { FileManager.default.homeDirectoryForCurrentUser },
         listSubdirectories: @escaping @Sendable (URL) -> [URL] = Self.filesystemSubdirectories,
         timeBudget: TimeInterval = 0.4,
