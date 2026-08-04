@@ -211,7 +211,7 @@ struct CopilotAuthStore: Sendable {
                     return credentialLoad(fromKeychainRaw: raw)
                 }
             } catch {
-                return .keychainPermissionRequired
+                return interactiveFailureLoad(account: account)
             }
         }
         do {
@@ -220,8 +220,16 @@ struct CopilotAuthStore: Sendable {
             }
             return credentialLoad(fromKeychainRaw: raw)
         } catch {
-            return .keychainPermissionRequired
+            return interactiveFailureLoad(account: nil)
         }
+    }
+
+    /// A failed interactive read is a denial only when the read's own status said so. A locked
+    /// keychain or a wedged UI gate reaches the same catch, and approval cannot fix either.
+    private func interactiveFailureLoad(account: String?) -> CopilotCredentialLoad {
+        let denied = account.map { keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService, account: $0) }
+            ?? keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService)
+        return denied == false ? .unreadable : .keychainPermissionRequired
     }
 
     private func credentialLoad(fromKeychainRaw raw: String) -> CopilotCredentialLoad {
