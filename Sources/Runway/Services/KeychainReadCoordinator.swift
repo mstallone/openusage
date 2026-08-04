@@ -227,6 +227,7 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         if acquired {
             inFlight.insert(key)
         }
+        let epoch = epochs[key, default: 0]
         condition.unlock()
 
         defer {
@@ -241,15 +242,22 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         do {
             let value = try read()
             condition.lock()
-            store(key: key, fingerprint: nil, value: nil, tripped: false)
+            storeIfCurrent(key: key, epoch: epoch, value: nil, tripped: false)
             condition.unlock()
             return value
         } catch {
             condition.lock()
-            store(key: key, fingerprint: nil, value: nil, tripped: true)
+            storeIfCurrent(key: key, epoch: epoch, value: nil, tripped: true)
             condition.unlock()
             throw error
         }
+    }
+
+    /// Must be called under `condition`'s lock. Drops the write when a newer one already landed —
+    /// a stuck read finishing after a successful manual recovery must not re-trip the breaker.
+    private func storeIfCurrent(key: Key, epoch: Int, value: NonInteractiveKeychainRead?, tripped: Bool) {
+        guard epochs[key, default: 0] == epoch else { return }
+        store(key: key, fingerprint: nil, value: value, tripped: tripped)
     }
 
     /// Bounded, single-flighted metadata query (existence or fingerprint probes). Such probes are
