@@ -8,33 +8,16 @@ struct CursorSession: Equatable, Sendable {
 struct CursorUsageClient: Sendable {
     static let usageURL = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage")!
     static let planURL = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo")!
-    static let refreshURL = URL(string: "https://api2.cursor.sh/oauth/token")!
     static let creditsURL = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCreditGrantsBalance")!
     static let restUsageURL = URL(string: "https://cursor.com/api/usage")!
     static let usageSummaryURL = URL(string: "https://cursor.com/api/usage-summary")!
     static let stripeURL = URL(string: "https://cursor.com/api/auth/stripe")!
     static let exportCSVURL = URL(string: "https://cursor.com/api/dashboard/export-usage-events-csv")!
-    static let clientID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 
     var http: any HTTPClient
 
     init(http: any HTTPClient = URLSessionHTTPClient()) {
         self.http = http
-    }
-
-    func refreshToken(_ refreshToken: String) async throws -> HTTPResponse {
-        let body: [String: Any] = [
-            "grant_type": "refresh_token",
-            "client_id": Self.clientID,
-            "refresh_token": refreshToken
-        ]
-        return try await http.send(HTTPRequest(
-            method: "POST",
-            url: Self.refreshURL,
-            headers: ["Content-Type": "application/json"],
-            body: try JSONSerialization.data(withJSONObject: body),
-            timeout: 15
-        ))
     }
 
     func fetchUsage(accessToken: String) async throws -> HTTPResponse {

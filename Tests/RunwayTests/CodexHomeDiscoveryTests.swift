@@ -6,7 +6,7 @@ final class CodexHomeDiscoveryTests: XCTestCase {
     private func discovery(
         environment: [String: String] = [:],
         files: [String: String],
-        keychain: KeychainAccessing = AccountKeychain(),
+        keychain: KeychainReading = AccountKeychain(),
         identityCache: (any CodexHomeIdentityCaching)? = nil,
         subdirectories: [String] = []
     ) -> CodexHomeDiscovery {

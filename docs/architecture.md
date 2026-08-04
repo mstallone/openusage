@@ -48,22 +48,26 @@ way and doesn't need to know provider-specific details. To add one, see
 ### Credential ownership
 
 The app that owns a credential is the only app allowed to change it. Provider credentials belong to
-the provider's own tool (Claude Code, GitHub CLI, …), so the stores that read them hold a read-only
-Keychain type (`KeychainReading`) — a write simply does not compile there. Claude is fully
-read-only: Runway never refreshes its OAuth tokens and never writes its credential stores, because
-two apps rotating the same login can trip the server's token-reuse protection and sign the user out.
-The Copilot and Antigravity stores work the same way. Every provider's automatic Keychain reads are
-in-process and prompt-free; only a direct user action may raise the approval dialog, once per
-protected item, and a denial stops the pass instead of chaining further prompts. Two actions qualify:
-a manual refresh, and clicking **Use** on a Codex reset credit after every readable credential was
-rejected. Both are user-initiated with the app in front of the user.
+the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …). Runway never
+writes any provider's **Keychain** item — the type system enforces that, because every credential
+store holds the read-only `KeychainReading` and no Keychain write API exists in the app outside
+`RunwayOwnedKeychainStore` (Runway's own secrets, currently the iCloud-sync device id). Grok and
+Kimi remain the exception on the file side: Runway still refreshes those logins and saves them back
+to their CLIs' own credential files.
 
-Two write exceptions remain, both explicit. Runway's own secrets live in `RunwayOwnedKeychainStore`
-(currently the iCloud-sync device id) under a Runway-specific service and account — that is the only
-store Runway is *supposed* to write. And Codex and Cursor still rotate their providers' tokens and
-write them back through the writing `KeychainAccessing` type (the last `/usr/bin/security` use);
-moving them to the same read-only model is the next step in this work, after which that type can be
-deleted outright.
+For Claude, Codex, Cursor, and Copilot, Runway never calls their OAuth token endpoints either,
+because two apps rotating the same login can trip the server's token-reuse protection and sign the
+user out. When one of those tokens lapses, the card shows a renewal notice naming the owning app;
+Runway never renews it. Antigravity is the one endpoint-side exception: Runway refreshes its access
+token through Google OAuth — safe because Google refresh tokens do not rotate — and caches the
+result in Runway's own file, never writing back to Antigravity's Keychain item. Grok and Kimi still
+refresh their own file-based logins (no Keychain involved); moving them to the same read-only model
+is the remaining ownership follow-up.
+
+Automatic Keychain reads are in-process and prompt-free; only a direct user action may raise the
+approval dialog — once per protected item, and a denial stops the pass instead of chaining further
+prompts. Two actions qualify: a manual refresh, and clicking **Use** on a Codex reset credit after
+every readable credential was rejected. Both are user-initiated with the app in front of the user.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,

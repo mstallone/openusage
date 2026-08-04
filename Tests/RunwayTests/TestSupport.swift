@@ -280,7 +280,7 @@ final class FakeFiles: TextFileAccessing, @unchecked Sendable {
     }
 }
 
-final class FakeKeychain: KeychainAccessing, @unchecked Sendable {
+final class FakeKeychain: KeychainReading, @unchecked Sendable {
     var value: String?
 
     init(_ value: String? = nil) {
@@ -296,7 +296,7 @@ final class FakeKeychain: KeychainAccessing, @unchecked Sendable {
     }
 }
 
-final class ServiceKeychain: KeychainAccessing, @unchecked Sendable {
+final class ServiceKeychain: KeychainReading, @unchecked Sendable {
     var values: [String: String]
     var currentUserValues: [String: String]
 
@@ -324,7 +324,7 @@ final class ServiceKeychain: KeychainAccessing, @unchecked Sendable {
 
 /// Keychain double that distinguishes a service-level legacy item from explicit account-scoped
 /// items. Codex multi-home tests use this to prove one home can never borrow another item's secret.
-final class AccountKeychain: KeychainAccessing, @unchecked Sendable {
+final class AccountKeychain: KeychainReading, @unchecked Sendable {
     var serviceValues: [String: String]
     var accountValues: [String: String]
     var fingerprints: [String: String]

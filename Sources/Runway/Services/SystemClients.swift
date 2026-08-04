@@ -51,7 +51,6 @@ protocol SQLiteAccessing: Sendable {
     /// Read-only query whose rows come back as a JSON array of objects (sqlite3 `-json` output).
     /// `nil` means the database is absent or the query matched no rows.
     func queryJSONRows(path: String, sql: String) throws -> String?
-    func execute(path: String, sql: String) throws
 }
 
 struct SQLiteCLIAccessor: SQLiteAccessing {
@@ -98,13 +97,6 @@ struct SQLiteCLIAccessor: SQLiteAccessing {
     private func immutableURI(forExpandedPath path: String) -> String {
         let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
         return "file:\(encoded)?immutable=1"
-    }
-
-    func execute(path: String, sql: String) throws {
-        let result = try run(path: path, sql: sql)
-        guard result.succeeded else {
-            throw SQLiteError.queryFailed(result.stderr)
-        }
     }
 
     private func run(
@@ -209,16 +201,6 @@ protocol KeychainReading: Sendable {
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String?
 }
 
-/// Full Keychain access. Only stores that legitimately write remain on this type: Codex and Cursor
-/// (their read-only ownership audit is planned follow-up work) and test fakes.
-protocol KeychainAccessing: KeychainReading {
-    func writeGenericPassword(service: String, value: String) throws
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws
-    /// Write one explicitly addressed item. Codex keyring mode stores every home under the shared
-    /// `Codex Auth` service with a home-derived account, so token rotation must preserve that account.
-    func writeGenericPassword(service: String, account: String, value: String) throws
-}
-
 extension KeychainReading {
     func readGenericPasswordForCurrentUser(service: String) throws -> String? {
         try readGenericPassword(service: service)
@@ -310,16 +292,6 @@ extension KeychainReading {
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
         nil
-    }
-}
-
-extension KeychainAccessing {
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
-        try writeGenericPassword(service: service, value: value)
-    }
-
-    func writeGenericPassword(service: String, account: String, value: String) throws {
-        try writeGenericPassword(service: service, value: value)
     }
 }
 
@@ -477,28 +449,39 @@ enum KeychainUISuppression {
     }
 }
 
-struct SecurityKeychainAccessor: KeychainAccessing {
-    let processRunner: ProcessRunning
+/// Every read here goes through Security.framework in this process. There is no `/usr/bin/security`
+/// path any more: a subprocess's approval names the helper binary rather than Runway, so it could
+/// never turn into a durable Always Allow — which is how one approval became a recurring prompt.
+struct SecurityKeychainAccessor: KeychainReading {
     /// Gates every in-process secret read: change-gated caching, single-flight per item, and a
     /// circuit breaker after denials. See `KeychainReadCoordinator`.
     let coordinator: KeychainReadCoordinator
 
-    init(
-        processRunner: ProcessRunning = SystemProcessRunner(),
-        coordinator: KeychainReadCoordinator = .shared
-    ) {
-        self.processRunner = processRunner
+    init(coordinator: KeychainReadCoordinator = .shared) {
         self.coordinator = coordinator
     }
 
-    // `security find-generic-password` exits 44 (errSecItemNotFound) when no item matches — the
-    // legitimate "no credential stored" case. Any OTHER non-zero exit means a real failure (keychain
-    // locked or access denied, a cancelled unlock prompt) that must not be silently rendered as
-    // "not signed in".
-    private static let itemNotFoundExitCode: Int32 = 44
-
+    /// The plain throwing reads are protocol requirements that exist for mocks; no auth store calls
+    /// them, because each one picks the explicit non-interactive or interactive form. They are
+    /// implemented here as prompt-free in-process reads so that even a future caller cannot bring
+    /// back a dialog on an automatic path — this is where the `/usr/bin/security` subprocess used to
+    /// be, and its prompts authorized the helper binary rather than Runway.
     func readGenericPassword(service: String) throws -> String? {
-        try readPassword(["find-generic-password", "-s", service, "-w"], service: service)
+        try promptFreeValue(service: service, account: nil)
+    }
+
+    private func promptFreeValue(service: String, account: String?) throws -> String? {
+        // Through the coordinator, not straight at Security: these reads get the same single-flight,
+        // change-gating, and breaker as every other one, and the read is handed the ticket it needs
+        // to attribute what it observes.
+        switch readGenericPasswordWithoutUserInteraction(service: service, account: account) {
+        case .value(let value):
+            return value
+        case .missing:
+            return nil
+        case .unavailable:
+            throw KeychainError.readFailed("The keychain item could not be read without asking you.")
+        }
     }
 
     func readGenericPasswordAllowingUserInteraction(service: String) throws -> String? {
@@ -712,42 +695,11 @@ struct SecurityKeychainAccessor: KeychainAccessing {
     }
 
     func readGenericPasswordForCurrentUser(service: String) throws -> String? {
-        try readPassword(["find-generic-password", "-a", currentUserAccount(), "-s", service, "-w"], service: service)
+        try promptFreeValue(service: service, account: currentUserAccount())
     }
 
     func readGenericPassword(service: String, account: String) throws -> String? {
-        try readPassword(["find-generic-password", "-a", account, "-s", service, "-w"], service: service)
-    }
-
-    private func readPassword(_ arguments: [String], service: String) throws -> String? {
-        let result = try processRunner.run(
-            executable: "/usr/bin/security",
-            arguments: arguments,
-            environment: [:],
-            timeout: 5
-        )
-        guard result.succeeded else {
-            if result.exitCode == Self.itemNotFoundExitCode { return nil }
-            // Log loudly here so a locked/denied keychain is diagnosable even though current callers
-            // `try?` this back to nil ("not signed in"). Surfacing a distinct user-facing "keychain
-            // locked" message needs the auth-load chains to propagate the throw (folded into H1).
-            AppLog.warn(.keychain, "read failed for service '\(service)' (exit \(result.exitCode))")
-            throw KeychainError.readFailed(result.stderr)
-        }
-        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
-    }
-
-    func writeGenericPassword(service: String, value: String) throws {
-        try writePassword(["add-generic-password", "-U", "-s", service, "-w", value])
-    }
-
-    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
-        try writePassword(["add-generic-password", "-U", "-a", currentUserAccount(), "-s", service, "-w", value])
-    }
-
-    func writeGenericPassword(service: String, account: String, value: String) throws {
-        try writePassword(["add-generic-password", "-U", "-a", account, "-s", service, "-w", value])
+        try promptFreeValue(service: service, account: account)
     }
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
@@ -810,18 +762,6 @@ struct SecurityKeychainAccessor: KeychainAccessing {
         let context = LAContext()
         context.interactionNotAllowed = true
         return context
-    }
-
-    private func writePassword(_ arguments: [String]) throws {
-        let result = try processRunner.run(
-            executable: "/usr/bin/security",
-            arguments: arguments,
-            environment: [:],
-            timeout: 5
-        )
-        if !result.succeeded {
-            throw KeychainError.writeFailed(result.stderr)
-        }
     }
 
     private func currentUserAccount() -> String {

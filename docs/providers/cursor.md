@@ -17,11 +17,12 @@ When Cursor reports your plan name, Runway shows it beside the provider name.
 
 ## Where credentials come from
 
-Just be signed into the Cursor app. Runway reads Cursor's local state database (and its keychain entries) for the session tokens and writes refreshed tokens back. Nothing extra to install or configure.
+Just be signed into the Cursor app. Runway reads Cursor's local state database (and its keychain entries) for the session tokens. All Cursor credentials are strictly read-only to Runway: it never refreshes a token and never writes the state database or keychain — the Cursor app owns the login and its rotation. When the token lapses, the card shows **"Cursor login needs renewal"**: sign in again where that login lives — open the Cursor app, or run `agent login` if you use the Cursor CLI — then refresh Runway. Nothing extra to install or configure.
 
 Automatic refreshes read the keychain entries silently and never open a macOS password dialog. If
 access hasn't been approved yet, the card says so — refresh manually once and choose **Always Allow**
-when macOS asks; later reads stay silent.
+when macOS asks; later reads stay silent. If the login keychain itself can't be read (it's locked,
+say), the card asks you to unlock it instead — approving nothing would fix that one.
 
 ## The spend tiles
 
@@ -35,4 +36,4 @@ Today, Yesterday, Last 30 Days, and Usage Trend come from Cursor's usage export.
 
 ## Under the hood
 
-Connect RPC on `api2.cursor.sh` (dashboard usage), combined REST fallback at `cursor.com/api/usage` and `cursor.com/api/usage-summary` for Enterprise/team accounts, Stripe balance at `cursor.com/api/auth/stripe`, and the usage-events CSV export at `cursor.com/api/dashboard/export-usage-events-csv`. The fallback combines the included request allowance with structured percentages and user-scoped on-demand spend; neither REST response is treated as the whole account snapshot by itself. The primary dashboard usage request refreshes the token and retries once after a 401/403; optional endpoint failures stay nonfatal when the other fallback response is usable and are recorded in the diagnostic log. Per-day spend imputation uses exported token counts priced through the shared [model pricing](../pricing.md); Cursor-native models (`auto`, `composer-*`, …) come from its supplement layer, which maintainers sync from [Cursor models & pricing](https://cursor.com/docs/models-and-pricing.md).
+Connect RPC on `api2.cursor.sh` (dashboard usage), combined REST fallback at `cursor.com/api/usage` and `cursor.com/api/usage-summary` for Enterprise/team accounts, Stripe balance at `cursor.com/api/auth/stripe`, and the usage-events CSV export at `cursor.com/api/dashboard/export-usage-events-csv`. The fallback combines the included request allowance with structured percentages and user-scoped on-demand spend; neither REST response is treated as the whole account snapshot by itself. All requests are read-only against the stored token — a 401/403 shows the renewal notice instead of refreshing and retrying; optional endpoint failures stay nonfatal when the other fallback response is usable and are recorded in the diagnostic log. Per-day spend imputation uses exported token counts priced through the shared [model pricing](../pricing.md); Cursor-native models (`auto`, `composer-*`, …) come from its supplement layer, which maintainers sync from [Cursor models & pricing](https://cursor.com/docs/models-and-pricing.md).

@@ -18,7 +18,7 @@ enum CodexUsageMapper {
     ) throws -> CodexMappedUsage {
         try ProviderAuthRetry.requireSuccess(
             response,
-            authExpired: CodexAuthError.tokenExpired,
+            authExpired: CodexAuthError.loginRenewalRequired,
             requestFailed: { CodexUsageError.requestFailed($0) }
         )
 

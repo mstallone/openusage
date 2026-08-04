@@ -135,7 +135,7 @@ final class ClaudeAccountIsolationTests: XCTestCase {
 
     private func makeFixture(
         files: FakeFiles,
-        keychain: any KeychainAccessing = FakeKeychain(),
+        keychain: any KeychainReading = FakeKeychain(),
         handler: @escaping @Sendable (HTTPRequest) async throws -> HTTPResponse
     ) -> Fixture {
         let http = RoutingHTTPClient(handler: handler)

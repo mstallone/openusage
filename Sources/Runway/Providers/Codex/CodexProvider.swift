@@ -118,22 +118,49 @@ final class CodexProvider: ProviderRuntime {
         case .state(let keychainCandidate):
             do {
                 return try await probe(authState: keychainCandidate)
+            } catch let error as CodexAuthError where error == .loginRenewalRequired {
+                // Keyring logins degrade exactly like file logins: local tiles under the notice.
+                AppLog.info(LogTag.auth("codex"), "login needs renewal; serving local usage with a renewal notice")
+                return await localUsageSnapshot(
+                    mapped: CodexMappedUsage(plan: nil, lines: []),
+                    warning: error.localizedDescription
+                )
             } catch {
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
         case .permissionRequired:
             // The keyring likely holds the freshest rotated credential (it is Codex CLI's source of
             // truth in keyring mode), so approving it is the actionable fix — surface it over a
-            // stale file candidate's token error.
-            return ProviderSnapshot.error(provider: provider, error: CodexAuthError.keychainPermissionRequired)
+            // stale file candidate's token error. Like the renewal path, the local spend tiles are
+            // still trustworthy, so this rides as a header warning rather than an error card.
+            AppLog.info(LogTag.auth("codex"), "keyring approval pending; serving local usage with a permission notice")
+            return await localUsageSnapshot(
+                mapped: CodexMappedUsage(plan: nil, lines: []),
+                warning: CodexAuthError.keychainPermissionRequired.localizedDescription
+            )
         case .unreadable:
             // Approval cannot fix a locked keychain or a failing securityd, so don't ask for it.
-            return ProviderSnapshot.error(provider: provider, error: CodexAuthError.credentialStoreUnreadable)
+            // The local tiles survive the same way they do for a pending approval.
+            AppLog.error(LogTag.auth("codex"), "keyring item could not be read; serving local usage with an unreadable-keychain notice")
+            return await localUsageSnapshot(
+                mapped: CodexMappedUsage(plan: nil, lines: []),
+                warning: CodexAuthError.credentialStoreUnreadable.localizedDescription
+            )
         case .none:
             break
         }
 
         if let lastFallbackError {
+            // A lapsed login degrades to the local spend tiles under a renewal notice — the data is
+            // still trustworthy and the fix belongs to the `codex` CLI — while other failures stay
+            // hard error cards.
+            if let authError = lastFallbackError as? CodexAuthError, authError == .loginRenewalRequired {
+                AppLog.info(LogTag.auth("codex"), "login needs renewal; serving local usage with a renewal notice")
+                return await localUsageSnapshot(
+                    mapped: CodexMappedUsage(plan: nil, lines: []),
+                    warning: authError.localizedDescription
+                )
+            }
             return ProviderSnapshot.error(provider: provider, error: lastFallbackError)
         }
         return ProviderSnapshot.error(provider: provider, error: CodexAuthError.notLoggedIn)
@@ -150,8 +177,9 @@ final class CodexProvider: ProviderRuntime {
 
         if authStore.needsRefresh(authState.auth) {
             // The `codex` CLI may have rotated the token on disk since we loaded it. Re-read the live
-            // credential first and adopt its (newer) access token — refreshing our stale copy would send
-            // an already-rotated refresh_token and trip `refresh_token_reused` (issue #516).
+            // credential and adopt its (newer) access token. Runway itself never refreshes: the CLI
+            // owns rotation, and a second rotator trips OpenAI's `refresh_token_reused` reuse
+            // detection (issue #516) — the same failure class the Claude read-only change closed.
             if let live = authStore.reload(authState),
                let liveToken = live.auth.tokens?.accessToken, !liveToken.isEmpty {
                 authState = live
@@ -159,14 +187,14 @@ final class CodexProvider: ProviderRuntime {
             }
         }
 
-        if authStore.needsRefresh(authState.auth),
-           let refreshToken = authState.auth.tokens?.refreshToken,
-           !refreshToken.isEmpty {
-            let refreshed = try await refreshAccessToken(authState: &authState, refreshToken: refreshToken)
-            accessToken = refreshed
+        // An expired stamp means the call below is doomed; skip the network round trip. Renewal
+        // belongs to the `codex` CLI.
+        if authStore.isExpired(authState.auth) {
+            AppLog.info(LogTag.auth("codex"), "access token expired; renewal belongs to Codex")
+            throw CodexAuthError.loginRenewalRequired
         }
 
-        let response = try await fetchUsageWithRetry(accessToken: accessToken, authState: &authState)
+        let response = try await fetchUsage(accessToken: accessToken, accountID: authState.auth.tokens?.accountID)
         // A successful exact keyring candidate can now safely bind its home for the next launch's
         // attributes-only discovery pass.
         _ = authStore.recordSelectedIdentity(authState)
@@ -176,11 +204,14 @@ final class CodexProvider: ProviderRuntime {
             accessToken: currentToken,
             accountID: authState.auth.tokens?.accountID
         )
-        var mapped = try CodexUsageMapper.mapUsageResponse(response, resetCredits: resetCredits, now: now())
+        let mapped = try CodexUsageMapper.mapUsageResponse(response, resetCredits: resetCredits, now: now())
+        return await localUsageSnapshot(mapped: mapped, warning: nil)
+    }
 
-        // Local spend tiles, scanned natively from the Codex CLI's session rollouts and priced through
-        // the shared pricing store, merged with Codex usage that happened inside pi (attributed back
-        // here). Both scans run on their scanner actors, off the main actor.
+    /// Assembles the published snapshot from whatever live usage is available plus the always-local
+    /// spend tiles and trend (scanned from the Codex CLI's session rollouts and pi's logs).
+    private func localUsageSnapshot(mapped initialMapped: CodexMappedUsage, warning: String?) async -> ProviderSnapshot {
+        var mapped = initialMapped
         let pricing = await pricing()
         let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
         let piScan: LogUsageScan?
@@ -220,7 +251,8 @@ final class CodexProvider: ProviderRuntime {
             plan: mapped.plan,
             lines: mapped.lines,
             refreshedAt: now(),
-            usageHistory: usageHistory
+            usageHistory: usageHistory,
+            warning: warning
         )
     }
 
@@ -237,48 +269,20 @@ final class CodexProvider: ProviderRuntime {
         }
     }
 
-    private func fetchUsageWithRetry(accessToken: String, authState: inout CodexAuthState) async throws -> HTTPResponse {
-        var working = authState
-        defer { authState = working }
-        return try await ProviderAuthRetry.fetch(
-            token: accessToken,
-            attempt: { try await self.usageClient.fetchUsage(accessToken: $0, accountID: working.auth.tokens?.accountID) },
-            refreshAccessToken: {
-                guard let refreshToken = working.auth.tokens?.refreshToken, !refreshToken.isEmpty else {
-                    throw CodexAuthError.tokenExpired
-                }
-                do {
-                    return try await self.refreshAccessToken(authState: &working, refreshToken: refreshToken)
-                } catch let error as CodexAuthError {
-                    throw error
-                } catch {
-                    throw CodexUsageError.connectionFailed
-                }
-            },
-            connectionFailed: CodexUsageError.connectionFailed,
-            authExpired: CodexAuthError.tokenExpired
-        )
-    }
-
-    private func refreshAccessToken(authState: inout CodexAuthState, refreshToken: String) async throws -> String {
-        let response = try await usageClient.refreshToken(refreshToken)
-        authState.auth.tokens?.accessToken = response.accessToken
-        if let refreshToken = response.refreshToken {
-            authState.auth.tokens?.refreshToken = refreshToken
-        }
-        if let idToken = response.idToken {
-            authState.auth.tokens?.idToken = idToken
-        }
-        authState.auth.lastRefresh = RunwayISO8601.string(from: now())
-        // Fail loudly: a swallowed save strands the rotated token on disk (next launch re-refreshes /
-        // can surface a false "token expired"). The refreshed token works for this session, so log and
-        // continue. This is also the only call site of authStore.save, so a genuinely undecodable
-        // payload (CodexAuthError.invalidAuthPayload) now surfaces in the log instead of vanishing.
+    /// Fetch usage with the token exactly as Codex stored it. Runway is a read-only consumer of
+    /// Codex's credentials: it never calls the OAuth token endpoint and never writes `auth.json` or
+    /// the keyring item — so a 401/403 means the login lapsed and only the `codex` CLI can renew it.
+    private func fetchUsage(accessToken: String, accountID: String?) async throws -> HTTPResponse {
+        let response: HTTPResponse
         do {
-            try authStore.save(authState)
+            response = try await usageClient.fetchUsage(accessToken: accessToken, accountID: accountID)
         } catch {
-            AppLog.error(LogTag.auth("codex"), "failed to persist rotated credentials; using the refreshed token for this session only: \(error.localizedDescription)")
+            throw CodexUsageError.connectionFailed
         }
-        return response.accessToken
+        if ProviderAuthRetry.isAuthFailure(response) {
+            AppLog.warn(LogTag.auth("codex"), "unauthorized (\(response.statusCode)); renewal belongs to Codex")
+            throw CodexAuthError.loginRenewalRequired
+        }
+        return response
     }
 }

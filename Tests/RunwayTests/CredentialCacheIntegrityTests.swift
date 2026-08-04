@@ -215,7 +215,7 @@ final class AntigravityCredentialCacheIntegrityTests: XCTestCase {
     }
 
     private func makeProvider(
-        keychain: KeychainAccessing,
+        keychain: KeychainReading,
         files: TextFileAccessing,
         http: RoutingHTTPClient
     ) -> AntigravityProvider {
@@ -263,7 +263,7 @@ private struct CredentialEmptyProcessRunner: ProcessRunning {
     }
 }
 
-private struct FailingAntigravityKeychain: KeychainAccessing {
+private struct FailingAntigravityKeychain: KeychainReading {
     func readGenericPassword(service: String) throws -> String? {
         throw FailingAntigravityKeychainError.unreadable
     }
