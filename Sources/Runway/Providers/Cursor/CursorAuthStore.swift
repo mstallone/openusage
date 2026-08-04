@@ -107,6 +107,20 @@ struct CursorAuthStore: Sendable {
                 }
             }
 
+            // Read-only means a lapsed selected token ends the refresh, so prefer a usable token
+            // from the other source when it provably belongs to the SAME account. Requiring both
+            // subjects to be known and equal keeps this from ever crossing accounts — which source
+            // wins between DIFFERENT accounts stays governed by the membership rule above.
+            if let sqliteAccessToken,
+               let keychainAccessToken,
+               isExpired(sqliteAccessToken),
+               !isExpired(keychainAccessToken),
+               let subject = Self.tokenSubject(sqliteAccessToken),
+               subject == Self.tokenSubject(keychainAccessToken)
+            {
+                return .state(CursorAuthState(accessToken: keychainAccessToken, source: .keychain))
+            }
+
             return .state(CursorAuthState(accessToken: sqliteAccessToken, source: .sqlite))
         }
 

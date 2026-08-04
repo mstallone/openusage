@@ -2,6 +2,53 @@ import XCTest
 @testable import Runway
 
 final class CursorAuthStoreTests: XCTestCase {
+    func testExpiredSQLiteTokenYieldsToAUsableSameAccountKeychainToken() {
+        // Read-only means a lapsed selected token ends the refresh, so a usable token for the SAME
+        // account must win instead of reporting renewal while a working credential sits unread.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiredSQLite = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 - 60)
+        let liveKeychain = makeCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
+        let store = CursorAuthStore(
+            sqlite: FakeSQLite(values: [
+                CursorAuthStore.accessTokenKey: expiredSQLite,
+                CursorAuthStore.membershipTypeKey: "free"
+            ]),
+            keychain: ServiceKeychain(values: [
+                CursorAuthStore.keychainAccessTokenService: liveKeychain
+            ]),
+            now: { now }
+        )
+
+        let state = store.loadCredentials().state
+
+        XCTAssertEqual(state?.source, .keychain)
+        XCTAssertEqual(state?.accessToken, liveKeychain)
+    }
+
+    func testExpiredSQLiteTokenNeverCrossesToADifferentAccountsKeychainToken() {
+        // The same fallback must not bridge accounts: a different subject keeps SQLite selected (a
+        // paid membership here), so the card reports renewal for its own account instead of
+        // silently showing another account's usage.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiredSQLite = makeCursorJWT(sub: "auth0|user-a", exp: now.timeIntervalSince1970 - 60)
+        let otherAccount = makeCursorJWT(sub: "auth0|user-b", exp: now.timeIntervalSince1970 + 3_600)
+        let store = CursorAuthStore(
+            sqlite: FakeSQLite(values: [
+                CursorAuthStore.accessTokenKey: expiredSQLite,
+                CursorAuthStore.membershipTypeKey: "pro"
+            ]),
+            keychain: ServiceKeychain(values: [
+                CursorAuthStore.keychainAccessTokenService: otherAccount
+            ]),
+            now: { now }
+        )
+
+        let state = store.loadCredentials().state
+
+        XCTAssertEqual(state?.source, .sqlite)
+        XCTAssertEqual(state?.accessToken, expiredSQLite)
+    }
+
     func testPrefersKeychainWhenSQLiteLooksFreeAndSubjectsDiffer() {
         let sqliteToken = makeCursorJWT(sub: "google-oauth2|sqlite-user")
         let keychainToken = makeCursorJWT(sub: "auth0|keychain-user")
