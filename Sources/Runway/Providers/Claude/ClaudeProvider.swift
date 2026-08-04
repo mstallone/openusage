@@ -242,12 +242,15 @@ final class ClaudeProvider: ProviderRuntime {
         )
 
         var warning: String?
+        // Everything below is a "fix this, then refresh" notice; only the rate-limited fetch overrides it.
+        var warningAction = ProviderSnapshot.WarningAction.refresh
         switch authStore.liveUsageAvailability(state) {
         case .available:
             mapped = try await fetchLiveUsage(state: state)
             // A rate-limited fetch rides its "Updates blocked by Anthropic" notice on the mapped usage so
             // it reaches the header triangle even when the badge/note lines aren't in the user's layout.
             warning = mapped.warning
+            warningAction = mapped.warningAction
         case .missingProfileScope:
             // The login authenticates for inference but lacks the `user:profile` scope the usage endpoint
             // needs (typically a `claude setup-token` token). Don't leave the session/weekly bars silently
@@ -262,16 +265,19 @@ final class ClaudeProvider: ProviderRuntime {
             break
         }
         if let fallbackWarning {
+            // The Desktop-login notice: the user renews it, then refreshes — actionable.
             warning = fallbackWarning
+            warningAction = .refresh
         }
-        return await localUsageSnapshot(mapped: mapped, warning: warning)
+        return await localUsageSnapshot(mapped: mapped, warning: warning, warningAction: warningAction)
     }
 
     /// Assembles the published snapshot from whatever live usage is available plus the always-local
     /// spend tiles and trend.
     private func localUsageSnapshot(
         mapped initialMapped: ClaudeMappedUsage,
-        warning: String?
+        warning: String?,
+        warningAction: ProviderSnapshot.WarningAction = .refresh
     ) async -> ProviderSnapshot {
         var mapped = initialMapped
         // Local spend tiles, scanned natively from Claude Code's session logs and priced through the
@@ -308,7 +314,8 @@ final class ClaudeProvider: ProviderRuntime {
             lines: mapped.lines,
             refreshedAt: now(),
             usageHistory: usageHistory,
-            warning: warning
+            warning: warning,
+            warningAction: warningAction
         )
     }
 
@@ -385,6 +392,9 @@ final class ClaudeProvider: ProviderRuntime {
         )
         mapped.lines.append(ClaudeUsageMapper.rateLimitedNote(retryAfterSeconds: retryAfterSeconds))
         mapped.warning = ClaudeUsageMapper.rateLimitedWarning(retryAfterSeconds: retryAfterSeconds)
+        // Last-good usage is a clean fetch, so its action is `.refresh`; the rate-limit notice replacing
+        // its warning must carry `.wait` with it or the triangle stays clickable on stale bars.
+        mapped.warningAction = .wait
         return mapped
     }
 

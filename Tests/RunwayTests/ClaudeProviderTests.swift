@@ -558,6 +558,24 @@ final class ClaudeUsageMapperTests: XCTestCase {
         XCTAssertEqual(text(mapped.lines, "Note"), "Live usage rate limited - retry in ~10m")
     }
 
+    func testRateLimitedWarningTellsTheHeaderNotToOfferARefresh() {
+        // The header triangle is a refresh button, and this warning's own text is "manual refreshes
+        // will make it worse" — so the snapshot carrying it must mark itself `.wait`, or the app
+        // would offer the exact action the tooltip warns against.
+        let mapped = ClaudeUsageMapper.rateLimitedUsage(
+            credentials: ClaudeOAuth(subscriptionType: "pro"),
+            retryAfterSeconds: 600
+        )
+
+        XCTAssertEqual(
+            mapped.warning,
+            "Updates blocked by Anthropic. Be patient — manual refreshes will make it worse. Retrying in ~10m."
+        )
+        XCTAssertEqual(mapped.warningAction, .wait)
+        // The scope notice is the opposite case: the user re-logs in, then refreshes to pick it up.
+        XCTAssertEqual(ClaudeMappedUsage(lines: []).warningAction, .refresh)
+    }
+
     private func progress(_ lines: [MetricLine], _ label: String) -> (used: Double, limit: Double, resetsAt: Date?, periodDurationMs: Int?)? {
         guard case .progress(_, let used, let limit, _, let resetsAt, let periodDurationMs, _) = lines.first(where: { $0.label == label }) else {
             return nil
@@ -1177,6 +1195,7 @@ final class ClaudeProviderTests: XCTestCase {
         let first = await provider.refresh()
         XCTAssertEqual(Self.progress(first.lines, "Session")?.used, 25)
         XCTAssertNil(first.warning)
+        XCTAssertEqual(first.resolvedWarningAction, .refresh)
 
         // 2) 429: still shows the cached Session bar plus the staleness note, not a bare "Status" badge —
         // and the header warning flags the rate-limited state even when the note line isn't in the layout.
@@ -1185,6 +1204,9 @@ final class ClaudeProviderTests: XCTestCase {
         XCTAssertEqual(text(second.lines, "Note")?.contains("rate limited"), true)
         XCTAssertNil(badge(second.lines, "Status"))
         XCTAssertEqual(second.warning?.hasPrefix("Updates blocked by Anthropic"), true)
+        // Cached bars from a clean fetch, but the notice on top of them is the rate limit's — the
+        // header must not offer a refresh while this snapshot is on screen.
+        XCTAssertEqual(second.resolvedWarningAction, .wait)
 
         // 3) Within the cooldown the live call is skipped entirely; the cached bar is still shown and the
         // warning persists.
@@ -1192,6 +1214,7 @@ final class ClaudeProviderTests: XCTestCase {
         let third = await provider.refresh()
         XCTAssertEqual(Self.progress(third.lines, "Session")?.used, 25)
         XCTAssertEqual(third.warning?.hasPrefix("Updates blocked by Anthropic"), true)
+        XCTAssertEqual(third.resolvedWarningAction, .wait)
         XCTAssertEqual(httpClient.requests.filter { $0.url.absoluteString.hasSuffix("/api/oauth/usage") }.count, 2)
     }
 
