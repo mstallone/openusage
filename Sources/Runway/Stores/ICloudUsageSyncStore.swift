@@ -402,9 +402,16 @@ final class ICloudUsageSyncStore {
     ) -> (id: String, error: String?, isProvisional: Bool) {
         let saved = normalizedDeviceID(defaults.string(forKey: deviceIDKey))
         do {
-            if let stored = normalizedDeviceID(try store.readDeviceID()) {
-                defaults.set(stored, forKey: deviceIDKey)
-                return (stored, nil, false)
+            let stored = try store.readDeviceID()
+            if let stored {
+                // Present but not a UUID is a corrupt identity, not an absent one. Falling through
+                // would mint a fresh id and publish a second record for a Mac that already has one,
+                // so this fails into the provisional path exactly like an unreadable item.
+                guard let normalized = normalizedDeviceID(stored) else {
+                    throw KeychainError.readFailed("This Mac's stored sync identity is not a valid identifier.")
+                }
+                defaults.set(normalized, forKey: deviceIDKey)
+                return (normalized, nil, false)
             }
 
             // The saved preference is the same id the Keychain held, so on upgrades it seeds the

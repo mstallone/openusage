@@ -104,7 +104,10 @@ struct CopilotAuthStore: Sendable {
         var keychainError: CopilotAuthError?
         if ghToken == nil {
             var load = loadFromGhKeychain()
-            if load == .keychainPermissionRequired, allowKeychainInteraction {
+            // Retry BOTH unreadable outcomes when the user is watching. An earlier automatic read
+            // can leave the item circuit-broken for 15 minutes, so a manual refresh right after the
+            // user unlocks their keychain would otherwise keep reporting the stale failure.
+            if load == .keychainPermissionRequired || load == .unreadable, allowKeychainInteraction {
                 load = loadFromGhKeychain(allowKeychainInteraction: true)
             }
             switch load {
@@ -169,8 +172,14 @@ struct CopilotAuthStore: Sendable {
                     case false?:
                         return .unreadable
                     case nil:
-                        if keychain.genericPasswordExists(service: Self.ghKeychainService, account: account) != false {
-                            return .keychainPermissionRequired
+                        // No verdict recorded: UI-gate contention leaves none by design, and the
+                        // probe behind that same gate answers nil too. The item was never examined,
+                        // so report it unreadable rather than asking to approve an item that may
+                        // already be authorized. A probe that proves absence still falls through.
+                        switch keychain.genericPasswordExists(service: Self.ghKeychainService, account: account) {
+                        case true?: return .keychainPermissionRequired
+                        case nil: return .unreadable
+                        case false?: break
                         }
                     }
                 case .missing:
@@ -194,9 +203,14 @@ struct CopilotAuthStore: Sendable {
                 case false?:
                     return .unreadable
                 case nil:
-                    return keychain.genericPasswordExists(service: Self.ghKeychainService) != false
-                        ? .keychainPermissionRequired
-                        : .none
+                    // No verdict and an indeterminate probe means the item was never examined —
+                    // unreadable, not unapproved. A confirmed-present item still asks for approval,
+                    // and only a confirmed-absent one reports no credential.
+                    switch keychain.genericPasswordExists(service: Self.ghKeychainService) {
+                    case true?: return .keychainPermissionRequired
+                    case nil: return .unreadable
+                    case false?: return .none
+                    }
                 }
             }
         }
@@ -229,7 +243,10 @@ struct CopilotAuthStore: Sendable {
     private func interactiveFailureLoad(account: String?) -> CopilotCredentialLoad {
         let denied = account.map { keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService, account: $0) }
             ?? keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService)
-        return denied == false ? .unreadable : .keychainPermissionRequired
+        // Only a recorded ACL denial asks for approval. No verdict at all means the read never
+        // reached one — UI-gate contention leaves no category by design — and telling the user to
+        // choose Always Allow for an item that was never examined is wrong advice.
+        return denied == true ? .keychainPermissionRequired : .unreadable
     }
 
     private func credentialLoad(fromKeychainRaw raw: String) -> CopilotCredentialLoad {
