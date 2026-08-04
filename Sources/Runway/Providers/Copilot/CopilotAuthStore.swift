@@ -155,8 +155,10 @@ struct CopilotAuthStore: Sendable {
             case .unavailable:
                 // An existing-but-unreadable item is a real login footprint (`hasLocalCredentials`
                 // must see it); only a manual refresh may convert it into access. The existence
-                // probe is attributes-only and prompt-free.
-                return keychain.genericPasswordExists(service: Self.ghKeychainService) == true
+                // probe is attributes-only and prompt-free, and `nil` from it means "cannot check"
+                // (locked keychain, suppressed UI, stuck flight) — never "absent", which would
+                // report a real login as logged-out.
+                return keychain.genericPasswordExists(service: Self.ghKeychainService) != false
                     ? .keychainPermissionRequired
                     : .none
             }
