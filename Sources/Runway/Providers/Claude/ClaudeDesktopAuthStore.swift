@@ -53,7 +53,9 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             service: Self.service,
             account: Self.account,
             interactive: allowInteraction,
-            unavailable: { ClaudeDesktopCredentialError.permissionRequired }
+            // Replays the original category: approving Safe Storage cannot fix an
+            // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
+            unavailable: { denied in denied ? ClaudeDesktopCredentialError.permissionRequired : ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable)) }
         ) { () -> OSStatus in
             let status = allowInteraction
                 ? KeychainUISuppression.withUIAllowed { SecItemCopyMatching(query as CFDictionary, &result) }
