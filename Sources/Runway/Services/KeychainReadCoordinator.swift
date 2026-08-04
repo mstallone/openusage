@@ -101,7 +101,11 @@ final class KeychainReadCoordinator: @unchecked Sendable {
             // unavailable — logged, because the wedged call may never produce its own diagnostic.
             let entry = entries[key]
             condition.unlock()
-            if let entry, !entry.tripped, let value = entry.value,
+            // ONLY an interactive recovery's entry, which carries no fingerprint. A fingerprinted
+            // entry was cached against the attributes the item had BEFORE the stuck read, so the
+            // stuck read may be fetching a rotation of exactly that secret — serving the cached one
+            // would authenticate with a superseded token.
+            if let entry, !entry.tripped, entry.fingerprint == nil, let value = entry.value,
                now().timeIntervalSince(entry.updatedAt) < revalidateAfter {
                 return value
             }

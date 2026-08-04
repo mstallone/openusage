@@ -408,7 +408,7 @@ enum KeychainUISuppression {
     /// already hold `suppressedDepth`, and those never wait on anything once entered. The deadline
     /// only guards against a wedged suppressed call — it cannot be extended by new entrants, because
     /// those park on `interactiveCount` instead.
-    static func withUIAllowed<T>(_ body: () throws -> T) rethrows -> T {
+    static func withUIAllowed<T>(_ body: (_ uiAvailable: Bool) throws -> T) rethrows -> T {
         condition.lock()
         interactiveCount += 1
         let deadline = Date().addingTimeInterval(interactiveGateWait)
@@ -427,8 +427,9 @@ enum KeychainUISuppression {
         if suppressionStuck {
             // A suppressed call has been wedged in securityd for over 2s — pathological. Still run
             // the body rather than fail preemptively or wait forever: an already-authorized item
-            // reads fine even with UI disabled, and a needs-prompt item fails into the callers'
-            // friendly "couldn't be checked" handling instead of hanging the manual refresh.
+            // reads fine even with UI disabled. But the body is told UI is unavailable, because a
+            // needs-prompt item will now fail with a status that LOOKS like an ACL denial when in
+            // truth the prompt was never possible.
             AppLog.warn(.keychain, "interactive keychain operation proceeding while a suppressed call is stuck; an approval prompt may not appear")
         }
         defer {
@@ -439,7 +440,7 @@ enum KeychainUISuppression {
             }
             condition.unlock()
         }
-        return try body()
+        return try body(!suppressionStuck)
     }
 }
 
@@ -505,8 +506,18 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             kSecReturnData as String: true,
         ].merging(account.map { [kSecAttrAccount as String: $0] } ?? [:]) { current, _ in current }
         var item: CFTypeRef?
-        let status = KeychainUISuppression.withUIAllowed {
-            SecItemCopyMatching(query as CFDictionary, &item)
+        var uiWasAvailable = true
+        let status = KeychainUISuppression.withUIAllowed { uiAvailable in
+            uiWasAvailable = uiAvailable
+            return SecItemCopyMatching(query as CFDictionary, &item)
+        }
+        if status != errSecSuccess, status != errSecItemNotFound, !uiWasAvailable {
+            // The prompt never had a chance to appear, so a denial-shaped status here says nothing
+            // about this item's ACL. Recording it would trip the item and hand the user an Always
+            // Allow instruction for a dialog that was never shown.
+            coordinator.recordContention(service: service, account: account)
+            AppLog.warn(.keychain, "interactive read for service '\(service)' failed while the UI gate was held by a stuck call")
+            throw KeychainError.readFailed("The keychain was busy. Try refreshing again.")
         }
         switch status {
         case errSecSuccess:

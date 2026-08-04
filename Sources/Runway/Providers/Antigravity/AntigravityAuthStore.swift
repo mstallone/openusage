@@ -47,6 +47,16 @@ struct AntigravityAuthStore: Sendable {
                     account: Self.keychainAccount
                 )
             } catch {
+                // The user just answered the dialog, so a denial here is the clearest ACL evidence
+                // there is — same verdict the automatic branch below consults. Telling them to
+                // unlock the keychain after they cancelled the prompt would be the wrong fix.
+                if keychain.lastReadWasPermissionDenied(
+                    service: Self.keychainService,
+                    account: Self.keychainAccount
+                ) == true {
+                    AppLog.error(LogTag.auth("antigravity"), "keychain approval was not granted; refresh manually to approve access")
+                    throw AntigravityError.keychainPermissionRequired
+                }
                 AppLog.error(LogTag.auth("antigravity"), "keychain credential read failed")
                 throw AntigravityError.credentialStoreUnreadable
             }

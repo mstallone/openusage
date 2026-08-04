@@ -73,7 +73,7 @@ final class KeychainAccessorTests: XCTestCase {
         SecKeychainGetUserInteractionAllowed(&allowed)
         XCTAssertTrue(allowed.boolValue, "UI must be re-allowed once the outermost scope exits")
         let start = Date()
-        KeychainUISuppression.withUIAllowed {
+        KeychainUISuppression.withUIAllowed { _ in
             SecKeychainGetUserInteractionAllowed(&allowed)
             XCTAssertTrue(allowed.boolValue, "an interactive operation must run with UI allowed")
         }
@@ -92,7 +92,7 @@ final class KeychainAccessorTests: XCTestCase {
         let events = Locked<[String]>([])
         let suppressedDone = expectation(description: "suppressed call completed")
 
-        KeychainUISuppression.withUIAllowed {
+        KeychainUISuppression.withUIAllowed { _ in
             let thread = Thread {
                 KeychainUISuppression.withUISuppressed { _ in
                     events.withLock { $0.append("suppressed-ran") }
@@ -119,7 +119,7 @@ final class KeychainAccessorTests: XCTestCase {
         let interactiveDone = expectation(description: "interactive operation finished")
 
         let holder = Thread {
-            KeychainUISuppression.withUIAllowed {
+            KeychainUISuppression.withUIAllowed { _ in
                 interactiveHeld.signal()
                 releaseInteractive.wait()
             }
