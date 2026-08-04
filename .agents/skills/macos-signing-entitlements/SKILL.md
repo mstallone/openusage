@@ -40,7 +40,7 @@ hardened runtime confusion, or trust-policy rejection.
 
 - `codesign -dvvv --entitlements :- <app-or-binary>`
 - `spctl -a -vv <app-or-binary>`
-- `security find-identity -p codesigning -v`
+- `xcrun swift script/find_codesigning_identity.swift <certificate-name-prefix> <team-id>`
 - `plutil -p <path-to-entitlements-or-plist>`
 
 ## Guardrails

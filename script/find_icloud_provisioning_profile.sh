@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 profile_matches_identifiers() {
   local application_identifier="$1"
   local container_identifier="$2"
@@ -53,7 +55,7 @@ for directory in "${profile_directories[@]}"; do
 
   while IFS= read -r -d '' candidate; do
     decoded_profile=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/runway-profile.XXXXXX")
-    if ! /usr/bin/security cms -D -i "$candidate" >"$decoded_profile" 2>/dev/null; then
+    if ! "$SCRIPT_DIR/decode_provisioning_profile.sh" "$candidate" "$decoded_profile" 2>/dev/null; then
       /bin/rm -f "$decoded_profile"
       continue
     fi
