@@ -5,8 +5,10 @@ import Foundation
 /// unlock credential UI (a prompt from the separately signed CLI would also authorize the wrong
 /// binary), while a GUI refresh is user-attended and may ask once.
 enum ProviderRefreshContext {
-    /// A user-attended refresh from the app. The ONLY context in which a provider may raise a
-    /// Keychain approval dialog.
+    /// A user-attended refresh from the app: the only REFRESH that may raise a Keychain approval
+    /// dialog. It is not the only user action that can — `CodexResetClaimService` asks for approval
+    /// when a reset credit is claimed and every readable credential was rejected — but any prompt
+    /// must, like these two, follow directly from something the user just clicked.
     @TaskLocal static var isManual = false
     /// The caller bypassed the snapshot cache — ⌘R, `runway --force`, or an automated retry. Use
     /// this for non-UI "the user asked for fresh data" behavior such as skipping a negative cache.

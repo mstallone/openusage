@@ -53,8 +53,10 @@ Keychain type (`KeychainReading`) — a write simply does not compile there. Cla
 read-only: Runway never refreshes its OAuth tokens and never writes its credential stores, because
 two apps rotating the same login can trip the server's token-reuse protection and sign the user out.
 The Copilot and Antigravity stores work the same way. Every provider's automatic Keychain reads are
-in-process and prompt-free; only a user's manual refresh may raise the approval dialog, once per
-protected item, and a denial stops the pass instead of chaining further prompts.
+in-process and prompt-free; only a direct user action may raise the approval dialog, once per
+protected item, and a denial stops the pass instead of chaining further prompts. Two actions qualify:
+a manual refresh, and clicking **Use** on a Codex reset credit after every readable credential was
+rejected. Both are user-initiated with the app in front of the user.
 
 Two write exceptions remain, both explicit. Runway's own secrets live in `RunwayOwnedKeychainStore`
 (currently the iCloud-sync device id) under a Runway-specific service and account — that is the only
