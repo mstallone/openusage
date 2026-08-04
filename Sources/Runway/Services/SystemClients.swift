@@ -185,6 +185,11 @@ protocol KeychainReading: Sendable {
     /// uses, so a recovery probe joins that read's flight and breaker instead of launching an
     /// unrelated service-wide query that neither waits on it nor sees it fail.
     func genericPasswordForCurrentUserExists(service: String) -> Bool?
+    /// Why this item's last non-interactive read failed: `true` = its ACL has not approved Runway
+    /// (a manual refresh + Always Allow fixes it), `false` = the keychain itself couldn't be read
+    /// (unlock it), `nil` = no failure recorded. Taken from the read's own `OSStatus`, so it stays
+    /// answerable after the breaker trips — a follow-up probe would just be answered locally.
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool?
     /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
     /// date). Discovery binds a cached account identity to this so replacing a keyring item invalidates
     /// the old identity without reading its secret on the launch path.
@@ -266,6 +271,10 @@ extension KeychainReading {
 
     func genericPasswordForCurrentUserExists(service: String) -> Bool? {
         genericPasswordExists(service: service)
+    }
+
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        nil
     }
 
     func genericPasswordAttributeFingerprint(service: String, account: String) -> String? {
@@ -526,8 +535,15 @@ struct SecurityKeychainAccessor: KeychainReading {
         case errSecItemNotFound:
             return .missing
         default:
-            // Typically errSecAuthFailed: the item exists but its ACL does not (yet) authorize
-            // Runway, and UI to ask is forbidden here. Log the status only — never the item value.
+            // errSecAuthFailed / errSecInteractionNotAllowed mean the item EXISTS and its ACL does
+            // not (yet) authorize Runway — the status itself distinguishes that from a keychain we
+            // simply could not read, so remember it rather than probing again later (the breaker
+            // would answer that probe locally). Log the status only — never the item value.
+            coordinator.recordFailureCategory(
+                service: service,
+                account: account,
+                permissionDenied: status == errSecAuthFailed || status == errSecInteractionNotAllowed
+            )
             AppLog.debug(.keychain, "non-interactive read unavailable for service '\(service)' (status \(status))")
             return .unavailable
         }
@@ -548,6 +564,10 @@ struct SecurityKeychainAccessor: KeychainReading {
         coordinator.probe(service: service, account: account) {
             rawGenericPasswordExists(service: service, account: account)
         }
+    }
+
+    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+        coordinator.lastFailureWasPermissionDenied(service: service, account: account)
     }
 
     func genericPasswordForCurrentUserExists(service: String) -> Bool? {
