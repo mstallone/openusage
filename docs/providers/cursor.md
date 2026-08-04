@@ -21,7 +21,8 @@ Just be signed into the Cursor app. Runway reads Cursor's local state database (
 
 Automatic refreshes read the keychain entries silently and never open a macOS password dialog. If
 access hasn't been approved yet, the card says so — refresh manually once and choose **Always Allow**
-when macOS asks; later reads stay silent.
+when macOS asks; later reads stay silent. If the login keychain itself can't be read (it's locked,
+say), the card asks you to unlock it instead — approving nothing would fix that one.
 
 ## The spend tiles
 

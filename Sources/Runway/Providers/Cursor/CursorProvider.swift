@@ -76,6 +76,9 @@ final class CursorProvider: ProviderRuntime {
             state = loaded
         case .keychainPermissionRequired:
             return ProviderSnapshot.error(provider: provider, error: CursorAuthError.keychainPermissionRequired)
+        case .unreadable:
+            // Approval cannot fix a locked keychain or a failing securityd, so don't ask for it.
+            return ProviderSnapshot.error(provider: provider, error: CursorAuthError.credentialStoreUnreadable)
         case .none:
             return ProviderSnapshot.error(provider: provider, error: CursorAuthError.notLoggedIn)
         }
@@ -99,6 +102,11 @@ final class CursorProvider: ProviderRuntime {
                 return ProviderSnapshot.error(
                     provider: provider,
                     error: CursorAuthError.keychainPermissionRequired
+                )
+            case .unreadable:
+                return ProviderSnapshot.error(
+                    provider: provider,
+                    error: CursorAuthError.credentialStoreUnreadable
                 )
             case .none:
                 AppLog.info(

@@ -14,6 +14,7 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case loginRenewalRequired
     case keychainPermissionRequired
+    case credentialStoreUnreadable
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +24,8 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
             return "Cursor login needs renewal. Open the Cursor app (or run `agent login`), then refresh Runway."
         case .keychainPermissionRequired:
             return "Cursor login found in Keychain. Refresh manually and choose Always Allow to connect it."
+        case .credentialStoreUnreadable:
+            return "Cursor login couldn’t be read. Unlock your login keychain and refresh."
         }
     }
 }
@@ -33,6 +36,10 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
 enum CursorCredentialLoad: Equatable, Sendable {
     case state(CursorAuthState)
     case keychainPermissionRequired
+    /// The item could not be read for a reason approval cannot fix — a locked login keychain, or
+    /// securityd failing. Kept apart from `keychainPermissionRequired` so the card gives advice
+    /// that works.
+    case unreadable
     case none
 
     var state: CursorAuthState? {
@@ -89,7 +96,9 @@ struct CursorAuthStore: Sendable {
 
         // Whether the item is confirmed present but unreadable without approval. The existence
         // probe is attributes-only and prompt-free.
-        let anyProtected = protectedItemExists(accessRead, service: Self.keychainAccessTokenService)
+        // Non-nil means the keychain item could not be read; the value says whether approval or
+        // an unlock is the fix. Either way it is a real login footprint the caller must not skip.
+        let unreadableLoad = unreadableItemLoad(accessRead, service: Self.keychainAccessTokenService)
 
         if hasSQLiteAuth {
             if sqliteMembershipType == "free" {
@@ -99,8 +108,8 @@ struct CursorAuthStore: Sendable {
                 // partial keychain pair would fail later as a misleading "token expired". Either
                 // way, surface the approval need. A paid SQLite login keeps winning, as it always
                 // has.
-                if anyProtected {
-                    return .keychainPermissionRequired
+                if let unreadableLoad {
+                    return unreadableLoad
                 }
                 let sqliteSubject = Self.tokenSubject(sqliteAccessToken)
                 let keychainSubject = Self.tokenSubject(keychainAccessToken)
@@ -133,8 +142,8 @@ struct CursorAuthStore: Sendable {
             // The selected token is dead and a protected item may hold a live one for this account.
             // Asking for approval is actionable; reporting renewal here would not be, because the
             // usable credential is exactly the one Runway cannot read yet.
-            if sqliteExpired, anyProtected {
-                return .keychainPermissionRequired
+            if sqliteExpired, let unreadableLoad {
+                return unreadableLoad
             }
 
             return .state(CursorAuthState(accessToken: sqliteAccessToken, source: .sqlite))
@@ -142,8 +151,8 @@ struct CursorAuthStore: Sendable {
 
         // A protected item is a real login footprint (`hasLocalCredentials` must see it); only a
         // manual refresh may convert it into access.
-        if anyProtected {
-            return .keychainPermissionRequired
+        if let unreadableLoad {
+            return unreadableLoad
         }
 
         if hasKeychainAuth {
@@ -174,8 +183,8 @@ struct CursorAuthStore: Sendable {
             // An unreadable alternative is NOT "no alternative": the rejected selection may well be
             // dead while this protected item holds the live token, so ask for approval rather than
             // telling the user to sign in again.
-            if protectedItemExists(read, service: Self.keychainAccessTokenService) {
-                return .keychainPermissionRequired
+            if let load = unreadableItemLoad(read, service: Self.keychainAccessTokenService) {
+                return load
             }
             candidate = read.trimmedValue
             source = .keychain
@@ -197,7 +206,25 @@ struct CursorAuthStore: Sendable {
     /// treating it as logged-out would silently swallow an access problem. Only a confirmed-absent
     /// item reads as no footprint.
     private func protectedItemExists(_ read: NonInteractiveKeychainRead, service: String) -> Bool {
-        read == .unavailable && keychain.genericPasswordExists(service: service) != false
+        unreadableItemLoad(read, service: service) == .keychainPermissionRequired
+    }
+
+    /// Which failure an `.unavailable` read was, or nil when the item is provably absent. The
+    /// read's own status is the evidence; the probe is the fallback for when none was recorded,
+    /// where nil still means "cannot check" rather than "absent".
+    private func unreadableItemLoad(
+        _ read: NonInteractiveKeychainRead,
+        service: String
+    ) -> CursorCredentialLoad? {
+        guard read == .unavailable else { return nil }
+        switch keychain.lastReadWasPermissionDenied(service: service) {
+        case true?:
+            return .keychainPermissionRequired
+        case false?:
+            return .unreadable
+        case nil:
+            return keychain.genericPasswordExists(service: service) != false ? .keychainPermissionRequired : nil
+        }
     }
 
     /// Whether the token's own JWT `exp` has lapsed. Runway never refreshes a Cursor token — the
