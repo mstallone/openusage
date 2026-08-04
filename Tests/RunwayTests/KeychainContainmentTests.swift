@@ -291,6 +291,56 @@ final class KeychainContentionTests: XCTestCase {
         XCTAssertEqual(reads, 2, "an item that was never attempted must not be circuit-broken")
     }
 
+    func testAStaleContentionMarkerCannotDisableTheBreaker() {
+        // The marker is keyed by item, not by read. If a read records contention and then loses the
+        // sequence race, leaving its marker behind, the NEXT read's genuine failure would absorb it
+        // and skip tripping the breaker — Runway would keep calling securityd exactly when it
+        // should back off, which inverts the guarantee this whole class exists for.
+        let coordinator = KeychainReadCoordinator(inFlightWait: 0.05)
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let staleDone = expectation(description: "stale contended read finished")
+
+        // A: turned away by the UI gate, and slow enough that B stores first.
+        let stale = Thread {
+            _ = coordinator.nonInteractiveRead(
+                service: "svc", account: nil, fingerprint: { "fp-1" },
+                read: {
+                    started.signal()
+                    release.wait()
+                    // Turned away by the UI gate only now — AFTER the newer read already stored,
+                    // so nothing else consumes this marker before the stale store is discarded.
+                    coordinator.recordContention(service: "svc", account: nil)
+                    return .unavailable
+                }
+            )
+            staleDone.fulfill()
+        }
+        stale.start()
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
+
+        // B bypasses the stuck flight and recovers the item, so A's outcome is discarded.
+        _ = try? coordinator.interactiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { "approved-secret" }
+        )
+        release.signal()
+        wait(for: [staleDone], timeout: 2)
+
+        // A genuine denial now must trip the breaker: the next background read is answered locally.
+        // Both of these run on the test thread, so a plain counter is enough.
+        var reads = 0
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-2" },
+            read: { reads += 1; return .unavailable }
+        )
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-3" },
+            read: { reads += 1; return .unavailable }
+        )
+        XCTAssertEqual(reads, 1, "the second read must be answered by the breaker, not sent to Security")
+    }
+
     /// The Safe Storage readers go through `externalRead`, which used to trip on every thrown
     /// error — including the one the UI gate synthesizes when it turns a read away.
     func testContentionDoesNotTripTheBreakerOnTheExternalPath() {

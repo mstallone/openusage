@@ -300,13 +300,16 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         value: NonInteractiveKeychainRead?,
         tripped: Bool
     ) {
+        // Consumed BEFORE the sequence guard, because the marker belongs to the read now reporting
+        // its outcome — every path that records contention reaches this method. Leaving it behind
+        // when that outcome is discarded would let the NEXT read's genuine Security failure absorb
+        // it and skip tripping the breaker, which is the safety guarantee inverted: Runway would
+        // keep calling securityd exactly when it should be backing off.
+        let wasContention = contendedKeys.remove(key) != nil
         // `>=` and not `>`: a read stores at most once, so the only way to match is to be that
         // same read writing its own outcome.
         guard sequence >= storedSequences[key, default: Int.min] else { return }
         storedSequences[key] = sequence
-        // A read the UI gate turned away says nothing about this item, so it must not trip the
-        // breaker and lock the item out for the whole revalidation window.
-        let wasContention = contendedKeys.remove(key) != nil
         store(
             key: key,
             fingerprint: fingerprint,
