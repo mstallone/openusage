@@ -70,6 +70,15 @@ final class CopilotAuthStoreTests: XCTestCase {
         XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
     }
 
+    func testUnknownExistenceProbeIsTreatedAsUnreadableNotLoggedOut() {
+        // A locked keychain (or a probe suppressed behind a stuck flight) answers `nil` — "cannot
+        // check". Collapsing that into "not logged in" would disable Copilot at first-run detection
+        // and show a misleading sign-in error, so the unreadable state must survive.
+        let store = CopilotAuthStore(files: FakeFiles(), keychain: IndeterminateKeychain())
+
+        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+    }
+
     func testProtectedScopedItemNeverBroadensToAnotherAccountsToken() {
         // hosts.yml names the intended account, whose Keychain item is protected — but another
         // (authorized) gh:github.com item exists for a different account. The load must report
@@ -2169,5 +2178,30 @@ private final class CrossAccountKeychain: KeychainReading, @unchecked Sendable {
 
     func genericPasswordExists(service: String, account: String) -> Bool? {
         true
+    }
+}
+
+/// Reads are unavailable AND the existence probe itself fails (`nil`) — the locked-keychain shape,
+/// where item existence is genuinely unknown.
+private final class IndeterminateKeychain: KeychainReading, @unchecked Sendable {
+    func readGenericPassword(service: String) throws -> String? {
+        XCTFail("the subprocess-style read path must not be used")
+        return nil
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordWithoutUserInteraction(service: String, account: String) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func genericPasswordExists(service: String) -> Bool? {
+        nil
+    }
+
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        nil
     }
 }

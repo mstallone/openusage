@@ -13,8 +13,11 @@ runway codex --force   # refresh through the shared provider engine, cache, prin
 
 The command and app import the same providers, authentication stores, pricing, refresh coordinator, and
 snapshot cache. A normal read reuses snapshots less than five minutes old and refreshes missing or stale
-ones. `--force` is the CLI equivalent of the app's manual refresh: it bypasses that freshness gate and
-writes successful results to the same cache. The command uses credentials only on your machine; they
+ones. `--force` bypasses that freshness gate and
+writes successful results to the same cache. It is not a full substitute for the app's manual
+refresh: because nobody is watching a terminal command, `--force` never opens a macOS Keychain
+approval dialog. A provider whose card asks you to "refresh manually and choose Always Allow" has to
+be refreshed inside the Runway app once; after that approval, the command reads it silently too. The command uses credentials only on your machine; they
 never appear in the output.
 
 A provider argument names providers by plain string matching, exactly like the
