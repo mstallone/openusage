@@ -136,6 +136,10 @@ final class ICloudUsageSyncStore {
     private var readError: String?
     private var writeError: String?
     var serviceError: String? { writeError ?? readError ?? identityError }
+    /// The subset of `serviceError` that still matters once sync is switched OFF: an unresolved
+    /// identity means this Mac's existing iCloud record could not be removed, and nothing retries
+    /// while sync is disabled — so Settings keeps showing it instead of appearing cleanly off.
+    var disabledStateWarning: String? { identityIsProvisional ? identityError : nil }
     private(set) var invalidRecordMessages: [String] = []
     private(set) var documents: [UsageHistoryDocument] = []
 
