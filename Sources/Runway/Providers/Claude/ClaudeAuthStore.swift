@@ -589,7 +589,18 @@ struct ClaudeAuthStore: Sendable {
                 // Probe the SAME item the read just failed on (service + current user), so this
                 // joins that read's flight and sees its breaker instead of starting an unrelated
                 // service-wide query behind it.
-                let exists = keychain.genericPasswordForCurrentUserExists(service: service)
+                // The read's own status is authoritative and survives the breaker; a probe here
+                // would be answered locally (the failed read just tripped this item) and would
+                // wrongly downgrade a protected item to "keychain unreadable".
+                let exists: Bool?
+                switch keychain.lastReadForCurrentUserWasPermissionDenied(service: service) {
+                case true?:
+                    exists = true       // present, simply not approved yet
+                case false?:
+                    exists = nil        // the keychain itself couldn't be read
+                case nil:
+                    exists = keychain.genericPasswordForCurrentUserExists(service: service)
+                }
                 accessStatus.recordUnreadableItem(exists: exists)
                 if allowInteraction {
                     return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
