@@ -263,6 +263,66 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         )
     }
 
+    func testFailedDeletionWithAResolvedIdentityIsAlsoRetriedAndVisible() async throws {
+        // The other stranding path: identity is fine, but the CloudKit delete throws. Sync is off,
+        // so nothing comes back for it — record and surface it like the provisional case.
+        let defaults = makeDefaults("failed-delete-retry")
+        let cloudStore = RecordingUsageCloudStore(unavailable: true)
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: MemoryDeviceIDStore(),
+            pollInterval: nil
+        )
+
+        sync.enabled = false
+        let deadline = Date().addingTimeInterval(2)
+        while !defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertTrue(
+            defaults.bool(forKey: "runway.icloudSync.pendingOptOutDeletion.v1"),
+            "a failed deletion must be remembered for the next launch"
+        )
+        XCTAssertNotNil(sync.disabledStateWarning, "and stay visible while sync is off")
+    }
+
+    func testProvisionalIdentityRecoversWithinTheSameSession() async throws {
+        // Reviewer-requested: once the keychain becomes readable, publishing resumes without a
+        // relaunch.
+        let defaults = makeDefaults("provisional-recovers-in-session")
+        let recovering = RecoveringDeviceIDStore()
+        let cloudStore = RecordingUsageCloudStore()
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: recovering,
+            writeDebounce: .milliseconds(10),
+            pollInterval: nil
+        )
+
+        // First publish attempt is withheld: the identity is provisional.
+        sync.scheduleWrite()
+        try await Task.sleep(for: .milliseconds(120))
+        var writes = await cloudStore.writeCount
+        XCTAssertEqual(writes, 0)
+
+        // The keychain comes back; the next attempt resolves and publishes under the real id.
+        recovering.recover(as: "dddddddd-1111-2222-3333-444444444444")
+        sync.scheduleWrite()
+        let deadline = Date().addingTimeInterval(2)
+        while await cloudStore.writeCount == 0, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        writes = await cloudStore.writeCount
+        XCTAssertGreaterThan(writes, 0, "publishing resumes without a relaunch")
+        XCTAssertEqual(sync.deviceID, "dddddddd-1111-2222-3333-444444444444")
+    }
+
     func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
         // A fresh install has no v1 item: the prompt-free existence probe answers "absent" and the
         // subprocess-backed legacy read must never run — not even once.
@@ -355,5 +415,31 @@ private final class IndeterminateProbeKeychain: KeychainReading, @unchecked Send
 
     func genericPasswordForCurrentUserExists(service: String) -> Bool? {
         nil
+    }
+}
+
+/// Unresolvable until `recover` is called, then returns a real id — models a keychain that becomes
+/// readable during the session.
+private final class RecoveringDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: String?
+
+    func recover(as id: String) {
+        lock.withLock { stored = id }
+    }
+
+    func readDeviceID() throws -> String? {
+        lock.withLock { stored }
+    }
+
+    func writeDeviceID(_ deviceID: String) throws {
+        lock.withLock { stored = deviceID }
+    }
+
+    func migrateLegacyDeviceID() throws -> String? {
+        guard lock.withLock({ stored }) != nil else {
+            throw KeychainError.readFailed("keychain unavailable")
+        }
+        return nil
     }
 }

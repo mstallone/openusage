@@ -190,6 +190,7 @@ final class ICloudUsageSyncStore {
     private func retryPendingOptOutDeletion() async {
         resolveProvisionalIdentityIfNeeded()
         guard !identityIsProvisional else { return }
+        AppLog.info(.config, "retrying an iCloud opt-out that could not complete earlier")
         do {
             try await cloudStore.delete(deviceID: deviceID)
             defaults.set(false, forKey: Self.pendingOptOutKey)
@@ -256,6 +257,11 @@ final class ICloudUsageSyncStore {
                     writeError = nil
                 }
             } catch {
+                // The same stranding problem as an unresolved identity: sync is off, Settings only
+                // renders errors for the enabled state, and nothing comes back for it. Record the
+                // unfinished opt-out so it is visible and retried at the next launch.
+                defaults.set(true, forKey: Self.pendingOptOutKey)
+                pendingOptOutDeletion = true
                 report(error, .disable)
             }
         }
