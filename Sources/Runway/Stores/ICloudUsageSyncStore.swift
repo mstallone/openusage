@@ -68,8 +68,18 @@ struct KeychainICloudDeviceIDStore: ICloudDeviceIDStoring {
     /// the subprocess at all. The v1 item's ACL belongs to the subprocess, so Runway cannot silently
     /// delete it; it stays behind, orphaned and never read again once the v2 item exists.
     func migrateLegacyDeviceID() throws -> String? {
-        guard legacyKeychain.genericPasswordExists(service: legacyService) == true else {
+        // Tri-state on purpose. `false` is a confirmed fresh install — nothing to migrate, and the
+        // subprocess never runs. `nil` means the probe could not answer (locked keychain, suppressed
+        // UI, a stuck flight): treating that as "absent" would mint a NEW id for a Mac that already
+        // has one and publish a duplicate device to iCloud, so fail instead and let the caller
+        // surface its existing warning.
+        switch legacyKeychain.genericPasswordForCurrentUserExists(service: legacyService) {
+        case false:
             return nil
+        case nil:
+            throw KeychainError.readFailed("Keychain could not be checked for this Mac's previous sync identity.")
+        case true?:
+            break
         }
         guard let legacy = try legacyKeychain.readGenericPasswordForCurrentUser(service: legacyService) else {
             return nil
