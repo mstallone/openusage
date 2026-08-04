@@ -49,20 +49,22 @@ way and doesn't need to know provider-specific details. To add one, see
 
 The app that owns a credential is the only app allowed to change it. Provider credentials belong to
 the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …), and Runway
-never writes any of their credential stores. For Claude, Codex, Cursor, and Copilot it never calls
-their OAuth token endpoints either, because two apps rotating the same login can trip the server's
-token-reuse protection and sign the user out. Antigravity is the one exception on the endpoint side:
-Runway refreshes its access token through Google OAuth, which is safe because Google refresh tokens
-do not rotate — and the result is cached in Runway's own file, never written back to Antigravity's
-Keychain item. The type system enforces
-this — every credential store holds the read-only `KeychainReading`, and no Keychain write API
-exists in the app outside `RunwayOwnedKeychainStore`, the store for Runway's own secrets (currently
-the iCloud-sync device id). When one of these providers' tokens lapses, the card shows a renewal
-notice naming the owning app; Runway never renews it. Automatic Keychain reads are in-process and
-prompt-free; only a user's manual refresh may raise the approval dialog — once per protected item,
-and a denial stops the pass instead of chaining further prompts. Grok and Kimi still refresh their
-own file-based logins (no Keychain involved); moving them to the same read-only model is the
-remaining ownership follow-up.
+never writes any of their credential stores — the type system enforces it, because every credential
+store holds the read-only `KeychainReading` and no Keychain write API exists in the app outside
+`RunwayOwnedKeychainStore` (Runway's own secrets, currently the iCloud-sync device id).
+
+For Claude, Codex, Cursor, and Copilot, Runway never calls their OAuth token endpoints either,
+because two apps rotating the same login can trip the server's token-reuse protection and sign the
+user out. When one of those tokens lapses, the card shows a renewal notice naming the owning app;
+Runway never renews it. Antigravity is the one endpoint-side exception: Runway refreshes its access
+token through Google OAuth — safe because Google refresh tokens do not rotate — and caches the
+result in Runway's own file, never writing back to Antigravity's Keychain item. Grok and Kimi still
+refresh their own file-based logins (no Keychain involved); moving them to the same read-only model
+is the remaining ownership follow-up.
+
+Automatic Keychain reads are in-process and prompt-free; only a user's manual refresh may raise the
+approval dialog — once per protected item, and a denial stops the pass instead of chaining further
+prompts.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,

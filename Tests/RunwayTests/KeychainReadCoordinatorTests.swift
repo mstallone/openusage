@@ -102,6 +102,29 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(reads.value, 2)
     }
 
+    func testTrippedItemSuppressesMetadataProbesToo() {
+        // Existence/fingerprint probes are Security calls as well: after a read fails, they must not
+        // keep querying the same wedged securityd. `nil` ("unknown") is the honest answer, and every
+        // caller already takes its safe side on it.
+        let clock = Locked(Date(timeIntervalSince1970: 1_000_000))
+        let coordinator = KeychainReadCoordinator(revalidateAfter: 60, now: { clock.withLock { $0 } })
+
+        _ = coordinator.nonInteractiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" },
+            read: { .unavailable }
+        )
+
+        let suppressed: Bool? = coordinator.probe(service: "svc", account: nil) {
+            XCTFail("a tripped item must not issue a metadata query")
+            return true
+        }
+        XCTAssertNil(suppressed)
+
+        // Past revalidation the item is checked for real again.
+        clock.withLock { $0 = $0.addingTimeInterval(61) }
+        XCTAssertEqual(coordinator.probe(service: "svc", account: nil) { true }, true)
+    }
+
     func testTimeoutBehindAStuckFlightServesAFreshRecoveredManualResult() {
         // A manual read can recover while the wedged background read never returns. Later background
         // callers give up on the stuck flight within the bounded wait — but must serve the fresh
@@ -321,11 +344,18 @@ final class KeychainReadCoordinatorTests: XCTestCase {
 
         releaseRead.signal()
         wait(for: [backgroundDone], timeout: 2)
+
+        // The stale read finally returned `.unavailable`. It must not have clobbered the recovered
+        // entry into a tripped one — otherwise this next background read would be suppressed
+        // locally instead of running. (It re-reads rather than serving cache because the manual
+        // path deliberately skipped its fingerprint probe while the flight was stuck.)
+        let reads = Counter()
         let afterwards = coordinator.nonInteractiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" },
-            read: { .unavailable }
+            read: { reads.increment(); return .value("approved-secret") }
         )
         XCTAssertEqual(afterwards, .value("approved-secret"))
+        XCTAssertEqual(reads.value, 1, "a stale result must not leave the item tripped")
     }
 
     func testConcurrentReadersShareOneReadAndLateArriversDoNotPileOn() {
