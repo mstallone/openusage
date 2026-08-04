@@ -9,6 +9,7 @@ enum CopilotAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case tokenInvalid
     case keychainPermissionRequired
+    case credentialStoreUnreadable
 
     var errorDescription: String? {
         switch self {
@@ -18,17 +19,19 @@ enum CopilotAuthError: Error, LocalizedError, Equatable {
             return "GitHub token invalid or expired. Re-authenticate (gh auth login) and try again."
         case .keychainPermissionRequired:
             return "GitHub login found in Keychain. Refresh manually and choose Always Allow to connect it."
+        case .credentialStoreUnreadable:
+            return "GitHub login couldn’t be read. Unlock your login keychain and refresh."
         }
     }
 }
 
-/// Billing candidates plus whether the *preferred* GitHub CLI credential is sitting behind an
-/// unapproved Keychain ACL. Without that flag an org-managed card falls back to an editor token
-/// that usually lacks billing scopes and reports "you need billing access", when the actionable
-/// truth is that an existing credential can be approved with a manual refresh.
+/// Billing candidates plus why the *preferred* GitHub CLI credential was unusable, when that is
+/// a Keychain problem. Without it an org-managed card falls back to an editor token that usually
+/// lacks billing scopes and reports "you need billing access", when the actionable truth is that
+/// an existing credential can be approved — or that the keychain simply couldn't be read.
 struct CopilotBillingCandidates: Sendable {
     var tokens: [CopilotToken]
-    var keychainPermissionRequired: Bool
+    var keychainError: CopilotAuthError?
 }
 
 /// Outcome of a credential load. `keychainPermissionRequired` means a gh Keychain item exists but
@@ -37,6 +40,10 @@ struct CopilotBillingCandidates: Sendable {
 enum CopilotCredentialLoad: Equatable, Sendable {
     case token(CopilotToken)
     case keychainPermissionRequired
+    /// The item could not be read for a reason approval cannot fix — a locked login keychain, or
+    /// securityd failing. Kept apart from `keychainPermissionRequired` so the card gives advice
+    /// that works.
+    case unreadable
     case none
 
     var token: CopilotToken? {
@@ -94,13 +101,17 @@ struct CopilotAuthStore: Sendable {
         allowKeychainInteraction: Bool = false
     ) -> CopilotBillingCandidates {
         var ghToken = loadFromGhConfig()
-        var permissionRequired = false
+        var keychainError: CopilotAuthError?
         if ghToken == nil {
             var load = loadFromGhKeychain()
             if load == .keychainPermissionRequired, allowKeychainInteraction {
                 load = loadFromGhKeychain(allowKeychainInteraction: true)
             }
-            permissionRequired = load == .keychainPermissionRequired
+            switch load {
+            case .keychainPermissionRequired: keychainError = .keychainPermissionRequired
+            case .unreadable: keychainError = .credentialStoreUnreadable
+            case .token, .none: keychainError = nil
+            }
             ghToken = load.token
         }
         var seen: Set<CopilotToken> = []
@@ -108,7 +119,7 @@ struct CopilotAuthStore: Sendable {
             guard let token, seen.insert(token).inserted else { return nil }
             return token
         }
-        return CopilotBillingCandidates(tokens: tokens, keychainPermissionRequired: permissionRequired)
+        return CopilotBillingCandidates(tokens: tokens, keychainError: keychainError)
     }
 
     // MARK: - Sources
@@ -152,8 +163,15 @@ struct CopilotAuthStore: Sendable {
                     // Never broaden to the account-less query from here — with several
                     // `gh:github.com` items it could silently select another account's token.
                     // Broadening is allowed only when the scoped item provably does not exist.
-                    if keychain.genericPasswordExists(service: Self.ghKeychainService, account: account) != false {
+                    switch keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService, account: account) {
+                    case true?:
                         return .keychainPermissionRequired
+                    case false?:
+                        return .unreadable
+                    case nil:
+                        if keychain.genericPasswordExists(service: Self.ghKeychainService, account: account) != false {
+                            return .keychainPermissionRequired
+                        }
                     }
                 case .missing:
                     break
@@ -170,9 +188,16 @@ struct CopilotAuthStore: Sendable {
                 // probe is attributes-only and prompt-free, and `nil` from it means "cannot check"
                 // (locked keychain, suppressed UI, stuck flight) — never "absent", which would
                 // report a real login as logged-out.
-                return keychain.genericPasswordExists(service: Self.ghKeychainService) != false
-                    ? .keychainPermissionRequired
-                    : .none
+                switch keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService) {
+                case true?:
+                    return .keychainPermissionRequired
+                case false?:
+                    return .unreadable
+                case nil:
+                    return keychain.genericPasswordExists(service: Self.ghKeychainService) != false
+                        ? .keychainPermissionRequired
+                        : .none
+                }
             }
         }
         // Manual refresh: may raise the approval prompt, once, for Runway itself. A denial is
