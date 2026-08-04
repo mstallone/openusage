@@ -337,166 +337,6 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
         try await waitUntil { !sync.isSyncing }
     }
 
-    func testDeviceIdentitySurvivesPreferencesResetThroughKeychainStore() {
-        let expectedID = UUID().uuidString.lowercased()
-        let firstDefaults = makeDefaults("identity-first")
-        firstDefaults.set(expectedID, forKey: "runway.icloudSync.deviceID.v1")
-        let deviceIDStore = MemoryDeviceIDStore()
-
-        let first = ICloudUsageSyncStore(
-            dataStore: makeDataStore(firstDefaults),
-            defaults: firstDefaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: deviceIDStore,
-            pollInterval: nil
-        )
-        let resetDefaults = makeDefaults("identity-after-reset")
-        let afterReset = ICloudUsageSyncStore(
-            dataStore: makeDataStore(resetDefaults),
-            defaults: resetDefaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: deviceIDStore,
-            pollInterval: nil
-        )
-
-        XCTAssertEqual(first.deviceID, expectedID)
-        XCTAssertEqual(afterReset.deviceID, expectedID)
-        XCTAssertEqual(resetDefaults.string(forKey: "runway.icloudSync.deviceID.v1"), expectedID)
-    }
-
-    func testKeychainIdentityIsScopedToDevelopmentAndProductionBundles() throws {
-        let owned = InMemoryOwnedSecretStore()
-        let development = KeychainICloudDeviceIDStore(
-            ownedStore: owned,
-            legacyKeychain: ServiceKeychain(),
-            bundleIdentifier: "com.mattstallone.runway.dev"
-        )
-        let production = KeychainICloudDeviceIDStore(
-            ownedStore: owned,
-            legacyKeychain: ServiceKeychain(),
-            bundleIdentifier: "com.mattstallone.runway"
-        )
-
-        try development.writeDeviceID("development-id")
-        try production.writeDeviceID("production-id")
-
-        XCTAssertEqual(try development.readDeviceID(), "development-id")
-        XCTAssertEqual(try production.readDeviceID(), "production-id")
-    }
-
-    func testUpgradeSeedsTheOwnedItemFromSavedPreferencesWithoutTouchingLegacyKeychain() async throws {
-        // The normal upgrade: UserDefaults still carries the device id, so the v2 item is seeded
-        // from it directly. The legacy `/usr/bin/security` path — the only prompt-capable step —
-        // must not be consulted at all.
-        let defaults = makeDefaults("upgrade-from-saved")
-        defaults.set("aaaaaaaa-1111-2222-3333-444444444444", forKey: "runway.icloudSync.deviceID.v1")
-        let owned = InMemoryOwnedSecretStore()
-        let deviceIDStore = KeychainICloudDeviceIDStore(
-            ownedStore: owned,
-            legacyKeychain: TrappingKeychain(),
-            bundleIdentifier: "com.mattstallone.runway"
-        )
-
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: deviceIDStore,
-            pollInterval: nil
-        )
-
-        XCTAssertEqual(sync.deviceID, "aaaaaaaa-1111-2222-3333-444444444444")
-        XCTAssertEqual(
-            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
-            "aaaaaaaa-1111-2222-3333-444444444444"
-        )
-    }
-
-    func testPreferencesResetUpgradeRecoversTheLegacyDeviceIDOnce() async throws {
-        // Only when BOTH the v2 item and the saved preference are gone (a preferences reset on an
-        // upgrade) is the legacy v1 item consulted — once. It seeds v2, and later launches never
-        // reach the legacy path again.
-        let defaults = makeDefaults("upgrade-after-prefs-reset")
-        let owned = InMemoryOwnedSecretStore()
-        let legacy = ServiceKeychain()
-        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "bbbbbbbb-1111-2222-3333-444444444444"
-        legacy.values["com.mattstallone.runway.icloud-sync-device-id.v1"] = "bbbbbbbb-1111-2222-3333-444444444444"
-        let deviceIDStore = KeychainICloudDeviceIDStore(
-            ownedStore: owned,
-            legacyKeychain: legacy,
-            bundleIdentifier: "com.mattstallone.runway"
-        )
-
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: deviceIDStore,
-            pollInterval: nil
-        )
-
-        XCTAssertEqual(sync.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
-        XCTAssertEqual(
-            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
-            "bbbbbbbb-1111-2222-3333-444444444444"
-        )
-        XCTAssertEqual(defaults.string(forKey: "runway.icloudSync.deviceID.v1"), "bbbbbbbb-1111-2222-3333-444444444444")
-
-        // Relaunch: v2 exists now, so the legacy path is dead even if the item changes.
-        legacy.currentUserValues["com.mattstallone.runway.icloud-sync-device-id.v1"] = "cccccccc-1111-2222-3333-444444444444"
-        let relaunch = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: deviceIDStore,
-            pollInterval: nil
-        )
-        XCTAssertEqual(relaunch.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
-    }
-
-    func testUnknownLegacyProbeWarnsInsteadOfMintingADuplicateIdentity() async throws {
-        // v2 and the saved preference are both gone and the keychain can't be checked. Treating
-        // "unknown" as "absent" would publish a SECOND device record to iCloud for a Mac that
-        // already has one — so the migration fails and the store surfaces its duplicate warning.
-        let defaults = makeDefaults("unknown-legacy-probe")
-        let store = KeychainICloudDeviceIDStore(
-            ownedStore: InMemoryOwnedSecretStore(),
-            legacyKeychain: IndeterminateProbeKeychain(),
-            bundleIdentifier: "com.mattstallone.runway"
-        )
-        XCTAssertThrowsError(try store.migrateLegacyDeviceID())
-
-        let sync = ICloudUsageSyncStore(
-            dataStore: makeDataStore(defaults),
-            defaults: defaults,
-            cloudStore: RecordingUsageCloudStore(),
-            deviceIDStore: store,
-            pollInterval: nil
-        )
-        XCTAssertNotNil(sync.serviceError, "the user must be told sync may duplicate this device")
-    }
-
-    func testFreshInstallNeverSpawnsTheLegacyKeychainRead() throws {
-        // A fresh install has no v1 item: the prompt-free existence probe answers "absent" and the
-        // subprocess-backed legacy read must never run — not even once.
-        let store = KeychainICloudDeviceIDStore(
-            ownedStore: InMemoryOwnedSecretStore(),
-            legacyKeychain: ProbeOnlyKeychain(),
-            bundleIdentifier: "com.mattstallone.runway"
-        )
-        XCTAssertNil(try store.migrateLegacyDeviceID())
-    }
-
-    func testMissingDeviceIDReadsNilWithoutInventingAnIdentity() throws {
-        let store = KeychainICloudDeviceIDStore(
-            ownedStore: InMemoryOwnedSecretStore(),
-            legacyKeychain: ServiceKeychain(),
-            bundleIdentifier: "com.mattstallone.runway"
-        )
-        XCTAssertNil(try store.readDeviceID())
-        XCTAssertNil(try store.migrateLegacyDeviceID())
-    }
-
     private func makeDataStore(_ defaults: UserDefaults) -> WidgetDataStore {
         WidgetDataStore(
             registry: WidgetRegistry(providers: [], descriptors: []),
@@ -534,7 +374,7 @@ final class ICloudUsageSyncStoreTests: XCTestCase {
     }
 }
 
-private final class MemoryDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
+final class MemoryDeviceIDStore: ICloudDeviceIDStoring, @unchecked Sendable {
     private var deviceID: String?
 
     func readDeviceID() throws -> String? {
@@ -546,30 +386,7 @@ private final class MemoryDeviceIDStore: ICloudDeviceIDStoring, @unchecked Senda
     }
 }
 
-private final class InMemoryOwnedSecretStore: RunwayOwnedSecretStoring, @unchecked Sendable {
-    var secrets: [String: String] = [:]
-
-    func read(service: String) throws -> String? {
-        secrets[service]
-    }
-
-    func write(service: String, value: String) throws {
-        secrets[service] = value
-    }
-}
-
-/// Fails the test on ANY read: proves a code path never consults the (prompt-capable) legacy
-/// Keychain.
-private final class TrappingKeychain: KeychainReading, @unchecked Sendable {
-    func readGenericPassword(service: String) throws -> String? {
-        XCTFail("the legacy Keychain path must not be consulted")
-        return nil
-    }
-
-    func writeGenericPassword(service: String, value: String) throws {}
-}
-
-private actor RecordingUsageCloudStore: UsageCloudStoring {
+actor RecordingUsageCloudStore: UsageCloudStoring {
     private(set) var documents: [UsageHistoryDocument]
     private(set) var invalidRecordMessages: [String]
     private(set) var writeCount = 0
@@ -677,36 +494,5 @@ private actor RecordingUsageCloudStore: UsageCloudStoring {
     func releaseWrite() {
         writeGate?.resume()
         writeGate = nil
-    }
-}
-
-/// Answers the prompt-free existence probe with "absent" and fails the test if any secret read runs.
-private final class ProbeOnlyKeychain: KeychainReading, @unchecked Sendable {
-    func readGenericPassword(service: String) throws -> String? {
-        XCTFail("no secret read may run when the existence probe reports the item absent")
-        return nil
-    }
-
-    func genericPasswordExists(service: String) -> Bool? {
-        false
-    }
-
-    func writeGenericPassword(service: String, value: String) throws {}
-}
-
-/// The legacy item's existence cannot be determined (locked keychain / suppressed probe), and any
-/// secret read would fail the test — the migration must stop at the probe.
-private final class IndeterminateProbeKeychain: KeychainReading, @unchecked Sendable {
-    func readGenericPassword(service: String) throws -> String? {
-        XCTFail("no secret read may run when existence is unknown")
-        return nil
-    }
-
-    func genericPasswordExists(service: String) -> Bool? {
-        nil
-    }
-
-    func genericPasswordForCurrentUserExists(service: String) -> Bool? {
-        nil
     }
 }
