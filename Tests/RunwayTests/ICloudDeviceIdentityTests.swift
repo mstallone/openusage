@@ -329,6 +329,40 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         )
     }
 
+    func testAStrandedOptOutRetriesWithoutAnyProviderActivity() async throws {
+        // The local-state callback only fires when a provider refreshed or failed, so a Mac with
+        // every provider disabled gave the retry no signal at all. The schedule must not depend on
+        // it: nothing here ever calls scheduleWrite().
+        let defaults = makeDefaults("pending-opt-out-independent")
+        defaults.set(false, forKey: "runway.icloudSync.enabled.v1")
+        defaults.set(true, forKey: "runway.icloudSync.pendingOptOutDeletion.v1")
+        let recovering = RecoveringDeviceIDStore()
+        let cloudStore = RecordingUsageCloudStore()
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: cloudStore,
+            deviceIDStore: recovering,
+            pollInterval: nil,
+            optOutRetryDelays: [.milliseconds(20), .milliseconds(20), .milliseconds(20)]
+        )
+
+        try await Task.sleep(for: .milliseconds(10))
+        let beforeRecovery = await cloudStore.deletedDeviceIDs
+        XCTAssertTrue(beforeRecovery.isEmpty, "a provisional identity must never be used to delete")
+
+        // The keychain comes back with no provider ever reporting anything.
+        recovering.recover(as: "ffffffff-1111-2222-3333-444444444444")
+        let deadline = Date().addingTimeInterval(3)
+        while await cloudStore.deletedDeviceIDs.isEmpty, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let deleted = await cloudStore.deletedDeviceIDs
+        XCTAssertEqual(deleted, ["ffffffff-1111-2222-3333-444444444444"])
+        XCTAssertFalse(sync.enabled, "no provider activity was ever reported")
+    }
+
     func testProvisionalIdentityRecoversWithinTheSameSession() async throws {
         // Reviewer-requested: once the keychain becomes readable, publishing resumes without a
         // relaunch.

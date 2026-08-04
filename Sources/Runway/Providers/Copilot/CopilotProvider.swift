@@ -99,6 +99,9 @@ final class CopilotProvider: ProviderRuntime {
             token = loaded
         case .keychainPermissionRequired:
             return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.keychainPermissionRequired)
+        case .unreadable:
+            // Approval cannot fix a locked keychain or a failing securityd, so don't ask for it.
+            return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.credentialStoreUnreadable)
         case .none:
             return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.notLoggedIn)
         }
@@ -127,7 +130,7 @@ final class CopilotProvider: ProviderRuntime {
                 let billingTokens: [CopilotToken]
                 // Set when the preferred GitHub CLI credential exists but is not approved yet, so a
                 // failed billing lookup can name the real fix instead of blaming billing access.
-                var billingNeedsApproval = false
+                var billingKeychainError: CopilotAuthError?
                 if mapped.organizationLogins.isEmpty {
                     billingTokens = [token]
                 } else {
@@ -138,7 +141,7 @@ final class CopilotProvider: ProviderRuntime {
                         )
                     }
                     billingTokens = candidates.tokens
-                    billingNeedsApproval = candidates.keychainPermissionRequired
+                    billingKeychainError = candidates.keychainError
                 }
                 switch await orgBillingLookup(
                     tokens: billingTokens,
@@ -154,14 +157,11 @@ final class CopilotProvider: ProviderRuntime {
                     // aggregation above.
                     lines = usageLines
                 case .managed:
-                    // A protected GitHub CLI credential is the likely reason billing could not be
-                    // read; telling the user to obtain billing access would send them down the
-                    // wrong path.
-                    if billingNeedsApproval {
-                        return ProviderSnapshot.error(
-                            provider: provider,
-                            error: CopilotAuthError.keychainPermissionRequired
-                        )
+                    // An unusable GitHub CLI credential is the likely reason billing could not
+                    // be read; telling the user to obtain billing access would send them down the
+                    // wrong path. Report which Keychain problem it actually was.
+                    if let billingKeychainError {
+                        return ProviderSnapshot.error(provider: provider, error: billingKeychainError)
                     }
                     lines = [
                         .badge(

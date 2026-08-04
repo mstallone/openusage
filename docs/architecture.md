@@ -64,9 +64,10 @@ result in Runway's own file, never writing back to Antigravity's Keychain item. 
 refresh their own file-based logins (no Keychain involved); moving them to the same read-only model
 is the remaining ownership follow-up.
 
-Automatic Keychain reads are in-process and prompt-free; only a user's manual refresh may raise the
+Automatic Keychain reads are in-process and prompt-free; only a direct user action may raise the
 approval dialog — once per protected item, and a denial stops the pass instead of chaining further
-prompts.
+prompts. Two actions qualify: a manual refresh, and clicking **Use** on a Codex reset credit after
+every readable credential was rejected. Both are user-initiated with the app in front of the user.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,
