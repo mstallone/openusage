@@ -99,13 +99,15 @@ final class KeychainAccessorTests: XCTestCase {
         XCTAssertEqual(held.wait(timeout: .now() + 5), .success)
 
         let start = Date()
-        let uiAvailable = KeychainUISuppression.withUIAllowed { $0 }
+        let ui = KeychainUISuppression.withUIAllowed { $0 }
         let elapsed = Date().timeIntervalSince(start)
 
         release.signal()
         wait(for: [holderDone], timeout: 5)
 
-        XCTAssertFalse(uiAvailable, "a caller that gave up must be told UI is not available")
+        // `.peerBusy` specifically, not just "not available": UI is still ENABLED here, so the body
+        // must skip its query entirely rather than open a second dialog beside the first.
+        XCTAssertEqual(ui, .peerBusy, "a caller that gave up must be told a peer holds the gate")
         XCTAssertLessThan(elapsed, 5, "it must not wait on the open dialog indefinitely")
     }
 
