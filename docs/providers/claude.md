@@ -31,19 +31,17 @@ Claude Desktop support is read-only. Runway decrypts its currently valid access 
 never changes Desktop's config, cookies, or Keychain entry. This prevents Runway from invalidating
 Claude Desktop's session.
 
-macOS can ask once before Runway can access a Claude Code or Claude Desktop Keychain item. Launch-time
-and background refreshes never open the password dialog: Runway first asks you to refresh manually, and
-choosing **Always Allow** makes later reads silent. If Desktop's short-lived token expires, open Claude
-Desktop so it can renew the login, then refresh Runway.
+Launch-time and background refreshes never request Claude's Keychain secrets. Runway asks you to
+refresh manually after launch, periodically, or after a credential change, then caches that deliberate
+read in memory for a bounded time while the item's non-secret metadata remains unchanged. Choosing **Always Allow** avoids a dialog on future
+manual reads. If Desktop's short-lived token expires, open Claude Desktop so it can renew the login,
+then refresh Runway.
 
-Runway also keeps its Keychain traffic minimal. For Claude Code's credentials item it checks the
-non-secret attributes first — a prompt-free, instant probe — and reads the secret again only when
-the item actually changed (for example, Claude Code rotated its token). Several Claude cards reading
-the same item share one read. And after a denied or failed read, Runway stops asking macOS for that
-item and answers locally until a periodic re-check or a manual refresh, so a stuck or busy Keychain
-never sees a pile-up of repeated requests. Claude Desktop's `Claude Safe Storage` key is read
-separately: after you approve it once, the derived key is cached in memory, so that item is touched
-at most once per launch.
+Runway keeps its Keychain traffic minimal. For Claude Code's credentials item it checks non-secret
+attributes first. If they still match a value loaded manually in this process, automatic refreshes use
+the cache; if they changed, Runway asks for another manual refresh without requesting the new secret.
+Several Claude cards share the same cached read. Claude Desktop's `Claude Safe Storage` key is handled
+the same way: a manual read derives the decryption key and caches it for the rest of the process.
 
 A Claude Code Keychain item remains higher priority than a home-file or Desktop login even before access
 is approved. Runway reports that approval is needed instead of silently showing usage from a potentially
@@ -51,9 +49,9 @@ stale home file or a different Desktop account. If macOS cannot even determine w
 (for example, while the login keychain is locked), Runway asks you to unlock the keychain instead of
 guessing or prompting in the background.
 
-First-run detection validates Claude Desktop's cache with Keychain interaction disabled. Leftover or
-corrupt Desktop files—and readable but malformed Claude Code Keychain entries—do not enable Claude by
-themselves.
+First-run detection checks Claude Desktop's files and Keychain metadata without requesting the secret.
+Leftover or corrupt Desktop files—and malformed Claude Code credentials found during a manual read—do
+not enable Claude by themselves.
 
 If you cancel or deny a Claude Code approval prompt during a manual refresh, Runway stops there. It does
 not repeat the same Code prompt through a broader lookup or open an unrelated Claude Desktop prompt.

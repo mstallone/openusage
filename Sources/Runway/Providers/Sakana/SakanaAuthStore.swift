@@ -1,7 +1,6 @@
 import CommonCrypto
 import CryptoKit
 import Foundation
-import LocalAuthentication
 import Security
 
 struct SakanaBrowserSession: Hashable, Sendable {
@@ -21,7 +20,7 @@ enum SakanaAuthError: Error, LocalizedError, Equatable {
         case .notLoggedIn:
             return "Sign in to Sakana AI Console in Chrome, Arc, Brave, or Edge to see Fugu usage."
         case .permissionRequired:
-            return "Allow Runway to read your browser's Safe Storage key in Keychain, then refresh again. Choose Always Allow to permit automatic updates."
+            return "Refresh manually to load your browser's Safe Storage key. Choose Always Allow to avoid future approval dialogs."
         case .credentialsUnreadable:
             return "Couldn't read the signed-in Sakana browser session. Open Sakana AI Console in a supported browser and refresh again."
         case .invalidCookie:
@@ -43,28 +42,32 @@ protocol SakanaSafeStorageKeyReading: Sendable {
 }
 
 struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
+    private let coordinator: KeychainReadCoordinator
+    private let copyMatching: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+
+    init(
+        coordinator: KeychainReadCoordinator = .shared,
+        copyMatching: @escaping @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = {
+            SecItemCopyMatching($0, $1)
+        }
+    ) {
+        self.coordinator = coordinator
+        self.copyMatching = copyMatching
+    }
+
     func readPassword(service: String, allowInteraction: Bool) throws -> String? {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true
         ]
-        if !allowInteraction {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
 
-        // Same rule as `ClaudeDesktopSafeStorageKeyReader`: the browser Safe Storage items are
-        // classic login-keychain items whose ACL dialog ignores the LAContext above, so background
-        // reads must run inside the process-wide suppression scope and interactive reads must hold
-        // the gate for their whole duration.
-        // Through the coordinator like every other in-process secret read: single-flight per item,
-        // and a denial trips its breaker so five-minute refreshes stop starting new Security calls
-        // behind a wedged predecessor.
+        // Browser Safe Storage keys are classic login-keychain items, whose ACL dialogs ignore
+        // `LAContext.interactionNotAllowed` on macOS 26.6. Automatic refreshes inspect metadata only;
+        // an explicit user action reads the key, which is then cached for this process.
         var result: CFTypeRef?
-        let status = try KeychainReadCoordinator.shared.externalRead(
+        let status = try coordinator.externalRead(
             service: service,
             account: nil,
             interactive: allowInteraction,
@@ -72,25 +75,33 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
             unavailable: { denied in denied ? SakanaBrowserCredentialError.permissionRequired : SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable)) }
         ) { ticket -> OSStatus in
-            var gateEngaged = true
-            let status = allowInteraction
-                ? KeychainUISuppression.withUIAllowed { ui -> OSStatus in
-                    gateEngaged = ui == .available
-                    guard ui != .cancelled else { return errSecNotAvailable }
-                    return SecItemCopyMatching(query as CFDictionary, &result)
+            if !allowInteraction {
+                let metadataQuery = NonInteractiveKeychainMetadataQuery.applying(to: [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: service,
+                    kSecMatchLimit as String: kSecMatchLimitOne,
+                ])
+                let metadataStatus = copyMatching(metadataQuery as CFDictionary, nil)
+                switch metadataStatus {
+                case errSecSuccess:
+                    coordinator.recordFailureCategory(ticket, permissionDenied: true)
+                    throw SakanaBrowserCredentialError.permissionRequired
+                case errSecItemNotFound:
+                    return metadataStatus
+                default:
+                    coordinator.recordFailureCategory(ticket, permissionDenied: false)
+                    throw SakanaBrowserCredentialError.keychainFailure(Int(metadataStatus))
                 }
-                : KeychainUISuppression.withUISuppressed { isSuppressed in
-                    gateEngaged = isSuppressed
-                    return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
-                }
-            // Only a FAILURE without the gate is contention. An already-authorized item reads fine
-            // with UI disabled, and throwing that success away would fail a manual refresh that had
-            // in fact just succeeded.
-            if !gateEngaged, status != errSecSuccess, status != errSecItemNotFound {
-                // The read never reached a prompt, so this says nothing about the item's ACL:
-                // reporting a denial would tell the user to approve an item nobody asked about, and
-                // tripping the breaker would lock out an item that was never really attempted.
-                KeychainReadCoordinator.shared.recordContention(ticket)
+            }
+
+            var turn = InteractiveKeychainReadGate.Turn.available
+            let status = InteractiveKeychainReadGate.withTurn { currentTurn -> OSStatus in
+                turn = currentTurn
+                guard currentTurn != .cancelled else { return errSecNotAvailable }
+                return copyMatching(query as CFDictionary, &result)
+            }
+            if turn != .available, status != errSecSuccess, status != errSecItemNotFound {
+                coordinator.recordContention(ticket)
                 throw SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable))
             }
             // EVERY failure throws from inside the flight so the breaker records it — a returning
@@ -102,12 +113,12 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
                 // Remember WHY, so the breaker's later replays keep giving the same advice instead
                 // of degrading a real denial into a generic "couldn't be read".
-                KeychainReadCoordinator.shared.recordFailureCategory(
+                coordinator.recordFailureCategory(
                     ticket, permissionDenied: true
                 )
                 throw SakanaBrowserCredentialError.permissionRequired
             default:
-                KeychainReadCoordinator.shared.recordFailureCategory(
+                coordinator.recordFailureCategory(
                     ticket, permissionDenied: false
                 )
                 throw SakanaBrowserCredentialError.keychainFailure(Int(status))

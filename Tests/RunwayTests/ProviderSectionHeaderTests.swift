@@ -12,7 +12,7 @@ final class ProviderSectionHeaderTests: XCTestCase {
                 for: ClaudeAuthError.codePermissionRequired.localizedDescription,
                 refreshable: true
             ),
-            "Claude Code login found. Refresh manually and choose Always Allow to connect it. Click to refresh."
+            "Claude Code login found. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs. Click to refresh."
         )
         // A message that arrives without end punctuation (an HTTP failure line) gets a period first,
         // so the hint never runs into it.

@@ -36,6 +36,11 @@ final class WidgetDataStore {
     /// The protocol extension's default ceiling — see `ProviderRuntime.refreshTimeout` for the
     /// budget rationale and when a provider should override it.
     static let defaultProviderRefreshTimeout: TimeInterval = 150
+    /// Manual hidden-account preparation gets the same hard ceiling as a normal provider refresh.
+    /// A Keychain approval dialog may be ignored and Security.framework is synchronous underneath;
+    /// neither is allowed to hold the footer spinner or queue duplicate readers indefinitely.
+    static let defaultInteractivePreparationTimeout: TimeInterval = 150
+    private let interactivePreparationTimeout: TimeInterval
     /// Providers whose timed-out refresh is still running detached (the deadline race resumed
     /// without awaiting it). Blocks new attempts for that provider so network/auth work never
     /// overlaps on one runtime — cleared ONLY when the straggler actually exits. Deliberately no
@@ -108,6 +113,17 @@ final class WidgetDataStore {
     /// too). Wired by `ICloudUsageSyncStore`; debounced there so a concurrent provider batch
     /// produces one write.
     @ObservationIgnored var onLocalStateChanged: (@MainActor () -> Void)?
+    /// One-time user-attended preparation for hidden credential-backed accounts. The provider-id set
+    /// makes applicability explicit: disabling that provider family must also disable its secret reads.
+    @ObservationIgnored private var interactiveRefreshPreparationProviderIDs: Set<String> = []
+    @ObservationIgnored private var makeInteractiveRefreshPreparationTask: (@MainActor () -> Task<Bool, Never>?)?
+    @ObservationIgnored private var interactiveRefreshPrepared = false
+    @ObservationIgnored private var interactivePreparationFlight: Task<Bool, Never>?
+    @ObservationIgnored private var interactivePreparationGeneration = 0
+    @ObservationIgnored private var interactivePreparationStragglerActive = false
+    /// Included in the footer's global refresh state so a pending Keychain approval is visible and
+    /// repeated clicks cannot launch another Refresh All while the bounded preparation is active.
+    private(set) var isPreparingInteractiveRefresh = false
     /// Readable (not writable) so the sync tests can assert what peers actually contribute.
     @ObservationIgnored private(set) var peerHistoryDocuments: [UsageHistoryDocument] = []
     /// Non-zero while `refreshAll` is coalescing per-provider completion work into short debounced
@@ -151,6 +167,7 @@ final class WidgetDataStore {
         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         slowProviderRefreshThreshold: TimeInterval = WidgetDataStore.defaultSlowProviderRefreshThreshold,
         providerRefreshTimeout: TimeInterval? = nil,
+        interactivePreparationTimeout: TimeInterval = WidgetDataStore.defaultInteractivePreparationTimeout,
         notificationSettings: (@MainActor () -> NotificationSettingsStore)? = nil,
         postNotification: (@MainActor (String, String, String, String) async -> Bool)? = nil,
         providerIdentityKeys: [String: String] = [:],
@@ -159,7 +176,9 @@ final class WidgetDataStore {
     ) {
         precondition(slowProviderRefreshThreshold >= 0)
         if let providerRefreshTimeout { precondition(providerRefreshTimeout > 0) }
+        precondition(interactivePreparationTimeout > 0)
         self.providerRefreshTimeoutOverride = providerRefreshTimeout
+        self.interactivePreparationTimeout = interactivePreparationTimeout
         self.registry = registry
         self.providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.provider.id, $0) })
         self.cache = cache
@@ -215,9 +234,12 @@ final class WidgetDataStore {
     /// must never unlock credential UI (a prompt from the CLI helper would also authorize the wrong
     /// binary).
     func refreshAll(force: Bool = false, interactive: Bool = false) async {
+        let providerIDs = registry.providers.map(\.id).filter { isProviderEnabled($0) }
+        if interactive {
+            await prepareInteractiveRefreshIfNeeded(enabledProviderIDs: Set(providerIDs))
+        }
         // `Task {}` from MainActor context inherits the isolation (a task-group child can't capture
         // the non-Sendable store), so: fire one task per provider, then await them all.
-        let providerIDs = registry.providers.map(\.id).filter { isProviderEnabled($0) }
         let start = monotonicNow()
         AppLog.info(.refresh, "batch start (\(providerIDs.count) providers, force=\(force))")
         // Coalesce per-provider completion work: with N providers finishing in one pass, rebuilding
@@ -253,6 +275,92 @@ final class WidgetDataStore {
         // every provider is failing. Cached/backed-off outcomes changed nothing, so they don't.
         if refreshed > 0 || failed > 0 { onLocalStateChanged?() }
         AppLog.info(.refresh, "batch end (\(durationMs)ms, \(refreshed) ok / \(failed) failed / \(cached) cached / \(backedOff) backed off)")
+    }
+
+    /// Installs a prompt-capable preparation for the listed provider cards. The operation returns its
+    /// actual task so the store can cancel it at the deadline; `nil` means there is nothing to prepare.
+    func configureInteractiveRefreshPreparation(
+        for providerIDs: Set<String>,
+        makeTask: @escaping @MainActor () -> Task<Bool, Never>?
+    ) {
+        interactiveRefreshPreparationProviderIDs = providerIDs
+        makeInteractiveRefreshPreparationTask = makeTask
+    }
+
+    private func prepareInteractiveRefreshIfNeeded(enabledProviderIDs: Set<String>) async {
+        guard !interactiveRefreshPrepared,
+              !interactiveRefreshPreparationProviderIDs.isDisjoint(with: enabledProviderIDs),
+              let makeTask = makeInteractiveRefreshPreparationTask
+        else {
+            return
+        }
+
+        // Every caller joins the same bounded flight. This matters even though the footer disables its
+        // button: keyboard commands and programmatic refreshes can still overlap while an approval
+        // dialog is open.
+        if let flight = interactivePreparationFlight {
+            if await flight.value { interactiveRefreshPrepared = true }
+            return
+        }
+        // A deadline cannot force a synchronous Security.framework call to unwind. Keep the overlap
+        // valve closed until that sacrificial task really exits, but let provider refreshes proceed.
+        guard !interactivePreparationStragglerActive else {
+            AppLog.warn(.keychain, "hidden-account preparation is still exiting after its deadline; skipping duplicate read")
+            return
+        }
+
+        interactivePreparationGeneration += 1
+        let generation = interactivePreparationGeneration
+        let flight = Task { [interactivePreparationTimeout] in
+            await self.runInteractivePreparation(makeTask: makeTask, timeout: interactivePreparationTimeout)
+        }
+        interactivePreparationFlight = flight
+        let succeeded = await flight.value
+        if generation == interactivePreparationGeneration {
+            interactivePreparationFlight = nil
+        }
+        if succeeded { interactiveRefreshPrepared = true }
+    }
+
+    /// A true deadline race: the watchdog resumes Refresh All without awaiting a wedged reader. The
+    /// losing work task remains tracked as a straggler, preventing another prompt/read until it exits.
+    private func runInteractivePreparation(
+        makeTask: @MainActor () -> Task<Bool, Never>?,
+        timeout: TimeInterval
+    ) async -> Bool {
+        guard let work = makeTask() else { return true }
+        isPreparingInteractiveRefresh = true
+        defer { isPreparingInteractiveRefresh = false }
+
+        return await withCheckedContinuation { continuation in
+            final class RaceState {
+                var resumed = false
+                var watchdog: Task<Void, Never>?
+            }
+            let state = RaceState()
+            Task {
+                let succeeded = await work.value
+                guard !state.resumed else {
+                    self.interactivePreparationStragglerActive = false
+                    // The binding writes its durable identity before returning. If it completed after
+                    // the UI deadline, remember that success instead of prompting again next click.
+                    if succeeded { self.interactiveRefreshPrepared = true }
+                    return
+                }
+                state.resumed = true
+                state.watchdog?.cancel()
+                continuation.resume(returning: succeeded)
+            }
+            state.watchdog = Task { [timeout] in
+                try? await Task.sleep(for: .seconds(timeout))
+                guard !state.resumed, !Task.isCancelled else { return }
+                state.resumed = true
+                self.interactivePreparationStragglerActive = true
+                work.cancel()
+                AppLog.warn(.keychain, "hidden-account preparation timed out after \(Int(timeout))s; provider refresh will continue")
+                continuation.resume(returning: false)
+            }
+        }
     }
 
     /// Evaluate every visible, enabled metric for a quota pace milestone and post a notification for any

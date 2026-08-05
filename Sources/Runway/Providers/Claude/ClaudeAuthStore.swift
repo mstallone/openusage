@@ -128,11 +128,11 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
         case .notLoggedIn:
             return "Not logged in. Run `claude` to authenticate."
         case .codePermissionRequired:
-            return "Claude Code login found. Refresh manually and choose Always Allow to connect it."
+            return "Claude Code login found. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .codeCredentialsUnavailable:
             return "Claude Code credentials couldn't be checked. Unlock your login keychain, then refresh."
         case .desktopPermissionRequired:
-            return "Claude Desktop login found. Refresh once and choose Always Allow to connect it."
+            return "Claude Desktop login found. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .desktopTokenExpired:
             return "Claude Desktop login is stale. Open Claude Desktop, then refresh Runway."
         case .desktopCredentialsUnavailable:
@@ -595,7 +595,7 @@ struct ClaudeAuthStore: Sendable {
                 let exists: Bool?
                 switch keychain.lastReadForCurrentUserWasPermissionDenied(service: service) {
                 case true?:
-                    exists = true       // present, simply not approved yet
+                    exists = true       // present, requires a deliberate secret read
                 case false?:
                     exists = nil        // the keychain itself couldn't be read
                 case nil:

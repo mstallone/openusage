@@ -56,9 +56,10 @@ profiles. It reads the browser's cookie database in read-only mode, decrypts the
 memory with that browser's Safe Storage key, and sends the cookie only to Sakana Console. Runway
 does not copy the cookie into its own configuration, refresh it, or change the browser database.
 
-The first manual refresh can show a macOS Keychain prompt for the browser's Safe Storage item. If
-you want scheduled refreshes to work without a prompt, choose **Always Allow**. If you deny the
-request, the browser session stays untouched and the provider reports a credential-access error.
+After launch, refresh manually to load the browser's Safe Storage key. That read can show a macOS
+Keychain prompt; choosing **Always Allow** avoids the dialog on future manual reads. Runway caches the
+derived key for the rest of the process, so scheduled refreshes do not request the Keychain secret.
+If you deny the request, the browser session stays untouched and the provider reports an access error.
 
 Safari is not currently supported because it uses a different cookie store and security model.
 
@@ -99,7 +100,7 @@ changes it, instead of silently displaying zero. Local history scanning makes no
 
 - **"Sign in to Sakana AI Console"** — sign in through a supported Chromium browser, then refresh.
 - **"Allow Runway to read your browser's Safe Storage key"** — run a manual refresh and approve the
-  macOS Keychain prompt. Choose **Always Allow** for automatic refreshes.
+  macOS Keychain prompt. Choose **Always Allow** to avoid a dialog on future manual reads.
 - **"The Sakana browser session expired"** — sign out and back in at Sakana AI Console, then refresh.
 - **"The Sakana browser session couldn't be decoded"** — update or restart the browser, sign in again,
   and retry. A change to the browser's cookie encryption can cause this.

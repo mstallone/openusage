@@ -19,10 +19,10 @@ When Codex reports your plan name, Runway shows it beside the provider name.
 
 Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). All Codex credentials are strictly read-only to Runway: it never refreshes a token and never writes `auth.json` or the keyring — the `codex` CLI owns the login and its rotation. When the token lapses, the card shows **"Codex login needs renewal"**: run `codex` (it renews its own login), then refresh Runway. The local spend tiles keep working the whole time.
 
-Automatic refreshes read the keyring item silently and never open a macOS password dialog. If access
-hasn't been approved yet, the card says so — refresh manually once and choose **Always Allow** when
-macOS asks; later reads stay silent. If the login keychain itself can't be read (it's locked, say),
-the card asks you to unlock it instead — approving nothing would fix that one.
+Automatic refreshes never request the keyring secret. After launch or a credential change, the card
+asks for a manual refresh; that deliberate read is cached in memory for a bounded time while the item's
+non-secret metadata remains unchanged. Choose **Always Allow** to avoid a dialog on future manual reads. If the
+login keychain itself can't be inspected (it's locked, say), the card asks you to unlock it instead.
 
 ## Multiple accounts
 
@@ -35,7 +35,7 @@ CODEX_HOME="$HOME/.codex-work" codex
 CODEX_HOME="$HOME/.codex-personal" codex
 ```
 
-A discovered home must contain a usable OAuth login that names its account through Codex's own account id. For file storage, that identity comes directly from `auth.json`. For keyring storage, Runway reads the exact home-scoped item once after launch and binds the account identity to that item's non-secret fingerprint; the card appears on the next launch. Replacing the keyring item invalidates the binding, so the home stays hidden until the new login is safely rebound.
+A discovered home must contain a usable OAuth login that names its account through Codex's own account id. For file storage, that identity comes directly from `auth.json`. For keyring storage, a user-attended **Refresh All** reads the exact home-scoped item and binds the account identity to that item's non-secret fingerprint; the card appears on the next launch. Replacing the keyring item invalidates the binding, so the home stays hidden until the new login is safely rebound.
 
 Runway never treats a directory name as identity. Every card is pinned to one credential home and reads only that home's original file or keyring item. That keeps a token, session log, cached snapshot, or reset claim from crossing between accounts when homes are added, removed, or swapped.
 
@@ -60,7 +60,7 @@ For supported GPT-5.4, GPT-5.5, and GPT-5.6 models, requests above 272k input to
 - **"Codex login found in Keychain"** — refresh manually and choose **Always Allow** when macOS asks for access to `Codex Auth`.
 - **API-key-only setups** can't read subscription usage — sign in with your ChatGPT account instead.
 - **Spend tiles show "No data"** — Runway found no Codex session logs in the last 30 days. If your Codex home lives somewhere custom, set `CODEX_HOME` so both the Codex CLI and Runway look in the same place.
-- **A custom home doesn't become a separate card** — confirm it has a ChatGPT OAuth login and either an `auth.json`, `config.toml`, or sessions directory that lets discovery recognize the home. API-key-only, tokenless, and nameless file credentials are skipped rather than guessed. A keyring-only home sometimes needs one additional Runway launch after its exact credential is first bound. If Runway has never been approved to read that home's `Codex Auth` item, no number of launches will bind it — the diagnostic log names this case ("approve the 'Codex Auth' Keychain item for Runway to bind it"), and today the only way to grant it is from Keychain Access. An in-app approval flow for these hidden homes is planned.
+- **A custom home doesn't become a separate card** — confirm it has a ChatGPT OAuth login and either an `auth.json`, `config.toml`, or sessions directory that lets discovery recognize the home. API-key-only, tokenless, and nameless file credentials are skipped rather than guessed. For a keyring-only home, choose **Refresh All** and approve its exact `Codex Auth` item if macOS asks, then relaunch Runway so the bound account can become a card.
 
 ## Under the hood
 

@@ -68,7 +68,8 @@ final class StatusItemController: NSObject {
             return window.convertToScreen(button.convert(button.bounds, to: nil))
         },
         isRefreshInFlight: { [weak self] in
-            !(self?.container.dataStore.refreshingProviderIDs.isEmpty ?? true)
+            guard let store = self?.container.dataStore else { return false }
+            return store.isPreparingInteractiveRefresh || !store.refreshingProviderIDs.isEmpty
         }
     )
     private let hostingController: NSHostingController<AnyView>

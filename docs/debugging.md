@@ -68,7 +68,7 @@ short trail in the log file:
 - `discovery: codex candidate ~/.codex-work: keyring identity unverified → hidden until its exact
   item is bound` — the home uses account-scoped keyring storage, but launch discovery has not safely
   associated that item with its provider account yet.
-- `discovery: warmed Codex keyring identity for home <hash>` — the post-launch task read that one
+- `discovery: bound Codex keyring identity for home <hash>; card appears next launch` — a user-attended Refresh All read that one
   exact item and recorded a fingerprint-bound account association; its card can appear next launch.
 - `discovery: codex candidate ~/.codex-work: accepted (<hash>, verified keyring)` — the keyring item
   still matches the verified binding and now participates in an account card.

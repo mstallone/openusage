@@ -329,17 +329,20 @@ final class AccountKeychain: KeychainReading, @unchecked Sendable {
     var accountValues: [String: String]
     var fingerprints: [String: String]
     var unverifiableAccounts: Set<String>
+    var requiresInteractiveRead: Bool
 
     init(
         serviceValues: [String: String] = [:],
         accountValues: [String: String] = [:],
         fingerprints: [String: String] = [:],
-        unverifiableAccounts: Set<String> = []
+        unverifiableAccounts: Set<String> = [],
+        requiresInteractiveRead: Bool = false
     ) {
         self.serviceValues = serviceValues
         self.accountValues = accountValues
         self.fingerprints = fingerprints
         self.unverifiableAccounts = unverifiableAccounts
+        self.requiresInteractiveRead = requiresInteractiveRead
     }
 
     static func key(service: String, account: String) -> String {
@@ -357,6 +360,21 @@ final class AccountKeychain: KeychainReading, @unchecked Sendable {
     }
 
     func readGenericPassword(service: String, account: String) throws -> String? {
+        accountValues[Self.key(service: service, account: account)]
+    }
+
+    func readGenericPasswordWithoutUserInteraction(
+        service: String,
+        account: String
+    ) -> NonInteractiveKeychainRead {
+        guard !requiresInteractiveRead else {
+            return accountValues[Self.key(service: service, account: account)] == nil ? .missing : .unavailable
+        }
+        return accountValues[Self.key(service: service, account: account)]
+            .map(NonInteractiveKeychainRead.value) ?? .missing
+    }
+
+    func readGenericPasswordAllowingUserInteraction(service: String, account: String) throws -> String? {
         accountValues[Self.key(service: service, account: account)]
     }
 

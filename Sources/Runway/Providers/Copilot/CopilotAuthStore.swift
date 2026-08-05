@@ -18,7 +18,7 @@ enum CopilotAuthError: Error, LocalizedError, Equatable {
         case .tokenInvalid:
             return "GitHub token invalid or expired. Re-authenticate (gh auth login) and try again."
         case .keychainPermissionRequired:
-            return "GitHub login found in Keychain. Refresh manually and choose Always Allow to connect it."
+            return "GitHub login found in Keychain. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .credentialStoreUnreadable:
             return "GitHub login couldn’t be read. Unlock your login keychain and refresh."
         }
@@ -91,9 +91,9 @@ struct CopilotAuthStore: Sendable {
     /// Editor OAuth tokens remain useful fallbacks, but commonly have only the private Copilot
     /// endpoint's permissions. Blocking (Keychain) — call off the main actor.
     ///
-    /// The Keychain lookup is prompt-free first: when the usage token itself just came from an
-    /// approved manual Keychain read, the coordinator's cache serves the same value here without a
-    /// second prompt. Only a manual refresh may then fall through to one interactive read — the
+    /// The automatic Keychain lookup is cache/metadata-only: when the usage token itself just came
+    /// from an approved manual read, the coordinator serves the same value here without another
+    /// secret request. Only a manual refresh may then fall through to one interactive read — the
     /// editor-token-plus-protected-gh-item setup, where billing is the FIRST Keychain touch and
     /// would otherwise be impossible to approve at all.
     func loadBillingTokenCandidates(
@@ -104,9 +104,8 @@ struct CopilotAuthStore: Sendable {
         var keychainError: CopilotAuthError?
         if ghToken == nil {
             var load = loadFromGhKeychain()
-            // Retry BOTH unreadable outcomes when the user is watching. An earlier automatic read
-            // can leave the item circuit-broken for 15 minutes, so a manual refresh right after the
-            // user unlocks their keychain would otherwise keep reporting the stale failure.
+            // Retry BOTH unavailable outcomes when the user is watching. The automatic path records
+            // that a manual secret read is required, so the deliberate refresh must bypass it.
             if load == .keychainPermissionRequired || load == .unreadable, allowKeychainInteraction {
                 load = loadFromGhKeychain(allowKeychainInteraction: true)
             }

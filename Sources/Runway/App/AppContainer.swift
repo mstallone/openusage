@@ -58,10 +58,6 @@ final class AppContainer {
     /// Persists a fresh `ShellEnvironmentSnapshot` once the login-shell capture completes, so the next
     /// launch can read shell-exported facts (provider home overrides) even when its own capture is slow.
     private let shellEnvironmentSnapshotTask: Task<Void, Never>
-    /// One exact-item read per unverified Codex keyring home. Cards remain hidden this launch; the
-    /// fingerprint-bound result lets the next launch place them without reading secrets at startup.
-    private let codexIdentityWarmTask: Task<Void, Never>?
-
     /// `shouldSeedFirstRun` includes a resumable marker captured before `SettingsMigrator.migrate()`.
     /// See `AppDelegate`.
     init(shouldSeedFirstRun: Bool = false) async {
@@ -84,8 +80,6 @@ final class AppContainer {
         let accounts = ProviderAccountsStore()
         let accountAssembly = await ProviderAccountAssembly.make(accountsStore: accounts, waitsForLoginShell: true)
         self.accounts = accounts
-        self.codexIdentityWarmTask = accountAssembly.startCodexIdentityWarmTask()
-
         let providers = ProviderCatalog.make(
             claudeCards: accountAssembly.claudeCards,
             claudeDefaultDisplayName: accountAssembly.claudeDefaultDisplayName,
@@ -111,6 +105,10 @@ final class AppContainer {
             providersRejectingAccountStampedCache: accountAssembly.cardsRejectingAccountStampedCache,
             resolveDisplayName: { [accounts] in accounts.resolvedDisplayName(cardID: $0) }
         )
+        let codexProviderIDs = Set(providers.compactMap { ($0 as? CodexProvider)?.provider.id })
+        dataStore.configureInteractiveRefreshPreparation(for: codexProviderIDs) {
+            accountAssembly.startCodexIdentityBindingTask()
+        }
         let iCloudSync = ICloudUsageSyncStore(dataStore: dataStore)
         // Re-enabling a provider should fetch it promptly, so clear any leftover failure backoff before
         // the enablement wake refreshes. `weak` breaks the cycle (dataStore already captures enablement).
@@ -224,7 +222,6 @@ final class AppContainer {
         seedTask?.cancel()
         newProviderTask?.cancel()
         shellEnvironmentSnapshotTask.cancel()
-        codexIdentityWarmTask?.cancel()
     }
 
     /// The name a card renders under right now — the app-side face of the one resolver

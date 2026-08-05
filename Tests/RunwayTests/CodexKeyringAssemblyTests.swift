@@ -17,7 +17,8 @@ final class CodexKeyringAssemblyTests: XCTestCase {
             accountValues: [
                 key: #"{"tokens":{"access_token":"at","account_id":"KEYRING"}}"#,
             ],
-            fingerprints: [key: "item-v1"]
+            fingerprints: [key: "item-v1"],
+            requiresInteractiveRead: true
         )
         let observer = DefaultAccountObserver(
             environment: FakeEnvironment([:]),
@@ -42,8 +43,9 @@ final class CodexKeyringAssemblyTests: XCTestCase {
 
         XCTAssertTrue(first.codexCards.isEmpty)
         XCTAssertEqual(first.unverifiedCodexKeyringHomes, [home])
-        let warmTask = try XCTUnwrap(first.startCodexIdentityWarmTask())
-        await warmTask.value
+        let bindingTask = try XCTUnwrap(first.startCodexIdentityBindingTask())
+        let didBind = await bindingTask.value
+        XCTAssertTrue(didBind)
 
         let second = ProviderAccountAssembly.make(
             observer: observer,
@@ -55,6 +57,32 @@ final class CodexKeyringAssemblyTests: XCTestCase {
         XCTAssertEqual(card.credentialHomePath, home)
         XCTAssertEqual(second.identityKeysByCard[card.id], "keyring")
         XCTAssertTrue(second.unverifiedCodexKeyringHomes.isEmpty)
+    }
+
+    func testBindingRemainsRetryableWhenFingerprintCannotBePersisted() async throws {
+        let defaults = makeScratchDefaults()
+        let cache = CodexHomeIdentityCache(defaults: defaults)
+        let home = "/Users/dev/.codex-keyring"
+        let account = CodexAuthStore.keychainAccountName(forHome: home)
+        let key = AccountKeychain.key(service: CodexAuthStore.keychainService, account: account)
+        let keychain = AccountKeychain(
+            accountValues: [key: #"{"tokens":{"access_token":"at","account_id":"KEYRING"}}"#],
+            requiresInteractiveRead: true
+        )
+        var assembly = ProviderAccountAssembly.make(
+            observer: DefaultAccountObserver(
+                environment: FakeEnvironment([:]), files: FakeFiles(), keychain: keychain,
+                codexIdentityCache: cache, homeDirectory: { URL(fileURLWithPath: "/Users/dev") }
+            ),
+            accountsStore: ProviderAccountsStore(defaults: defaults),
+            families: ["codex"],
+            codexDiscovery: makeDiscovery(home: home, keychain: keychain, identityCache: cache)
+        )
+        assembly.codexIdentityCache = cache
+
+        let task = try XCTUnwrap(assembly.startCodexIdentityBindingTask())
+        let didBind = await task.value
+        XCTAssertFalse(didBind, "an identity without its item fingerprint is not a durable binding")
     }
 
     private func makeScratchDefaults() -> UserDefaults {
