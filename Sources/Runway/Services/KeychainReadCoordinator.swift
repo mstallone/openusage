@@ -2,19 +2,15 @@ import Foundation
 
 /// Process-wide gate for the in-process reads of ACL-protected Keychain items belonging to other
 /// apps: everything read through `SecurityKeychainAccessor`, plus the Safe Storage keys Claude
-/// Desktop and Sakana decode themselves (via `externalRead`). Runway's own item
-/// (`RunwayOwnedKeychainStore`) deliberately stays outside — its ACL names Runway, so it never
-/// prompts and never contends for approval. It exists to keep
+/// Desktop and Sakana decode themselves (via `externalRead`). Runway-owned durable values stay in
+/// its private Application Support directory and deliberately remain outside this coordinator. It exists to keep
 /// Runway's Keychain traffic minimal and bounded when `securityd` is slow, wedged, or showing an
 /// approval dialog (the 2026-08-03 incident):
 ///
-/// - **Change-gated reads.** The item's non-secret attribute fingerprint (which includes its
-///   modification date) is probed first — an in-process, prompt-free query that returns in
-///   microseconds. The secret is only read when that fingerprint differs from the last successful
-///   read, so a 5-minute refresh cadence performs one ACL-checked secret read per actual credential
-///   rotation instead of one per cycle. Because the modification date has one-second resolution, a
-///   secret-only update landing in the same second could leave the fingerprint unchanged — so every
-///   cached outcome is revalidated with a real read after `revalidateAfter`, bounding any staleness.
+/// - **Change-gated manual reads.** An explicit user action reads the secret and caches it in memory.
+///   Automatic refreshes probe the item's non-secret attribute fingerprint and reuse that cached
+///   value for the rest of the process while the fingerprint is unchanged; they never request foreign
+///   secret data. A changed fingerprint or a new process asks the user to refresh manually again.
 /// - **Single-flight.** Concurrent readers of the same service/account (multiple Claude cards, the
 ///   default-account observer) share one underlying read. A caller never waits more than
 ///   `inFlightWait` on someone else's read: a background caller then reports `.unavailable` rather
@@ -52,7 +48,9 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         /// of this very secret, and a background value — which can also carry a nil fingerprint
         /// when its probe failed — gives no reason to believe it is still current.
         var fromUserAction: Bool = false
-        /// Last successful read, served while the fingerprint is unchanged and the entry is fresh.
+        /// Last successful read. A value produced by an explicit user action is served for the
+        /// process lifetime while the fingerprint remains unchanged; other outcome ages stay
+        /// bounded by `revalidateAfter`.
         var value: NonInteractiveKeychainRead?
         /// Tripped by a failed/denied read; answers `.unavailable` without touching the Keychain
         /// until revalidation is due or an interactive read succeeds.
@@ -71,14 +69,13 @@ final class KeychainReadCoordinator: @unchecked Sendable {
     /// not clobber the fresher entry.
     private var storedSequences: [Key: Int] = [:]
     private var inFlight: Set<Key> = []
-    /// Why an item's last read failed: `true` = its ACL has not approved this app, `false` = the
-    /// keychain itself could not be read. Captured from the read's own `OSStatus`, because a second
-    /// attributes probe cannot recover it — the breaker answers those locally once tripped.
+    /// Why an item's last read failed: `true` = the item exists and needs a deliberate secret read,
+    /// `false` = its metadata could not be inspected. Captured from the read's own outcome, because
+    /// a second attributes probe cannot recover it — the breaker answers those locally once tripped.
     private var lastFailureDenied: [Key: Bool] = [:]
-    /// Reads that never reached securityd because the process-wide UI gate was unavailable (for
-    /// example, a stuck suppression scope or a refresh cancelled while queued). Keyed by READ, not
-    /// by item: two reads of the same item overlap routinely, and one read's contention must never
-    /// excuse another read's genuine failure.
+    /// Interactive reads that never reached securityd because their refresh was cancelled while
+    /// queued. Keyed by READ, not by item: two reads of the same item can overlap, and one read's
+    /// cancellation must never excuse another read's genuine failure.
     private var contendedSequences: Set<Int> = []
     /// Failure categories reported by a read that has not stored its outcome yet, keyed the same
     /// way and for the same reason — a category belongs to the read that observed the status.
@@ -152,14 +149,21 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         condition.lock()
         if let fingerprint,
            let entry = entries[key],
-           entry.fingerprint == fingerprint,
-           now().timeIntervalSince(entry.updatedAt) < revalidateAfter
+           entry.fingerprint == fingerprint
         {
-            if entry.tripped {
+            let isFresh = now().timeIntervalSince(entry.updatedAt) < revalidateAfter
+            if entry.tripped, isFresh {
                 condition.unlock()
                 return .unavailable
             }
-            if let value = entry.value {
+            // A deliberate read is the user's approval for this process to use that exact item.
+            // Keep serving it as long as the metadata fingerprint proves the item has not changed;
+            // expiring it here would make every Keychain-only provider require another manual
+            // refresh every 15 minutes. Background-produced values remain bounded because they may
+            // predate an update whose metadata timestamp collided at Keychain's coarse resolution.
+            if !entry.tripped,
+               (entry.fromUserAction || isFresh),
+               let value = entry.value {
                 condition.unlock()
                 return value
             }
@@ -180,11 +184,13 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         return result
     }
 
-    /// Explicit user-action read: always performs `read` (it may legitimately prompt), then updates
-    /// the cache. Success clears the breaker; a thrown denial trips it so background refreshes stop
-    /// re-asking securityd until the item changes or the user acts again. The wait on a concurrent
-    /// read is bounded: past it, this read proceeds anyway — manual recovery must not hang behind a
-    /// wedged background read.
+    /// Explicit user-action read: reuses a fresh value produced by an earlier user action when the
+    /// fingerprint is unchanged, otherwise performs `read` (which may legitimately prompt). That
+    /// narrow reuse prevents one Refresh All from asking twice when its preparation and provider
+    /// pass target the same item. Success clears the breaker; a thrown denial trips it so background
+    /// refreshes stop re-asking securityd until the item changes or the user acts again. The wait on
+    /// a concurrent read is bounded: past it, this read proceeds anyway — manual recovery must not
+    /// hang behind a wedged background read.
     func interactiveRead(
         service: String,
         account: String?,
@@ -216,6 +222,29 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         // query returns. The outcome is then stored without a fingerprint — only the stale-flight
         // fallback serves those, and the next clean background read re-reads for real.
         let fingerprint = acquired ? fingerprint() : nil
+
+        // Only another explicit action can satisfy an explicit action. A background value may
+        // predate the very credential rotation the user is trying to recover from; consuming it here
+        // would turn Refresh All into a no-op. The preparation immediately preceding this provider
+        // pass, by contrast, has already obtained the exact current secret under user attendance.
+        condition.lock()
+        if let fingerprint,
+           let entry = entries[key],
+           entry.fromUserAction,
+           !entry.tripped,
+           entry.fingerprint == fingerprint,
+           now().timeIntervalSince(entry.updatedAt) < revalidateAfter,
+           let cached = entry.value
+        {
+            condition.unlock()
+            switch cached {
+            case .value(let value): return value
+            case .missing: return nil
+            case .unavailable: break // Successful entries never store this, but keep the invariant local.
+            }
+        } else {
+            condition.unlock()
+        }
 
         do {
             let value = try read(ReadTicket(sequence: sequence))
@@ -321,8 +350,8 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         // same read writing its own outcome.
         guard sequence >= storedSequences[key, default: Int.min] else { return }
         storedSequences[key] = sequence
-        // A read the UI gate turned away never reached securityd, so it is not evidence about this
-        // item and must not trip the breaker.
+        // A cancelled read never reached securityd, so it is not evidence about this item and must
+        // not trip the breaker.
         let failed = tripped && !wasContention
         store(
             key: key,
@@ -335,17 +364,16 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         lastFailureDenied[key] = failed ? category : nil
     }
 
-    /// Marks the next stored outcome for this item as UI-gate contention rather than a real
-    /// failure: the read never reached securityd, so tripping the breaker would lock out an item
-    /// that was never attempted.
+    /// Marks this read as cancelled before Security.framework rather than a real failure: tripping
+    /// the breaker would lock out an item that was never attempted.
     func recordContention(_ ticket: ReadTicket) {
         condition.lock()
         contendedSequences.insert(ticket.sequence)
         condition.unlock()
     }
 
-    /// Records why a read failed, so callers can tell "not approved yet" from "couldn't be read"
-    /// without a follow-up probe.
+    /// Records why a read failed, so callers can tell "manual secret read required" from
+    /// "metadata couldn't be inspected" without a follow-up probe.
     func recordFailureCategory(_ ticket: ReadTicket, permissionDenied: Bool) {
         condition.lock()
         pendingCategories[ticket.sequence] = permissionDenied

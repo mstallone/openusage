@@ -87,7 +87,7 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
         case .invalidAuthPayload:
             return "Codex auth data is invalid."
         case .keychainPermissionRequired:
-            return "Codex login found in Keychain. Refresh manually and choose Always Allow to connect it."
+            return "Codex login found in Keychain. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .credentialStoreUnreadable:
             return "Codex credentials couldn’t be read. Unlock your login keychain and refresh."
         }
@@ -193,9 +193,9 @@ struct CodexAuthStore: Sendable {
         return state
     }
 
-    /// Keychain reads are in-process, never the `/usr/bin/security` subprocess: automatic refreshes
-    /// use the prompt-free form, and only a manual refresh (`allowKeychainInteraction`) may raise
-    /// the approval prompt — once, for Runway itself.
+    /// Keychain access stays in-process. Automatic refreshes inspect metadata and reuse a manually
+    /// seeded cache; only a manual refresh (`allowKeychainInteraction`) may request secret data or
+    /// raise the approval prompt.
     func loadKeychainCredentials(allowKeychainInteraction: Bool = false) -> CodexKeychainLoad {
         // Target each candidate home's computed account first. A scoped card has exactly one; a
         // standard unresolved card follows the same home order as its file candidates. Later homes
@@ -360,6 +360,14 @@ struct CodexAuthStore: Sendable {
         return identity
     }
 
+    /// Stronger result for hidden-home preparation: identity parsing alone is not success. The next
+    /// launch can place the card only after the identity and the item's current fingerprint were
+    /// durably recorded together.
+    func recordSelectedIdentityBinding(_ state: CodexAuthState) -> Bool {
+        guard state.source.isKeychain, let home = state.credentialHome else { return false }
+        return recordResolvedIdentity(state.auth, home: home)?.bindingRecorded == true
+    }
+
     /// Whether the access token should be proactively refreshed.
     ///
     /// Prefers the access token's own JWT `exp` — refresh only when it is at (or within
@@ -469,9 +477,9 @@ struct CodexAuthStore: Sendable {
     private func recordResolvedIdentity(
         _ auth: CodexAuth,
         home: String
-    ) -> DefaultAccountObserver.CodexIdentity? {
+    ) -> (identity: DefaultAccountObserver.CodexIdentity, bindingRecorded: Bool)? {
         guard let identity = DefaultAccountObserver.codexIdentity(auth) else { return nil }
-        guard let identityCache else { return identity }
+        guard let identityCache else { return (identity, false) }
         let account = Self.keychainAccountName(forHome: home)
         guard let fingerprint = keychain.genericPasswordAttributeFingerprint(
             service: Self.keychainService,
@@ -481,14 +489,14 @@ struct CodexAuthStore: Sendable {
                 .keychain,
                 "Codex identity cache skipped because account-scoped item attributes were unreadable"
             )
-            return identity
+            return (identity, false)
         }
-        identityCache.record(
+        let recorded = identityCache.record(
             identity: identity,
             forHome: home,
             keychainItemFingerprint: fingerprint
         )
-        return identity
+        return (identity, recorded)
     }
 }
 

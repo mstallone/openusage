@@ -189,6 +189,49 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(reads.value, 0)
     }
 
+    func testSecondInteractiveReadReusesFreshUserApprovedValue() throws {
+        let coordinator = KeychainReadCoordinator()
+        let reads = Counter()
+        let first = try coordinator.interactiveRead(
+            service: "svc", account: "account", fingerprint: { "fp-1" },
+            read: { _ in reads.increment(); return "secret" }
+        )
+        let second = try coordinator.interactiveRead(
+            service: "svc", account: "account", fingerprint: { "fp-1" },
+            read: { _ in reads.increment(); return "duplicate" }
+        )
+
+        XCTAssertEqual(first, "secret")
+        XCTAssertEqual(second, "secret")
+        XCTAssertEqual(reads.value, 1, "one Refresh All must not request the same approved item twice")
+    }
+
+    func testInteractiveValueSurvivesRevalidationIntervalWhileFingerprintIsUnchanged() throws {
+        let clock = Locked(Date(timeIntervalSince1970: 1_000_000))
+        let coordinator = KeychainReadCoordinator(
+            revalidateAfter: 60,
+            now: { clock.withLock { $0 } }
+        )
+        let reads = Counter()
+        _ = try coordinator.interactiveRead(
+            service: "svc", account: nil, fingerprint: { "fp-1" }, read: { _ in "secret" }
+        )
+
+        clock.withLock { $0 = $0.addingTimeInterval(61) }
+        let background = coordinator.nonInteractiveRead(
+            service: "svc", account: nil,
+            fingerprint: { "fp-1" },
+            read: { _ in reads.increment(); return .unavailable }
+        )
+
+        XCTAssertEqual(
+            background,
+            .value("secret"),
+            "an unchanged user-approved item must keep automatic refresh working for the process lifetime"
+        )
+        XCTAssertEqual(reads.value, 0, "the automatic path must not attempt another secret read")
+    }
+
     func testInteractiveDenialTripsTheBreakerForBackgroundReads() {
         let coordinator = KeychainReadCoordinator()
         let reads = Counter()

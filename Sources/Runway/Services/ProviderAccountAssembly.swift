@@ -58,9 +58,9 @@ struct ProviderAccountAssembly {
     var defaultClaudeExtraLogRoots: [URL] = []
     /// Codex cards found this launch, including the resolved default-home account when there is one.
     var codexCards: [CodexAccountCard] = []
-    /// Shared cache used by scoped keyring stores and the post-launch warming task.
+    /// Shared cache used by scoped keyring stores and explicit hidden-home binding.
     var codexIdentityCache: CodexHomeIdentityCache?
-    /// Same accessor discovery probed; retained so warming reads the exact items from that source.
+    /// Same accessor discovery probed; retained so manual binding reads the exact items from that source.
     var codexIdentityWarmKeychain: (any KeychainReading)?
     /// Homes kept hidden because their exact keyring item hasn't been safely identity-bound yet.
     var unverifiedCodexKeyringHomes: Set<String> = []
@@ -268,7 +268,7 @@ struct ProviderAccountAssembly {
             }
             unverifiedCodexKeyringHomes = scan.unverifiedKeyringHomes
             // An unresolved default suppresses the verified findings (logged in `codexReadout`) but
-            // the unverified exact-item homes above still feed the post-launch warming plan.
+            // the unverified exact-item homes above still feed the manual binding plan.
             if case .unresolved = codexOutcome {
                 // Findings intentionally unprocessed this launch.
             } else {
@@ -441,9 +441,11 @@ struct ProviderAccountAssembly {
         )
     }
 
-    /// An unverified keyring home stays hidden this launch. Read its exact item once, off the launch
-    /// path, so a valid provider-owned identity can be fingerprint-bound for the next launch.
-    func startCodexIdentityWarmTask() -> Task<Void, Never>? {
+    /// An unverified keyring home stays hidden this launch. A user-attended Refresh All may read its
+    /// exact item so a valid provider-owned identity can be fingerprint-bound for the next launch.
+    /// This is deliberately never called from launch or the CLI: hidden homes must not create an
+    /// unattended secret read or approval dialog.
+    func startCodexIdentityBindingTask() -> Task<Bool, Never>? {
         guard let codexIdentityCache,
               let codexIdentityWarmKeychain,
               !unverifiedCodexKeyringHomes.isEmpty
@@ -452,28 +454,27 @@ struct ProviderAccountAssembly {
         }
         let homes = unverifiedCodexKeyringHomes.sorted()
         return Task.detached(priority: .utility) {
+            var boundEveryHome = true
             for home in homes {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return false }
                 let store = CodexAuthStore(
                     keychain: codexIdentityWarmKeychain,
                     scope: .home(path: home),
                     identityCache: codexIdentityCache
                 )
-                let load = store.loadKeychainCredentials()
+                let load = store.loadKeychainCredentials(allowKeychainInteraction: true)
                 if case .permissionRequired = load {
-                    // The unattended warm task must never prompt, and with the home's card hidden
-                    // there is no manual refresh to approve through yet — surface the exact fix
-                    // loudly instead of a generic bind failure. An interactive binding flow for
-                    // hidden keyring homes is tracked as follow-up work.
+                    boundEveryHome = false
                     AppLog.warn(
                         .keychain,
-                        "a Codex keyring home exists but Runway isn't approved to read it; its card stays hidden — approve the 'Codex Auth' Keychain item for Runway to bind it"
+                        "a Codex keyring identity was not approved during Refresh All; its card stays hidden"
                     )
                     continue
                 }
                 guard let state = load.state,
-                      store.recordSelectedIdentity(state) != nil
+                      store.recordSelectedIdentityBinding(state)
                 else {
+                    boundEveryHome = false
                     AppLog.warn(
                         .keychain,
                         "could not bind one Codex keyring home; its account card remains hidden"
@@ -482,9 +483,10 @@ struct ProviderAccountAssembly {
                 }
                 AppLog.info(
                     .config,
-                    "discovery: warmed Codex keyring identity for home \(ProviderAccountID.hash8(home))"
+                    "discovery: bound Codex keyring identity for home \(ProviderAccountID.hash8(home)); card appears next launch"
                 )
             }
+            return boundEveryHome
         }
     }
 }

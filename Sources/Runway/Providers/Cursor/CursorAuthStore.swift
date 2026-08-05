@@ -23,7 +23,7 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
         case .loginRenewalRequired:
             return "Cursor login needs renewal. Open the Cursor app (or run `agent login`), then refresh Runway."
         case .keychainPermissionRequired:
-            return "Cursor login found in Keychain. Refresh manually and choose Always Allow to connect it."
+            return "Cursor login found in Keychain. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .credentialStoreUnreadable:
             return "Cursor login couldn’t be read. Unlock your login keychain and refresh."
         }
@@ -68,9 +68,9 @@ struct CursorAuthStore: Sendable {
         self.now = now
     }
 
-    /// Keychain reads are in-process, never the `/usr/bin/security` subprocess: automatic refreshes
-    /// use the prompt-free form, and only a manual refresh (`allowKeychainInteraction`) may raise
-    /// the approval prompt — once, for Runway itself.
+    /// Keychain access stays in-process. Automatic refreshes inspect metadata and reuse a manually
+    /// seeded cache; only a manual refresh (`allowKeychainInteraction`) may request secret data or
+    /// raise the approval prompt.
     func loadCredentials(allowKeychainInteraction: Bool = false) -> CursorCredentialLoad {
         // Only the access token matters: Runway is read-only, so the refresh-token entries (SQLite
         // row and keychain item) are never read — a stale refresh credential must not influence

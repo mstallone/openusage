@@ -3,9 +3,14 @@
 **Sync Across Macs** is on by default; you can turn it off in Settings. While it is on, each
 device keeps one versioned record in
 Runway's private CloudKit database — part of your own iCloud account — and reads the records written
-by your other devices. Runway keeps a random device ID in the login Keychain, so the same Mac
+by your other devices. Runway keeps a random device ID in its private Application Support data, so the same Mac
 continues to update its existing record after you reset app preferences or reinstall the app. There is no
 folder picker, pairing code, or separate account.
+
+Upgrades from either older Keychain-backed device-ID format normally copy the saved ID into the
+current private file without reading a Keychain secret. If both that saved copy and the current file are missing, Settings pauses publishing
+and offers **Recover Identity**. That explicit action may show a macOS Keychain approval dialog;
+automatic sync work never requests the legacy value.
 
 Each device's record has two parts:
 

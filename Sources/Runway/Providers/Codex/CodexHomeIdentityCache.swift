@@ -14,11 +14,12 @@ protocol CodexHomeIdentityCaching: Sendable {
         keychainItemFingerprint: String
     ) -> DefaultAccountObserver.CodexIdentity?
 
+    @discardableResult
     func record(
         identity: DefaultAccountObserver.CodexIdentity,
         forHome path: String,
         keychainItemFingerprint: String
-    )
+    ) -> Bool
 }
 
 final class CodexHomeIdentityCache: CodexHomeIdentityCaching, @unchecked Sendable {
@@ -55,19 +56,20 @@ final class CodexHomeIdentityCache: CodexHomeIdentityCaching, @unchecked Sendabl
         )
     }
 
+    @discardableResult
     func record(
         identity: DefaultAccountObserver.CodexIdentity,
         forHome path: String,
         keychainItemFingerprint: String
-    ) {
+    ) -> Bool {
         let identityKey = identity.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !identityKey.isEmpty else {
             AppLog.error(.config, "refused to cache an empty Codex home identity")
-            return
+            return false
         }
         guard let fingerprint = normalizedFingerprint(keychainItemFingerprint) else {
             AppLog.error(.config, "refused to cache a Codex home identity without an item fingerprint")
-            return
+            return false
         }
 
         Self.lock.lock()
@@ -83,16 +85,18 @@ final class CodexHomeIdentityCache: CodexHomeIdentityCaching, @unchecked Sendabl
             || entries[key]?.identityLabel != entry.identityLabel
             || entries[key]?.keychainItemFingerprint != entry.keychainItemFingerprint
         else {
-            return
+            return true
         }
         entries[key] = entry
         do {
             defaults.set(try JSONEncoder().encode(entries), forKey: Self.storageKey)
+            return true
         } catch {
             AppLog.error(
                 .config,
                 "failed to encode the Codex home-identity cache: \(error.localizedDescription)"
             )
+            return false
         }
     }
 

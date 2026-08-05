@@ -13,6 +13,15 @@ struct DeviceSyncRecord: Sendable {
     var snapshot: DeviceSnapshotDocument
 }
 
+private struct DeviceIdentityResolution: Sendable {
+    var id: String
+    var error: String?
+    var isProvisional: Bool
+    /// True only when the current file and saved preference were absent and a legacy Keychain read
+    /// was the step that failed. Other provisional states need storage repair, not another prompt.
+    var canRecoverLegacyIdentity: Bool
+}
+
 protocol UsageCloudStoring: Sendable {
     func loadDocuments() async throws -> UsageHistoryLoadResult
     func write(_ deviceRecord: DeviceSyncRecord) async throws
@@ -36,8 +45,10 @@ final class ICloudUsageSyncStore {
     /// duplicate a record this Mac already published under its real id. Reads and the UI carry on;
     /// only publishing is withheld, because a publish is what creates the duplicate.
     private var identityIsProvisional: Bool
+    private var legacyIdentityRecoveryAvailable: Bool
     /// The store used to resolve this Mac's identity, kept so a provisional identity can be retried
-    /// once Keychain access comes back rather than staying stuck until relaunch.
+    /// once identity storage or a legacy Keychain item becomes readable, rather than staying stuck
+    /// until relaunch.
     private let deviceIDStore: any ICloudDeviceIDStoring
     /// An opt-out that couldn't delete this Mac's record yet. Retried at launch — sync being off
     /// means nothing else would ever come back for it.
@@ -72,19 +83,20 @@ final class ICloudUsageSyncStore {
     private var readError: String?
     private var writeError: String?
     var serviceError: String? { writeError ?? readError ?? identityError }
+    var canRecoverIdentity: Bool { identityIsProvisional && legacyIdentityRecoveryAvailable }
     /// The subset of `serviceError` that still matters once sync is switched OFF: an unresolved
     /// identity means this Mac's existing iCloud record could not be removed, and nothing retries
     /// while sync is disabled — so Settings keeps showing it instead of appearing cleanly off.
     var disabledStateWarning: String? {
         guard !enabled, pendingOptOutDeletion else { return identityIsProvisional ? identityError : nil }
         // A resolved identity means the deletion itself failed (iCloud offline, say). Blaming the
-        // login keychain there would send the user after the wrong thing entirely.
+        // identity store there would send the user after the wrong thing entirely.
         guard identityIsProvisional else {
             return writeError
                 ?? "Runway couldn’t remove this Mac’s existing iCloud record yet. It will try again later."
         }
         return "Runway couldn’t remove this Mac’s existing iCloud record yet. It will try again "
-            + "while your login keychain is available."
+            + "when this Mac’s saved identity can be recovered."
     }
     private(set) var invalidRecordMessages: [String] = []
     private(set) var documents: [UsageHistoryDocument] = []
@@ -108,6 +120,7 @@ final class ICloudUsageSyncStore {
         self.deviceID = identity.id
         self.identityError = identity.error
         self.identityIsProvisional = identity.isProvisional
+        self.legacyIdentityRecoveryAvailable = identity.canRecoverLegacyIdentity
         self.deviceIDStore = deviceIDStore
         self.pendingOptOutDeletion = defaults.bool(forKey: Self.pendingOptOutKey)
         self.deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
@@ -133,7 +146,7 @@ final class ICloudUsageSyncStore {
             await retryPendingOptOutDeletion()
             // Backs off, then keeps trying at the final interval for as long as the opt-out is
             // still pending. Exhausting the list would strand the record for the rest of a session
-            // in this always-running app if the keychain or iCloud only came back later. The loop
+            // in this always-running app if identity storage or iCloud only came back later. The loop
             // ends when the flag clears, which is how a completed deletion stops it — a retry must
             // never cancel the task it is itself running inside.
             var index = 0
@@ -237,7 +250,7 @@ final class ICloudUsageSyncStore {
                 defaults.set(true, forKey: Self.pendingOptOutKey)
                 pendingOptOutDeletion = true
                 identityError = "Runway couldn’t identify this Mac, so its existing iCloud record "
-                    + "wasn’t removed. It will be removed once your login keychain is available."
+                    + "wasn’t removed. It will be removed once the saved identity can be recovered."
                 startPendingOptOutRetries()
                 return
             }
@@ -280,8 +293,8 @@ final class ICloudUsageSyncStore {
     private func performWrite() async {
         guard enabled else { return }
         // A provisional identity would publish a SECOND record for a Mac that already has one.
-        // Retry the lookup first — Keychain access usually comes back within a session (an unlock),
-        // and the error text promises publishing resumes when it does.
+        // Retry the lookup first — a transient storage or legacy-Keychain failure can clear within
+        // the session, and publishing should resume as soon as the durable identity is known.
         resolveProvisionalIdentityIfNeeded()
         guard !identityIsProvisional else {
             AppLog.warn(.config, "iCloud publish skipped: this Mac's sync identity is unresolved")
@@ -364,12 +377,49 @@ final class ICloudUsageSyncStore {
         isSyncing = syncActivityCount > 0
     }
 
+    /// Explicit, user-attended recovery for either prior Keychain identity. Automatic launch, poll,
+    /// and write paths remain metadata/cache-only; only this Settings action may raise an approval
+    /// dialog for an old item.
+    func recoverIdentity() async {
+        guard canRecoverIdentity else { return }
+        syncActivityCount += 1
+        isSyncing = true
+        let store = deviceIDStore
+        let savedDeviceID = defaults.string(forKey: Self.deviceIDKey)
+        let identity = await loadOffMainActor {
+            Self.resolveDeviceID(
+                savedDeviceID: savedDeviceID,
+                store: store,
+                allowLegacyInteraction: true
+            )
+        }
+        syncActivityCount -= 1
+        isSyncing = syncActivityCount > 0
+
+        guard !identity.isProvisional else {
+            identityError = identity.error
+            legacyIdentityRecoveryAvailable = identity.canRecoverLegacyIdentity
+            return
+        }
+        AppLog.info(.config, "iCloud sync identity recovered by explicit user action")
+        deviceID = identity.id
+        defaults.set(identity.id, forKey: Self.deviceIDKey)
+        identityError = identity.error
+        identityIsProvisional = false
+        legacyIdentityRecoveryAvailable = false
+        if enabled {
+            await writeNow()
+        } else if pendingOptOutDeletion {
+            await retryPendingOptOutDeletion()
+        }
+    }
+
     /// Guards against a second retry starting while one is in flight — every local state change
     /// calls `scheduleWrite`, and a slow CloudKit delete would otherwise stack up duplicates.
     private var isRetryingOptOut = false
     private var optOutRetryTask: Task<Void, Never>?
     /// Backoff after the immediate attempt. Deletion is idempotent, so a few widely spaced retries
-    /// cost nothing and cover the realistic recoveries — unlocking the keychain, iCloud coming
+    /// cost nothing and cover the realistic recoveries — identity storage or iCloud coming
     /// back — without spinning.
     private let optOutRetryDelays: [Duration]
 
@@ -389,18 +439,40 @@ final class ICloudUsageSyncStore {
     private func resolveProvisionalIdentityIfNeeded() {
         guard identityIsProvisional else { return }
         let identity = Self.resolveDeviceID(defaults: defaults, store: deviceIDStore)
-        guard !identity.isProvisional else { return }
+        guard !identity.isProvisional else {
+            legacyIdentityRecoveryAvailable = identity.canRecoverLegacyIdentity
+            return
+        }
         AppLog.info(.config, "iCloud sync identity resolved; publishing resumes")
         deviceID = identity.id
         identityError = identity.error
         identityIsProvisional = false
+        legacyIdentityRecoveryAvailable = false
     }
 
     private static func resolveDeviceID(
         defaults: UserDefaults,
-        store: any ICloudDeviceIDStoring
-    ) -> (id: String, error: String?, isProvisional: Bool) {
-        let saved = normalizedDeviceID(defaults.string(forKey: deviceIDKey))
+        store: any ICloudDeviceIDStoring,
+        allowLegacyInteraction: Bool = false
+    ) -> DeviceIdentityResolution {
+        let identity = resolveDeviceID(
+            savedDeviceID: defaults.string(forKey: deviceIDKey),
+            store: store,
+            allowLegacyInteraction: allowLegacyInteraction
+        )
+        if !identity.isProvisional {
+            defaults.set(identity.id, forKey: deviceIDKey)
+        }
+        return identity
+    }
+
+    nonisolated private static func resolveDeviceID(
+        savedDeviceID: String?,
+        store: any ICloudDeviceIDStoring,
+        allowLegacyInteraction: Bool
+    ) -> DeviceIdentityResolution {
+        let saved = normalizedDeviceID(savedDeviceID)
+        var legacyRecoveryFailed = false
         do {
             let stored = try store.readDeviceID()
             if let stored {
@@ -410,60 +482,73 @@ final class ICloudUsageSyncStore {
                 guard let normalized = normalizedDeviceID(stored) else {
                     throw KeychainError.readFailed("This Mac's stored sync identity is not a valid identifier.")
                 }
-                defaults.set(normalized, forKey: deviceIDKey)
-                return (normalized, nil, false)
+                return DeviceIdentityResolution(
+                    id: normalized, error: nil, isProvisional: false, canRecoverLegacyIdentity: false
+                )
             }
 
-            // The saved preference is the same id the Keychain held, so on upgrades it seeds the
-            // store without touching any legacy Keychain path. Legacy recovery — which can raise a
-            // prompt when the login keychain is locked — runs only when BOTH are gone (a
+            // The saved preference is the same id the older Keychain stores held, so on upgrades it
+            // seeds the private file without touching either legacy Keychain path. Legacy recovery
+            // — which can raise a prompt when the login keychain is locked — runs only when BOTH are gone (a
             // preferences reset), and at most once: after it, either the store holds the id or a
             // freshly minted one is saved, so no later launch reaches it again.
             if let saved {
                 try store.writeDeviceID(saved)
-                return (saved, nil, false)
+                return DeviceIdentityResolution(
+                    id: saved, error: nil, isProvisional: false, canRecoverLegacyIdentity: false
+                )
             }
-            // Same rule the v2 item follows: a legacy value that is present but not a UUID is a
+            // Same rule the current file follows: a legacy value that is present but not a UUID is a
             // corrupt identity, not an absent one. Normalizing it to nil here would fall through to
             // the fresh-install path below and mint a replacement, overwriting the evidence that
             // this Mac already published under an id we failed to recover.
-            if let migrated = try store.migrateLegacyDeviceID() {
+            let migrated: String?
+            do {
+                migrated = try store.migrateLegacyDeviceID(allowInteraction: allowLegacyInteraction)
+            } catch {
+                legacyRecoveryFailed = true
+                throw error
+            }
+            if let migrated {
                 guard let normalized = normalizedDeviceID(migrated) else {
                     throw KeychainError.readFailed("This Mac's previous sync identity is not a valid identifier.")
                 }
-                defaults.set(normalized, forKey: deviceIDKey)
-                return (normalized, nil, false)
+                return DeviceIdentityResolution(
+                    id: normalized, error: nil, isProvisional: false, canRecoverLegacyIdentity: false
+                )
             }
 
             let id = UUID().uuidString.lowercased()
             try store.writeDeviceID(id)
-            defaults.set(id, forKey: deviceIDKey)
-            return (id, nil, false)
+            return DeviceIdentityResolution(
+                id: id, error: nil, isProvisional: false, canRecoverLegacyIdentity: false
+            )
         } catch {
-            AppLog.warn(.keychain, "iCloud device identity failed: \(error.localizedDescription)")
+            AppLog.warn(.config, "iCloud device identity failed: \(error.localizedDescription)")
             if let saved {
                 // A known id: publishing under it is still correct, it just isn't durable against a
                 // preferences reset.
-                defaults.set(saved, forKey: deviceIDKey)
-                return (
-                    saved,
-                    "Runway couldn’t save this Mac’s sync identity in Keychain. "
+                return DeviceIdentityResolution(
+                    id: saved,
+                    error: "Runway couldn’t save this Mac’s sync identity. "
                         + "Sync can create a duplicate device if you reset app preferences.",
-                    false
+                    isProvisional: false,
+                    canRecoverLegacyIdentity: false
                 )
             }
             // Nothing to go on: any id minted here can duplicate a record this Mac already
             // published. Keep it out of the defaults and out of the cloud until the lookup works.
-            return (
-                UUID().uuidString.lowercased(),
-                "Runway couldn’t identify this Mac for iCloud Sync. It won’t publish usage until "
-                    + "Keychain access is available again.",
-                true
+            return DeviceIdentityResolution(
+                id: UUID().uuidString.lowercased(),
+                error: "Runway couldn’t identify this Mac for iCloud Sync. It won’t publish usage until "
+                    + "its local identity storage is available again.",
+                isProvisional: true,
+                canRecoverLegacyIdentity: legacyRecoveryFailed
             )
         }
     }
 
-    private static func normalizedDeviceID(_ value: String?) -> String? {
+    nonisolated private static func normalizedDeviceID(_ value: String?) -> String? {
         guard let value, UUID(uuidString: value) != nil else { return nil }
         return value.lowercased()
     }
@@ -475,7 +560,7 @@ final class ICloudUsageSyncStore {
                 try? await Task.sleep(for: pollInterval)
                 guard !Task.isCancelled, let self else { return }
                 // A Mac with every provider disabled never fires the local-state callback, so this
-                // poll is the only recurring signal that would notice the keychain coming back.
+                // poll is the only recurring signal that would notice identity storage coming back.
                 // Without it a provisional identity stays provisional — and publishing stays off —
                 // until an unrelated setting change or a relaunch.
                 if identityIsProvisional {

@@ -1,7 +1,6 @@
 import CommonCrypto
 import CryptoKit
 import Foundation
-import LocalAuthentication
 import Security
 
 enum ClaudeDesktopCredentialStatus: Sendable, Equatable {
@@ -25,31 +24,33 @@ protocol ClaudeDesktopSafeStorageKeyReading: Sendable {
 struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
     private static let service = "Claude Safe Storage"
     private static let account = "Claude Key"
+    private let coordinator: KeychainReadCoordinator
+    private let copyMatching: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+
+    init(
+        coordinator: KeychainReadCoordinator = .shared,
+        copyMatching: @escaping @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = {
+            SecItemCopyMatching($0, $1)
+        }
+    ) {
+        self.coordinator = coordinator
+        self.copyMatching = copyMatching
+    }
 
     func readPassword(allowInteraction: Bool) throws -> String? {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: Self.account,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true
         ]
-        if !allowInteraction {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
 
-        // The process-wide keychain UI gate, not just the LAContext above: "Claude Safe Storage" is
-        // a classic login-keychain item, and its ACL dialog ignores `interactionNotAllowed` — only
-        // the gate's `SecKeychainSetUserInteractionAllowed` scope actually keeps a background read
-        // prompt-free (and an interactive read must hold the gate so a racing suppressed call can't
-        // disable UI beneath its open approval dialog).
-        // Through the coordinator like every other in-process secret read: single-flight per item,
-        // and a denial trips its breaker so five-minute refreshes stop starting new Security calls
-        // behind a wedged predecessor.
+        // Classic login-keychain ACL dialogs ignore `LAContext.interactionNotAllowed` on macOS 26.6.
+        // Automatic refreshes therefore inspect metadata only and report that a manual refresh is
+        // required. Once the user initiates a read, the derived key is cached for this process.
         var result: CFTypeRef?
-        let status = try KeychainReadCoordinator.shared.externalRead(
+        let status = try coordinator.externalRead(
             service: Self.service,
             account: Self.account,
             interactive: allowInteraction,
@@ -57,25 +58,34 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
             unavailable: { denied in denied ? ClaudeDesktopCredentialError.permissionRequired : ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable)) }
         ) { ticket -> OSStatus in
-            var gateEngaged = true
-            let status = allowInteraction
-                ? KeychainUISuppression.withUIAllowed { ui -> OSStatus in
-                    gateEngaged = ui == .available
-                    guard ui != .cancelled else { return errSecNotAvailable }
-                    return SecItemCopyMatching(query as CFDictionary, &result)
+            if !allowInteraction {
+                let metadataQuery = NonInteractiveKeychainMetadataQuery.applying(to: [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: Self.service,
+                    kSecAttrAccount as String: Self.account,
+                    kSecMatchLimit as String: kSecMatchLimitOne,
+                ])
+                let metadataStatus = copyMatching(metadataQuery as CFDictionary, nil)
+                switch metadataStatus {
+                case errSecSuccess:
+                    coordinator.recordFailureCategory(ticket, permissionDenied: true)
+                    throw ClaudeDesktopCredentialError.permissionRequired
+                case errSecItemNotFound:
+                    return metadataStatus
+                default:
+                    coordinator.recordFailureCategory(ticket, permissionDenied: false)
+                    throw ClaudeDesktopCredentialError.keychainFailure(Int(metadataStatus))
                 }
-                : KeychainUISuppression.withUISuppressed { isSuppressed in
-                    gateEngaged = isSuppressed
-                    return isSuppressed ? SecItemCopyMatching(query as CFDictionary, &result) : errSecInteractionNotAllowed
-                }
-            // Only a FAILURE without the gate is contention. An already-authorized item reads fine
-            // with UI disabled, and throwing that success away would fail a manual refresh that had
-            // in fact just succeeded.
-            if !gateEngaged, status != errSecSuccess, status != errSecItemNotFound {
-                // The read never reached a prompt, so this says nothing about the item's ACL:
-                // reporting a denial would tell the user to approve an item nobody asked about, and
-                // tripping the breaker would lock out an item that was never really attempted.
-                KeychainReadCoordinator.shared.recordContention(ticket)
+            }
+
+            var turn = InteractiveKeychainReadGate.Turn.available
+            let status = InteractiveKeychainReadGate.withTurn { currentTurn -> OSStatus in
+                turn = currentTurn
+                guard currentTurn != .cancelled else { return errSecNotAvailable }
+                return copyMatching(query as CFDictionary, &result)
+            }
+            if turn != .available, status != errSecSuccess, status != errSecItemNotFound {
+                coordinator.recordContention(ticket)
                 throw ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable))
             }
             // EVERY failure throws from inside the flight so the breaker records it — a returning
@@ -87,12 +97,12 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
                 // Remember WHY, so the breaker's later replays keep giving the same advice instead
                 // of degrading a real denial into a generic "couldn't be read".
-                KeychainReadCoordinator.shared.recordFailureCategory(
+                coordinator.recordFailureCategory(
                     ticket, permissionDenied: true
                 )
                 throw ClaudeDesktopCredentialError.permissionRequired
             default:
-                KeychainReadCoordinator.shared.recordFailureCategory(
+                coordinator.recordFailureCategory(
                     ticket, permissionDenied: false
                 )
                 throw ClaudeDesktopCredentialError.keychainFailure(Int(status))

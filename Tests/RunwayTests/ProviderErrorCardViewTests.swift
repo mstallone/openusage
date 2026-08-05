@@ -12,7 +12,7 @@ final class ProviderErrorCardViewTests: XCTestCase {
             ),
             ProviderErrorCardView.Copy(
                 title: "Claude Code Login Found",
-                description: "Refresh manually and choose Always Allow to connect it."
+                description: "Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
             )
         )
         XCTAssertEqual(

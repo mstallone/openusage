@@ -128,7 +128,7 @@ final class CopilotProvider: ProviderRuntime {
                 // only when Copilot named the seat org; otherwise `/user/orgs` must stay tied to the
                 // same credential that produced this Copilot card.
                 let billingTokens: [CopilotToken]
-                // Set when the preferred GitHub CLI credential exists but is not approved yet, so a
+                // Set when the preferred GitHub CLI credential exists but needs a manual load, so a
                 // failed billing lookup can name the real fix instead of blaming billing access.
                 var billingKeychainError: CopilotAuthError?
                 if mapped.organizationLogins.isEmpty {

@@ -111,9 +111,18 @@ struct ICloudSyncSettingsSection: View {
     }
 
     private func inlineNotice(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(Theme.notice)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(Theme.notice)
+            if sync.canRecoverIdentity {
+                Button("Recover Identity") {
+                    Task { await sync.recoverIdentity() }
+                }
+                .controlSize(.small)
+                .disabled(sync.isSyncing)
+            }
+        }
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 8)

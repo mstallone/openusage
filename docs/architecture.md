@@ -50,8 +50,8 @@ way and doesn't need to know provider-specific details. To add one, see
 The app that owns a credential is the only app allowed to change it. Provider credentials belong to
 the provider's own tool (Claude Code, the `codex` CLI, the Cursor app, GitHub CLI, …). Runway never
 writes any provider's **Keychain** item — the type system enforces that, because every credential
-store holds the read-only `KeychainReading` and no Keychain write API exists in the app outside
-`RunwayOwnedKeychainStore` (Runway's own secrets, currently the iCloud-sync device id). Grok and
+store holds the read-only `KeychainReading`. Runway's own private iCloud-sync device ID lives in
+Application Support through `RunwayOwnedFileStore`, so it needs no Keychain write API. Grok and
 Kimi remain the exception on the file side: Runway still refreshes those logins and saves them back
 to their CLIs' own credential files.
 
@@ -64,13 +64,14 @@ result in Runway's own file, never writing back to Antigravity's Keychain item. 
 refresh their own file-based logins (no Keychain involved); moving them to the same read-only model
 is the remaining ownership follow-up.
 
-Automatic Keychain reads are in-process and prompt-free; only a direct user action may raise the
-approval dialog. A manual **Refresh All** queues protected providers and prompts for them one at a
-time during the same pass, so approval dialogs never overlap. If a refresh is cancelled while its
-read is still queued, that read leaves the queue without touching Keychain. Clicking **Use** on a
-Codex reset credit may also prompt after every readable credential was rejected; that wait has the
-same bounded ceiling as a provider refresh, so an abandoned dialog cannot pin the claim forever. Both paths are
-user-initiated with the app in front of the user.
+Automatic refreshes never request secret data from another app's Keychain item. They inspect only
+non-secret metadata and reuse, for the rest of that process while the item is unchanged, a value
+loaded by a manual refresh;
+after launch or a credential change, the user must refresh manually again. Manual **Refresh All**
+queues protected providers and prompts for them one at a time, so approval dialogs never overlap.
+If a refresh is cancelled while its read is still queued, that read leaves the queue without touching
+Keychain. Clicking **Use** on a Codex reset credit may also prompt after every cached credential was
+rejected. Both paths are user-initiated with the app in front of the user.
 
 Claude, Codex, and pi share `IncrementalJSONLScanner` for local JSONL history. The scanner caches
 per-file parsed events by path, size, and modification time in a versioned Application Support store,

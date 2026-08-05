@@ -55,7 +55,7 @@ struct ProviderErrorCardView: View {
     }
 
     /// Provider error strings follow a "Short statement. Guidance." shape ("Claude Code login
-    /// found. Refresh manually and choose Always Allow to connect it."), so the first sentence
+    /// found. Refresh manually to load it; if macOS asks, choose Always Allow…"), so the first sentence
     /// becomes the title — title-cased, since it renders as one — and the rest the description. A
     /// message without that shape (an HTTP failure line) keeps a generic title so a long sentence
     /// never renders as bold headline text.

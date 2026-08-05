@@ -34,10 +34,9 @@ struct AntigravityAuthStore: Sendable {
         self.now = now
     }
 
-    /// Blocking keychain read — call off the main actor. Reads are in-process, never the
-    /// `/usr/bin/security` subprocess: automatic refreshes use the prompt-free form, and only a
-    /// manual refresh (`allowKeychainInteraction`) may raise the approval prompt — once, for Runway
-    /// itself.
+    /// Potentially blocking Keychain access — call off the main actor. Automatic refreshes inspect
+    /// metadata and reuse a manually seeded cache; only a manual refresh
+    /// (`allowKeychainInteraction`) may request secret data or raise the approval prompt.
     func loadKeychainToken(allowKeychainInteraction: Bool = false) throws -> AntigravityKeychainToken? {
         let raw: String?
         if allowKeychainInteraction {
@@ -78,7 +77,7 @@ struct AntigravityAuthStore: Sendable {
                     service: Self.keychainService,
                     account: Self.keychainAccount
                 ) == true {
-                    AppLog.error(LogTag.auth("antigravity"), "keychain credential not approved for Runway; refresh manually to approve access")
+                    AppLog.error(LogTag.auth("antigravity"), "keychain credential needs a manual refresh before Runway can load it")
                     throw AntigravityError.keychainPermissionRequired
                 }
                 AppLog.error(LogTag.auth("antigravity"), "keychain credential could not be read; the keychain may be locked")

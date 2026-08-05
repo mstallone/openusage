@@ -2,6 +2,36 @@ import Foundation
 import XCTest
 
 final class SecurityCLIUsageTests: XCTestCase {
+    func testSourcesDoNotUseDeprecatedGlobalKeychainInteractionSwitch() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sources = repository.appendingPathComponent("Sources")
+        let forbiddenSymbol = "SecKeychainSetUser" + "InteractionAllowed"
+        var violations: [String] = []
+
+        guard let files = FileManager.default.enumerator(
+            at: sources,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        ) else {
+            return XCTFail("Could not enumerate \(sources.path)")
+        }
+        for case let file as URL in files where file.pathExtension == "swift" {
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            for (offset, line) in contents.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.hasPrefix("//"), line.contains(forbiddenSymbol) else { continue }
+                violations.append("\(file.path):\(offset + 1): \(line)")
+            }
+        }
+
+        XCTAssertTrue(
+            violations.isEmpty,
+            "Do not mutate process-global Keychain UI state around blocking calls:\n\(violations.joined(separator: "\n"))"
+        )
+    }
+
     func testRepositoryOwnedCodeDoesNotInvokeSecurityCLI() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

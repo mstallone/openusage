@@ -65,6 +65,99 @@ final class WidgetDataStoreTests: XCTestCase {
         XCTAssertEqual(runtime.capturedIsForced, [true, true])
     }
 
+    func testHiddenAccountPreparationRunsOnlyForManualRefreshAllAndRetriesAfterFailure() async {
+        let provider = Provider(id: "prepare", displayName: "Prepare", icon: .providerMark("codex"))
+        let runtime = ManualContextCapturingRuntime(provider: provider)
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: []),
+            providers: [runtime],
+            defaults: makeUserDefaults("interactive-preparation")
+        )
+        var preparationResults = [false, true]
+        var preparationCount = 0
+        store.configureInteractiveRefreshPreparation(for: [provider.id]) {
+            preparationCount += 1
+            let result = preparationResults.removeFirst()
+            return Task { result }
+        }
+
+        await store.refreshAll(force: true)
+        XCTAssertEqual(preparationCount, 0, "automatic and CLI-shaped passes must not bind hidden secrets")
+
+        await store.refreshAll(force: true, interactive: true)
+        XCTAssertEqual(preparationCount, 1)
+        await store.refreshAll(force: true, interactive: true)
+        XCTAssertEqual(preparationCount, 2, "a denied or failed binding stays retryable")
+        await store.refreshAll(force: true, interactive: true)
+        XCTAssertEqual(preparationCount, 2, "a successful binding is one-shot for this process")
+    }
+
+    func testHiddenAccountPreparationSkipsDisabledProviders() async {
+        let provider = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))
+        let runtime = ManualContextCapturingRuntime(provider: provider)
+        var codexEnabled = false
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: []),
+            providers: [runtime],
+            defaults: makeUserDefaults("disabled-interactive-preparation"),
+            isProviderEnabled: { $0 != provider.id || codexEnabled }
+        )
+        var preparationCount = 0
+        store.configureInteractiveRefreshPreparation(for: [provider.id]) {
+            preparationCount += 1
+            return Task { true }
+        }
+
+        await store.refreshAll(force: true, interactive: true)
+        XCTAssertEqual(preparationCount, 0, "a disabled provider must not request its hidden credentials")
+
+        codexEnabled = true
+        await store.refreshAll(force: true, interactive: true)
+        XCTAssertEqual(preparationCount, 1)
+    }
+
+    func testHiddenAccountPreparationIsSingleFlightAndBounded() async {
+        let provider = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))
+        let runtime = ManualContextCapturingRuntime(provider: provider)
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: []),
+            providers: [runtime],
+            defaults: makeUserDefaults("bounded-interactive-preparation"),
+            interactivePreparationTimeout: 0.05
+        )
+        var continuation: CheckedContinuation<Bool, Never>?
+        var preparationCount = 0
+        store.configureInteractiveRefreshPreparation(for: [provider.id]) {
+            preparationCount += 1
+            return Task {
+                await withCheckedContinuation { continuation = $0 }
+            }
+        }
+
+        let first = Task { await store.refreshAll(force: true, interactive: true) }
+        while !store.isPreparingInteractiveRefresh { await Task.yield() }
+        let second = Task { await store.refreshAll(force: true, interactive: true) }
+        await first.value
+        await second.value
+
+        XCTAssertEqual(preparationCount, 1, "overlapping Refresh All calls must join one prompt-capable task")
+        XCTAssertFalse(store.isPreparingInteractiveRefresh, "the deadline must release the footer spinner")
+        XCTAssertEqual(
+            runtime.capturedIsManual.count,
+            1,
+            "the refresh in-flight guard may coalesce provider work, but the shared preparation deadline must let it run"
+        )
+
+        // The timed-out synchronous reader is still alive, so another click must not stack a second
+        // reader. Its eventual durable success is accepted and makes later refreshes one-shot.
+        await store.refreshAll(force: true, interactive: true)
+        XCTAssertEqual(preparationCount, 1)
+        continuation?.resume(returning: true)
+        try? await Task.sleep(for: .milliseconds(10))
+        await store.refreshAll(force: true, interactive: true)
+        XCTAssertEqual(preparationCount, 1)
+    }
+
     func testSoftWarningSurfacesOnHeaderWhilePartialDataStillLoads() async {
         // A *successful* snapshot carrying a `warning` (e.g. Claude's "Re-login for live usage" when the
         // login lacks user:profile) surfaces as the header's amber triangle via `warningMessage(for:)`,

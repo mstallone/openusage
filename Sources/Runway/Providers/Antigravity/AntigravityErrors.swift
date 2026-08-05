@@ -8,9 +8,8 @@ enum AntigravityError: Error, LocalizedError, Equatable {
     case notSignedIn
     /// The Keychain credential may exist, but macOS would not let Runway read it.
     case credentialStoreUnreadable
-    /// The Keychain item is present but its ACL has not approved Runway yet. Distinct from
-    /// `credentialStoreUnreadable` because unlocking Keychain or signing in again fixes neither —
-    /// the item is readable the moment the user approves it from an in-app manual refresh.
+    /// The Keychain item is present but automatic refresh has no fresh manually loaded value.
+    /// Distinct from `credentialStoreUnreadable`, where even metadata could not be inspected.
     case keychainPermissionRequired
     /// The Keychain item was present but did not contain usable Antigravity credential data.
     case invalidCredentialData
@@ -27,7 +26,7 @@ enum AntigravityError: Error, LocalizedError, Equatable {
         case .credentialStoreUnreadable:
             return "Couldn't read Antigravity credentials from Keychain. Unlock Keychain or sign in to Antigravity again."
         case .keychainPermissionRequired:
-            return "Antigravity login found in Keychain. Refresh manually and choose Always Allow to connect it."
+            return "Antigravity login found in Keychain. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .invalidCredentialData:
             return "Antigravity credentials are invalid. Open Antigravity or run `agy` to sign in again."
         case .authExpired:

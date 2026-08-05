@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import Runway
 
@@ -76,7 +77,7 @@ final class ICloudDeviceIdentityTests: XCTestCase {
 
         XCTAssertEqual(sync.deviceID, "aaaaaaaa-1111-2222-3333-444444444444")
         XCTAssertEqual(
-            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
+            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v3"],
             "aaaaaaaa-1111-2222-3333-444444444444"
         )
     }
@@ -106,7 +107,7 @@ final class ICloudDeviceIdentityTests: XCTestCase {
 
         XCTAssertEqual(sync.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
         XCTAssertEqual(
-            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"],
+            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v3"],
             "bbbbbbbb-1111-2222-3333-444444444444"
         )
         XCTAssertEqual(defaults.string(forKey: "runway.icloudSync.deviceID.v1"), "bbbbbbbb-1111-2222-3333-444444444444")
@@ -121,6 +122,79 @@ final class ICloudDeviceIdentityTests: XCTestCase {
             pollInterval: nil
         )
         XCTAssertEqual(relaunch.deviceID, "bbbbbbbb-1111-2222-3333-444444444444")
+    }
+
+    func testPreferencesResetCanRecoverLegacyIdentityOnlyAfterExplicitUserAction() async throws {
+        let defaults = makeDefaults("manual-legacy-identity-recovery")
+        let owned = InMemoryOwnedSecretStore()
+        let legacy = ManualOnlyLegacyKeychain(
+            value: "eeeeeeee-1111-2222-3333-444444444444"
+        )
+        let sync = ICloudUsageSyncStore(
+            dataStore: makeDataStore(defaults),
+            defaults: defaults,
+            cloudStore: RecordingUsageCloudStore(),
+            deviceIDStore: KeychainICloudDeviceIDStore(
+                ownedStore: owned,
+                legacyKeychain: legacy,
+                bundleIdentifier: "com.mattstallone.runway"
+            ),
+            pollInterval: nil
+        )
+
+        XCTAssertTrue(sync.canRecoverIdentity)
+        XCTAssertEqual(legacy.interactiveReads, 0, "launch must not request the legacy secret")
+
+        await sync.recoverIdentity()
+
+        XCTAssertFalse(sync.canRecoverIdentity)
+        XCTAssertEqual(sync.deviceID, "eeeeeeee-1111-2222-3333-444444444444")
+        XCTAssertEqual(legacy.interactiveReads, 1)
+        XCTAssertEqual(
+            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v3"],
+            "eeeeeeee-1111-2222-3333-444444444444"
+        )
+    }
+
+    func testManualLegacyRecoveryBypassesBreakerTrippedByAutomaticAttempt() throws {
+        let owned = InMemoryOwnedSecretStore()
+        let secretReads = KeychainReadCounter()
+        let accessor = SecurityKeychainAccessor(
+            coordinator: KeychainReadCoordinator(),
+            copyMatching: { query, result in
+                let attributes = query as NSDictionary
+                if attributes[kSecReturnData] as? Bool == true {
+                    secretReads.increment()
+                    result?.pointee = Data("ffffffff-1111-2222-3333-444444444444".utf8) as CFData
+                    return errSecSuccess
+                }
+                if attributes[kSecReturnAttributes] as? Bool == true {
+                    result?.pointee = [
+                        kSecAttrService as String: "com.mattstallone.runway.icloud-sync-device-id.v1",
+                        kSecAttrModificationDate as String: Date(timeIntervalSinceReferenceDate: 1),
+                    ] as CFDictionary
+                }
+                return errSecSuccess
+            }
+        )
+        let store = KeychainICloudDeviceIDStore(
+            ownedStore: owned,
+            legacyKeychain: accessor,
+            bundleIdentifier: "com.mattstallone.runway"
+        )
+
+        XCTAssertThrowsError(try store.migrateLegacyDeviceID())
+        XCTAssertEqual(secretReads.value, 0, "automatic recovery must not request secret data")
+
+        XCTAssertEqual(
+            try store.migrateLegacyDeviceID(allowInteraction: true),
+            "ffffffff-1111-2222-3333-444444444444"
+        )
+        XCTAssertEqual(secretReads.value, 1, "manual recovery must reach the interactive read")
+        XCTAssertEqual(
+            owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v3"],
+            "ffffffff-1111-2222-3333-444444444444"
+        )
     }
 
     func testUnknownLegacyProbeNeverPublishesAProvisionalIdentity() async throws {
@@ -274,7 +348,7 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         // minted and a second record published for a Mac that already has one.
         let defaults = makeDefaults("invalid-stored-device-id")
         let owned = InMemoryOwnedSecretStore()
-        owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"] = "not-a-uuid"
+        owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v3"] = "not-a-uuid"
         let cloudStore = RecordingUsageCloudStore()
         let sync = ICloudUsageSyncStore(
             dataStore: makeDataStore(defaults),
@@ -291,13 +365,14 @@ final class ICloudDeviceIdentityTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(120))
 
         XCTAssertNotNil(sync.serviceError, "a corrupt identity must be reported, not silently replaced")
+        XCTAssertFalse(sync.canRecoverIdentity, "legacy recovery cannot repair a malformed current identity file")
         XCTAssertNil(
             defaults.string(forKey: "runway.icloudSync.deviceID.v1"),
             "no replacement identity may be persisted"
         )
         let writes = await cloudStore.writeCount
         XCTAssertEqual(writes, 0, "and nothing may be published under a minted id")
-        XCTAssertEqual(owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v2"], "not-a-uuid")
+        XCTAssertEqual(owned.secrets["com.mattstallone.runway.icloud-sync-device-id.v3"], "not-a-uuid")
     }
 
     func testAnInvalidLegacyIdentityNeverMintsAReplacement() async throws {
@@ -328,29 +403,15 @@ final class ICloudDeviceIdentityTests: XCTestCase {
     func testAnUndecodableOwnedValueIsAReadFailureNotAnAbsentItem() throws {
         // The owned store must surface a present-but-undecodable item as an error. Returning nil
         // would put the store on the same "fresh install" path as a genuinely missing item.
-        let store = RunwayOwnedKeychainStore()
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RunwayOwnedFileStoreInvalidTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RunwayOwnedFileStore(directory: directory.path)
         let service = "RunwayTests.owned.invalid.\(UUID().uuidString)"
-        let add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "runway",
-            kSecValueData as String: Data([0xFF, 0xFE, 0xFD]),
-        ]
-        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else {
-            throw XCTSkip("cannot create a login-keychain item in this environment")
-        }
-        defer {
-            _ = SecItemDelete([
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-            ] as CFDictionary)
-        }
+        try Data([0xFF, 0xFE, 0xFD]).write(to: directory.appendingPathComponent(service))
 
-        XCTAssertThrowsError(try store.read(service: service)) { error in
-            guard case KeychainError.readFailed = error else {
-                return XCTFail("expected KeychainError.readFailed, got \(error)")
-            }
-        }
+        XCTAssertThrowsError(try store.read(service: service))
     }
 
     func testMissingDeviceIDReadsNilWithoutInventingAnIdentity() throws {
@@ -401,6 +462,10 @@ final class ProbeOnlyKeychain: KeychainReading, @unchecked Sendable {
         false
     }
 
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        false
+    }
+
     func writeGenericPassword(service: String, value: String) throws {}
 }
 
@@ -416,8 +481,50 @@ final class IndeterminateProbeKeychain: KeychainReading, @unchecked Sendable {
         nil
     }
 
+    func genericPasswordExists(service: String, account: String) -> Bool? {
+        nil
+    }
+
     func genericPasswordForCurrentUserExists(service: String) -> Bool? {
         nil
+    }
+}
+
+private final class ManualOnlyLegacyKeychain: KeychainReading, @unchecked Sendable {
+    private let value: String
+    private let lock = NSLock()
+    private var readCount = 0
+
+    init(value: String) {
+        self.value = value
+    }
+
+    var interactiveReads: Int { lock.withLock { readCount } }
+
+    func readGenericPassword(service: String) throws -> String? { nil }
+
+    func readGenericPasswordForCurrentUserWithoutUserInteraction(
+        service: String
+    ) -> NonInteractiveKeychainRead {
+        .unavailable
+    }
+
+    func readGenericPasswordForCurrentUserAllowingUserInteraction(service: String) throws -> String? {
+        lock.withLock { readCount += 1 }
+        return value
+    }
+
+    func genericPasswordForCurrentUserExists(service: String) -> Bool? { true }
+}
+
+private final class KeychainReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() {
+        lock.withLock { count += 1 }
     }
 }
 
