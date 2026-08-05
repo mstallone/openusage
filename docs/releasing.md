@@ -1,6 +1,6 @@
 # Releasing
 
-Releases are automated: when you push a stable tag such as `v0.7.1` on `main`, the pipeline tests, builds, signs, notarizes, and publishes a new version with its SHA-256 checksum. Prerelease suffixes are rejected. The pipeline lives in [.github/workflows/release.yml](../.github/workflows/release.yml), and the step-by-step is in the `release-swift` skill.
+Releases are automated: when you push a stable tag such as `v0.7.1` on `main`, the pipeline tests, builds, signs, notarizes, and publishes a new version with its SHA-256 checksum. Prerelease suffixes are rejected. The macOS pipeline lives in [.github/workflows/release.yml](../.github/workflows/release.yml), which calls the separate [iOS TestFlight pipeline](../.github/workflows/release-ios.yml) in parallel. The step-by-step is in the `release-swift` skill.
 
 Release tags are owner-managed — see [CONTRIBUTING.md](../CONTRIBUTING.md). Everything below is one-time setup for the maintainer's fork, not something contributors need.
 

@@ -31,8 +31,11 @@ jobs:
       - name: Run tests
         run: swift test
 
+      - name: Test TestFlight gate paths
+        run: node --test script/lib/testflight_paths.test.mjs
+
   # Compile check for the iOS companion app so a PR can't silently break the TestFlight job in
-  # release.yml. Unsigned simulator build only — signing and upload are exercised at release time.
+  # release-ios.yml. Unsigned simulator build only — signing and upload happen only at release time.
   ios:
     name: Build iOS App
     runs-on: macos-26
