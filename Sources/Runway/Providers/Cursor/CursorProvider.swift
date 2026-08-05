@@ -74,6 +74,10 @@ final class CursorProvider: ProviderRuntime {
         switch load {
         case .state(let loaded):
             state = loaded
+        case .connectRequired:
+            // The login exists but hasn't been loaded this process — the neutral Connect
+            // affordance, not a warning.
+            return ProviderSnapshot.connectPrompt(provider: provider, error: CursorAuthError.keychainConnectRequired)
         case .keychainPermissionRequired:
             return ProviderSnapshot.error(provider: provider, error: CursorAuthError.keychainPermissionRequired)
         case .unreadable:
@@ -102,6 +106,13 @@ final class CursorProvider: ProviderRuntime {
             switch alternativeLoad {
             case .state(let candidate):
                 alternative = candidate
+            case .connectRequired:
+                // The live credential may be the one Runway hasn't loaded yet — offer the connect
+                // prompt instead of sending the user to sign in again.
+                return ProviderSnapshot.connectPrompt(
+                    provider: provider,
+                    error: CursorAuthError.keychainConnectRequired
+                )
             case .keychainPermissionRequired:
                 // The live credential may be the one Runway can't read yet — say so instead of
                 // sending the user to sign in again.

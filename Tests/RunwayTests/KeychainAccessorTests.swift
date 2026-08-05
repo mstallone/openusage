@@ -113,6 +113,23 @@ final class KeychainAccessorTests: XCTestCase {
         )
     }
 
+    func testDeferredAutomaticReadRecordsANeutralCategoryNotADenial() {
+        // "An item exists, but the automatic read intentionally didn't inspect it" is NOT
+        // "keychain permission is required": nothing asked securityd for the secret, so nothing
+        // can have been denied. The deferral must be remembered as `.manualReadDeferred` so
+        // providers offer the neutral Connect affordance instead of a permission warning.
+        let accessor = SecurityKeychainAccessor(
+            coordinator: KeychainReadCoordinator(),
+            copyMatching: { _, _ in errSecSuccess }
+        )
+
+        XCTAssertEqual(
+            accessor.readGenericPasswordWithoutUserInteraction(service: "service"),
+            .unavailable
+        )
+        XCTAssertEqual(accessor.lastReadFailure(service: "service"), .manualReadDeferred)
+    }
+
     func testManualReadWaitsOutModificationDateCollisionBeforeCaching() throws {
         struct ProbeState {
             var secret = "old-secret"
@@ -188,8 +205,8 @@ final class KeychainAccessorTests: XCTestCase {
             }
         )
         XCTAssertThrowsError(try claude.readPassword(allowInteraction: false)) {
-            guard case ClaudeDesktopCredentialError.permissionRequired = $0 else {
-                return XCTFail("expected manual-read requirement, got \($0)")
+            guard case ClaudeDesktopCredentialError.manualReadDeferred = $0 else {
+                return XCTFail("expected the deferred-read outcome, got \($0)")
             }
         }
         XCTAssertFalse(claudeRequestedSecretData.withLock { $0 })
@@ -213,8 +230,8 @@ final class KeychainAccessorTests: XCTestCase {
         XCTAssertThrowsError(
             try sakana.readPassword(service: "Browser Safe Storage", allowInteraction: false)
         ) {
-            guard case SakanaBrowserCredentialError.permissionRequired = $0 else {
-                return XCTFail("expected manual-read requirement, got \($0)")
+            guard case SakanaBrowserCredentialError.manualReadDeferred = $0 else {
+                return XCTFail("expected the deferred-read outcome, got \($0)")
             }
         }
         XCTAssertFalse(sakanaRequestedSecretData.withLock { $0 })

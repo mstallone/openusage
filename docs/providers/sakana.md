@@ -56,10 +56,11 @@ profiles. It reads the browser's cookie database in read-only mode, decrypts the
 memory with that browser's Safe Storage key, and sends the cookie only to Sakana Console. Runway
 does not copy the cookie into its own configuration, refresh it, or change the browser database.
 
-After launch, refresh manually to load the browser's Safe Storage key. That read can show a macOS
-Keychain prompt; choosing **Always Allow** avoids the dialog on future manual reads. Runway caches the
-derived key for the rest of the process, so scheduled refreshes do not request the Keychain secret.
-If you deny the request, the browser session stays untouched and the provider reports an access error.
+After launch, the card offers a neutral **Connect** action to load the browser's Safe Storage key.
+That read can show a macOS Keychain prompt; choosing **Always Allow** avoids the dialog on future
+manual reads. Runway caches the derived key for the rest of the process, so scheduled refreshes do
+not request the Keychain secret. If you deny the request, the browser session stays untouched and
+the provider shows a permission warning.
 
 Safari is not currently supported because it uses a different cookie store and security model.
 
@@ -99,8 +100,11 @@ changes it, instead of silently displaying zero. Local history scanning makes no
 ## Troubleshooting
 
 - **"Sign in to Sakana AI Console"** — sign in through a supported Chromium browser, then refresh.
-- **"Allow Runway to read your browser's Safe Storage key"** — run a manual refresh and approve the
-  macOS Keychain prompt. Choose **Always Allow** to avoid a dialog on future manual reads.
+- **"Sakana browser session found"** (a neutral key glyph / **Connect** button, not a warning) — the
+  Safe Storage key hasn't been loaded this app session. Connect and approve the macOS Keychain
+  prompt; choose **Always Allow** to avoid a dialog on future manual reads.
+- **"Keychain access to your browser's Safe Storage key was declined"** — a manual read was denied.
+  Refresh and choose **Always Allow** when macOS asks.
 - **"The Sakana browser session expired"** — sign out and back in at Sakana AI Console, then refresh.
 - **"The Sakana browser session couldn't be decoded"** — update or restart the browser, sign in again,
   and retry. A change to the browser's cookie encryption can cause this.

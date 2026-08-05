@@ -8,6 +8,10 @@ struct CopilotToken: Hashable, Sendable {
 enum CopilotAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case tokenInvalid
+    /// The gh Keychain item exists but hasn't been loaded this process — the neutral connect
+    /// prompt, not a warning.
+    case keychainConnectRequired
+    /// An attempted manual read of the gh Keychain item was denied.
     case keychainPermissionRequired
     case credentialStoreUnreadable
 
@@ -17,8 +21,10 @@ enum CopilotAuthError: Error, LocalizedError, Equatable {
             return "Sign in to GitHub Copilot in your editor, or run gh auth login, and try again."
         case .tokenInvalid:
             return "GitHub token invalid or expired. Re-authenticate (gh auth login) and try again."
+        case .keychainConnectRequired:
+            return "GitHub login found in Keychain. Connect to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .keychainPermissionRequired:
-            return "GitHub login found in Keychain. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
+            return "Keychain access to the GitHub login was declined. Refresh and choose Always Allow when macOS asks."
         case .credentialStoreUnreadable:
             return "GitHub login couldn’t be read. Unlock your login keychain and refresh."
         }
@@ -34,11 +40,14 @@ struct CopilotBillingCandidates: Sendable {
     var keychainError: CopilotAuthError?
 }
 
-/// Outcome of a credential load. `keychainPermissionRequired` means a gh Keychain item exists but
-/// Runway isn't authorized to read it prompt-free yet — a real login footprint that only an explicit
-/// manual refresh may convert into access.
+/// Outcome of a credential load. `connectRequired` means a gh Keychain item exists but its secret
+/// hasn't been loaded into this process yet — a real login footprint that only an explicit user
+/// action may convert into access, and a neutral state (nothing was denied).
 enum CopilotCredentialLoad: Equatable, Sendable {
     case token(CopilotToken)
+    case connectRequired
+    /// An attempted (user-attended) read of the item was denied — the ACL rejects Runway, or the
+    /// user declined the dialog. Unlike `connectRequired`, this genuinely needs the user to act.
     case keychainPermissionRequired
     /// The item could not be read for a reason approval cannot fix — a locked login keychain, or
     /// securityd failing. Kept apart from `keychainPermissionRequired` so the card gives advice
@@ -104,12 +113,14 @@ struct CopilotAuthStore: Sendable {
         var keychainError: CopilotAuthError?
         if ghToken == nil {
             var load = loadFromGhKeychain()
-            // Retry BOTH unavailable outcomes when the user is watching. The automatic path records
-            // that a manual secret read is required, so the deliberate refresh must bypass it.
-            if load == .keychainPermissionRequired || load == .unreadable, allowKeychainInteraction {
+            // Retry EVERY unavailable outcome when the user is watching. The automatic path defers
+            // the secret read to exactly this deliberate refresh, so it must bypass the deferral.
+            if load == .connectRequired || load == .keychainPermissionRequired || load == .unreadable,
+               allowKeychainInteraction {
                 load = loadFromGhKeychain(allowKeychainInteraction: true)
             }
             switch load {
+            case .connectRequired: keychainError = .keychainConnectRequired
             case .keychainPermissionRequired: keychainError = .keychainPermissionRequired
             case .unreadable: keychainError = .credentialStoreUnreadable
             case .token, .none: keychainError = nil
@@ -165,18 +176,20 @@ struct CopilotAuthStore: Sendable {
                     // Never broaden to the account-less query from here — with several
                     // `gh:github.com` items it could silently select another account's token.
                     // Broadening is allowed only when the scoped item provably does not exist.
-                    switch keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService, account: account) {
-                    case true?:
+                    switch keychain.lastReadFailure(service: Self.ghKeychainService, account: account) {
+                    case .manualReadDeferred?:
+                        return .connectRequired
+                    case .permissionDenied?:
                         return .keychainPermissionRequired
-                    case false?:
+                    case .unreadable?:
                         return .unreadable
                     case nil:
                         // No verdict recorded: UI-gate contention leaves none by design, and the
-                        // probe behind that same gate answers nil too. The item was never examined,
-                        // so report it unreadable rather than asking to approve an item that may
-                        // already be authorized. A probe that proves absence still falls through.
+                        // probe behind that same gate answers nil too. A confirmed-present item was
+                        // simply never read — a deferral, not a denial. An unexamined one reports
+                        // unreadable; a probe that proves absence still falls through.
                         switch keychain.genericPasswordExists(service: Self.ghKeychainService, account: account) {
-                        case true?: return .keychainPermissionRequired
+                        case true?: return .connectRequired
                         case nil: return .unreadable
                         case false?: break
                         }
@@ -192,21 +205,23 @@ struct CopilotAuthStore: Sendable {
                 return .none
             case .unavailable:
                 // An existing-but-unreadable item is a real login footprint (`hasLocalCredentials`
-                // must see it); only a manual refresh may convert it into access. The existence
+                // must see it); only a manual read may convert it into access. The existence
                 // probe is attributes-only and prompt-free, and `nil` from it means "cannot check"
                 // (locked keychain, suppressed UI, stuck flight) — never "absent", which would
                 // report a real login as logged-out.
-                switch keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService) {
-                case true?:
+                switch keychain.lastReadFailure(service: Self.ghKeychainService) {
+                case .manualReadDeferred?:
+                    return .connectRequired
+                case .permissionDenied?:
                     return .keychainPermissionRequired
-                case false?:
+                case .unreadable?:
                     return .unreadable
                 case nil:
                     // No verdict and an indeterminate probe means the item was never examined —
-                    // unreadable, not unapproved. A confirmed-present item still asks for approval,
-                    // and only a confirmed-absent one reports no credential.
+                    // unreadable, not unapproved. A confirmed-present item offers the connect
+                    // prompt, and only a confirmed-absent one reports no credential.
                     switch keychain.genericPasswordExists(service: Self.ghKeychainService) {
-                    case true?: return .keychainPermissionRequired
+                    case true?: return .connectRequired
                     case nil: return .unreadable
                     case false?: return .none
                     }
@@ -240,12 +255,21 @@ struct CopilotAuthStore: Sendable {
     /// A failed interactive read is a denial only when the read's own status said so. A locked
     /// keychain or a wedged UI gate reaches the same catch, and approval cannot fix either.
     private func interactiveFailureLoad(account: String?) -> CopilotCredentialLoad {
-        let denied = account.map { keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService, account: $0) }
-            ?? keychain.lastReadWasPermissionDenied(service: Self.ghKeychainService)
-        // Only a recorded ACL denial asks for approval. No verdict at all means the read never
-        // reached one — UI-gate contention leaves no category by design — and telling the user to
-        // choose Always Allow for an item that was never examined is wrong advice.
-        return denied == true ? .keychainPermissionRequired : .unreadable
+        let failure = account.map { keychain.lastReadFailure(service: Self.ghKeychainService, account: $0) }
+            ?? keychain.lastReadFailure(service: Self.ghKeychainService)
+        switch failure {
+        case .permissionDenied?:
+            return .keychainPermissionRequired
+        case .manualReadDeferred?:
+            // A lingering deferral verdict from an earlier automatic pass (this read itself never
+            // reached securityd). Still a connect prompt, never a denial.
+            return .connectRequired
+        case .unreadable?, nil:
+            // No verdict at all means the read never reached one — UI-gate contention leaves no
+            // category by design — and telling the user to choose Always Allow for an item that
+            // was never examined is wrong advice.
+            return .unreadable
+        }
     }
 
     private func credentialLoad(fromKeychainRaw raw: String) -> CopilotCredentialLoad {

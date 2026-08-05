@@ -119,7 +119,8 @@ enum ShareCardRenderer {
                     }
                     return descriptor
                 }
-            )
+            ),
+            errorIsConnectPrompt: dataStore.noticeIsConnectPrompt(for: group.provider.id)
         )
         return renderAndCopy(view, label: group.provider.id, layout: layout)
     }

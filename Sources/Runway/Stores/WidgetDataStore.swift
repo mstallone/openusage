@@ -99,6 +99,12 @@ final class WidgetDataStore {
     /// renders it as a warning indicator beside the provider name; the last good snapshot keeps
     /// displaying (stale-while-revalidate) instead of being replaced by dead "No data" rows.
     var providerErrors: [String: String] = [:]
+    /// The providers whose current `providerErrors` entry is the neutral connect prompt (a
+    /// credential exists but hasn't been loaded this process) rather than a real failure. The
+    /// dashboard renders those with the Connect affordance instead of the warning treatment.
+    /// Maintained strictly alongside `providerErrors`: membership without an error entry is
+    /// meaningless and never happens.
+    var providerConnectPrompts: Set<String> = []
 
     /// Per-provider earliest next-probe time after a failure (see `failureRetryBackoff`). Not part of
     /// observable UI state, so it's excluded from `@Observable` tracking.
@@ -524,6 +530,7 @@ final class WidgetDataStore {
         guard var snapshot = timedOutSnapshot else {
             let message = "Refresh timed out after \(Int(refreshTimeout))s"
             providerErrors[providerID] = message
+            providerConnectPrompts.remove(providerID)
             failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
             AppLog.warn(.refresh, "\(providerID) timed out after \(Int(refreshTimeout * 1000))ms; keeping last-good snapshot")
             if notifyStateChange { onLocalStateChanged?() }
@@ -546,6 +553,12 @@ final class WidgetDataStore {
             // Failed refresh: surface the error but keep the last good snapshot on screen rather than
             // collapsing every row to "No data". The provider error string is already user-safe.
             providerErrors[providerID] = message
+            // A connect prompt travels this same path but renders neutrally — remember which it is.
+            if snapshot.lines.first?.isConnectPrompt == true {
+                providerConnectPrompts.insert(providerID)
+            } else {
+                providerConnectPrompts.remove(providerID)
+            }
             // Negative-cache the failure so a wake burst can't re-probe this provider in a tight loop.
             failureRetryAfter[providerID] = now().addingTimeInterval(Self.failureRetryBackoff)
             AppLog.warn(.refresh, "\(providerID) failed: \(message)")
@@ -555,6 +568,7 @@ final class WidgetDataStore {
         if providerErrors[providerID] != nil {
             providerErrors[providerID] = nil
         }
+        providerConnectPrompts.remove(providerID)
         // Recovered: drop any backoff so the provider resumes the normal cadence immediately.
         failureRetryAfter[providerID] = nil
         // A provider can refresh its live limits successfully while its optional local log/CSV scan
@@ -672,13 +686,17 @@ final class WidgetDataStore {
         for id in errors.keys where snapshots[id] == nil {
             names[id] = resolveDisplayName?(id) ?? registry.provider(id: id)?.displayName ?? id
         }
+        // The connect-prompt flavor travels with the errors it describes, so a companion app can
+        // render those entries neutrally instead of as warnings.
+        let connectPrompts = providerConnectPrompts.filter { errors.keys.contains($0) }
         return DeviceSnapshotDocument(
             deviceID: deviceID,
             deviceName: deviceName,
             updatedAt: updatedAt,
             snapshots: snapshots,
             providerErrors: errors,
-            providerNames: names.isEmpty ? nil : names
+            providerNames: names.isEmpty ? nil : names,
+            providerConnectPrompts: connectPrompts.isEmpty ? nil : connectPrompts
         )
     }
 
@@ -867,6 +885,18 @@ final class WidgetDataStore {
     func headerNoticeAction(for providerID: String) -> ProviderSnapshot.WarningAction {
         if errorMessage(for: providerID) != nil { return .refresh }
         return snapshots[providerID]?.resolvedWarningAction ?? .refresh
+    }
+
+    /// Whether the notice `headerNotice(for:)` (or `emptyStateError(for:)`) returns is the neutral
+    /// connect prompt: a credential exists on the machine but hasn't been loaded into this process.
+    /// The dashboard then shows a Connect affordance — nothing is broken, so no amber triangle.
+    /// Follows `headerNotice`'s precedence: with a current refresh error the error's flavor speaks;
+    /// otherwise the last successful snapshot's soft warning does.
+    func noticeIsConnectPrompt(for providerID: String) -> Bool {
+        if errorMessage(for: providerID) != nil {
+            return providerConnectPrompts.contains(providerID)
+        }
+        return snapshots[providerID]?.warningIsConnectPrompt ?? false
     }
 
     /// A snapshot that carries only error lines is a failed refresh; its message comes from the badge.

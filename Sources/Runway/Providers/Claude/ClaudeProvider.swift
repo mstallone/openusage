@@ -104,8 +104,12 @@ final class ClaudeProvider: ProviderRuntime {
         // login that may be stale or belong to another account. Automatic refresh remains
         // non-interactive; a manual refresh performs the explicit in-process approval read.
         switch credentialLoad.keychainAccessStatus {
-        case .permissionRequired:
-            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.codePermissionRequired)
+        case .connectRequired:
+            // The login exists but hasn't been loaded this process. Nothing is wrong — offer the
+            // neutral Connect affordance instead of a warning.
+            return ProviderSnapshot.connectPrompt(provider: provider, error: ClaudeAuthError.codeConnectRequired)
+        case .permissionDenied:
+            return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.codePermissionDenied)
         case .unavailable:
             return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.codeCredentialsUnavailable)
         case .resolved:
@@ -113,8 +117,10 @@ final class ClaudeProvider: ProviderRuntime {
         }
         if forceDesktopFallback {
             switch credentialLoad.desktopStatus {
+            case .connectRequired:
+                return ProviderSnapshot.connectPrompt(provider: provider, error: ClaudeAuthError.desktopConnectRequired)
             case .permissionRequired:
-                return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopPermissionRequired)
+                return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopPermissionDenied)
             case .stale, .invalid, .notFound:
                 if let previousFallbackError {
                     return await failureSnapshot(
@@ -129,14 +135,16 @@ final class ClaudeProvider: ProviderRuntime {
         let hasLiveUsageCandidate = candidates.contains {
             authStore.liveUsageAvailability($0) == .available
         }
-        let desktopFallbackWarning: String? = if !hasLiveUsageCandidate {
+        let desktopFallbackWarning: (message: String, isConnectPrompt: Bool)? = if !hasLiveUsageCandidate {
             switch credentialLoad.desktopStatus {
+            case .connectRequired:
+                (ClaudeAuthError.desktopConnectRequired.localizedDescription, true)
             case .permissionRequired:
-                ClaudeAuthError.desktopPermissionRequired.localizedDescription
+                (ClaudeAuthError.desktopPermissionDenied.localizedDescription, false)
             case .stale:
-                ClaudeAuthError.desktopTokenExpired.localizedDescription
+                (ClaudeAuthError.desktopTokenExpired.localizedDescription, false)
             case .invalid:
-                ClaudeAuthError.desktopCredentialsUnavailable.localizedDescription
+                (ClaudeAuthError.desktopCredentialsUnavailable.localizedDescription, false)
             case .notChecked, .notFound, .available:
                 nil
             }
@@ -145,8 +153,10 @@ final class ClaudeProvider: ProviderRuntime {
         }
         guard !candidates.isEmpty else {
             switch credentialLoad.desktopStatus {
+            case .connectRequired:
+                return ProviderSnapshot.connectPrompt(provider: provider, error: ClaudeAuthError.desktopConnectRequired)
             case .permissionRequired:
-                return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopPermissionRequired)
+                return ProviderSnapshot.error(provider: provider, error: ClaudeAuthError.desktopPermissionDenied)
             case .stale:
                 // A Desktop-only login whose cached token lapsed: same renewal treatment as a lapsed
                 // CLI login (Desktop's loader returns no credential state for a stale entry).
@@ -231,7 +241,7 @@ final class ClaudeProvider: ProviderRuntime {
 
     private func probe(
         state: ClaudeCredentialState,
-        fallbackWarning: String?
+        fallbackWarning: (message: String, isConnectPrompt: Bool)?
     ) async throws -> ProviderSnapshot {
         var mapped = ClaudeMappedUsage(
             plan: ClaudeUsageMapper.formatPlan(
@@ -264,12 +274,20 @@ final class ClaudeProvider: ProviderRuntime {
             // to nag about — the spend tiles still load below.
             break
         }
+        var warningIsConnectPrompt = false
         if let fallbackWarning {
-            // The Desktop-login notice: the user renews it, then refreshes — actionable.
-            warning = fallbackWarning
+            // The Desktop-login notice: the user renews (or connects) it, then refreshes —
+            // actionable. A deferred Desktop read stays the neutral connect prompt here too.
+            warning = fallbackWarning.message
             warningAction = .refresh
+            warningIsConnectPrompt = fallbackWarning.isConnectPrompt
         }
-        return await localUsageSnapshot(mapped: mapped, warning: warning, warningAction: warningAction)
+        return await localUsageSnapshot(
+            mapped: mapped,
+            warning: warning,
+            warningAction: warningAction,
+            warningIsConnectPrompt: warningIsConnectPrompt
+        )
     }
 
     /// Assembles the published snapshot from whatever live usage is available plus the always-local
@@ -277,7 +295,8 @@ final class ClaudeProvider: ProviderRuntime {
     private func localUsageSnapshot(
         mapped initialMapped: ClaudeMappedUsage,
         warning: String?,
-        warningAction: ProviderSnapshot.WarningAction = .refresh
+        warningAction: ProviderSnapshot.WarningAction = .refresh,
+        warningIsConnectPrompt: Bool = false
     ) async -> ProviderSnapshot {
         var mapped = initialMapped
         // Local spend tiles, scanned natively from Claude Code's session logs and priced through the
@@ -315,7 +334,8 @@ final class ClaudeProvider: ProviderRuntime {
             refreshedAt: now(),
             usageHistory: usageHistory,
             warning: warning,
-            warningAction: warningAction
+            warningAction: warningAction,
+            warningIsConnectPrompt: warningIsConnectPrompt
         )
     }
 

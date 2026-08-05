@@ -75,6 +75,7 @@ struct WidgetGroupedListView: View {
             provider: group.provider,
             plan: dataStore.plan(for: group.provider.id),
             warning: dataStore.headerNotice(for: group.provider.id),
+            noticeIsConnectPrompt: dataStore.noticeIsConnectPrompt(for: group.provider.id),
             refreshing: dataStore.refreshingProviderIDs.contains(group.provider.id),
             staleness: dataStore.stalenessHint(for: group.provider.id),
             onWarningRefresh: canRefreshNotice ? { refreshProvider(group.provider.id) } : nil,
@@ -203,6 +204,7 @@ struct WidgetGroupedListView: View {
         ProviderErrorCardView(
             message: message,
             isRefreshing: dataStore.refreshingProviderIDs.contains(providerID),
+            style: dataStore.noticeIsConnectPrompt(for: providerID) ? .connect : .warning,
             onRefresh: { refreshProvider(providerID) }
         )
     }
@@ -492,7 +494,8 @@ struct WidgetGroupedListView: View {
                 provider: group.provider,
                 plan: dataStore.plan(for: group.provider.id),
                 rows: errorMessage == nil ? visibleRows.map(\.data) : [],
-                errorMessage: errorMessage
+                errorMessage: errorMessage,
+                errorIsConnectPrompt: dataStore.noticeIsConnectPrompt(for: group.provider.id)
             ),
             value: value,
             frames: rowFrames.frames

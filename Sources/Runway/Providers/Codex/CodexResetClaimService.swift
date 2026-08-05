@@ -91,6 +91,11 @@ final class CodexResetClaimService {
                         LogTag.auth("codex"),
                         "reset claim could not read the Codex keyring item; approve it for Runway and try again"
                     )
+                } else if case .connectRequired = keychainLoad {
+                    AppLog.info(
+                        LogTag.auth("codex"),
+                        "reset claim deferred the Codex keyring read; connect the login and try again"
+                    )
                 }
                 if let keychain = keychainLoad.state {
                     candidates.append(keychain)

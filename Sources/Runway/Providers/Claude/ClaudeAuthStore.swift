@@ -84,20 +84,30 @@ struct ClaudeCredentialState: Hashable, Sendable {
 }
 
 /// Whether Claude Code's higher-priority Keychain sources were conclusively checked. Automatic
-/// callers never interact with Keychain UI: a protected item is reported as `.permissionRequired`,
-/// while a locked/denied attributes probe is `.unavailable` because item existence is unknown.
+/// callers never interact with Keychain UI: an existing item whose secret simply hasn't been
+/// loaded this process is the neutral `.connectRequired`, an ACL denial from an attempted
+/// (user-attended) read is `.permissionDenied`, and a locked/denied attributes probe is
+/// `.unavailable` because item existence is unknown.
 enum ClaudeKeychainAccessStatus: Equatable, Sendable {
     case resolved
-    case permissionRequired
+    /// A Claude Code item exists; only an explicit user action may read its secret. Neutral —
+    /// nothing was denied — so it surfaces as a Connect affordance, never a warning.
+    case connectRequired
+    /// An attempted read was denied (the user declined the dialog, or the ACL rejects Runway).
+    case permissionDenied
     case unavailable
 
-    mutating func recordUnreadableItem(exists: Bool?) {
-        switch exists {
-        case true:
-            self = .permissionRequired
-        case false:
-            break
-        case nil:
+    /// Severity order across a store's several keychain services: a real denial outranks a pending
+    /// connect, which outranks "couldn't check".
+    mutating func record(_ failure: KeychainReadFailure) {
+        switch failure {
+        case .permissionDenied:
+            self = .permissionDenied
+        case .manualReadDeferred:
+            if self != .permissionDenied {
+                self = .connectRequired
+            }
+        case .unreadable:
             if self == .resolved {
                 self = .unavailable
             }
@@ -115,9 +125,14 @@ struct ClaudeCredentialLoad: Sendable {
 
 enum ClaudeAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
-    case codePermissionRequired
+    /// A Claude Code login exists but hasn't been loaded into this process — the neutral connect
+    /// prompt, not a warning.
+    case codeConnectRequired
+    /// An attempted manual read of the Claude Code login was denied.
+    case codePermissionDenied
     case codeCredentialsUnavailable
-    case desktopPermissionRequired
+    case desktopConnectRequired
+    case desktopPermissionDenied
     case desktopTokenExpired
     case desktopCredentialsUnavailable
     case loginRenewalRequired
@@ -127,12 +142,16 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .notLoggedIn:
             return "Not logged in. Run `claude` to authenticate."
-        case .codePermissionRequired:
-            return "Claude Code login found. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
+        case .codeConnectRequired:
+            return "Claude Code login found. Connect to load it; if macOS asks, choose Always Allow to avoid future dialogs."
+        case .codePermissionDenied:
+            return "Keychain access to the Claude Code login was declined. Refresh and choose Always Allow when macOS asks."
         case .codeCredentialsUnavailable:
             return "Claude Code credentials couldn't be checked. Unlock your login keychain, then refresh."
-        case .desktopPermissionRequired:
-            return "Claude Desktop login found. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
+        case .desktopConnectRequired:
+            return "Claude Desktop login found. Connect to load it; if macOS asks, choose Always Allow to avoid future dialogs."
+        case .desktopPermissionDenied:
+            return "Keychain access to the Claude Desktop login was declined. Refresh and choose Always Allow when macOS asks."
         case .desktopTokenExpired:
             return "Claude Desktop login is stale. Open Claude Desktop, then refresh Runway."
         case .desktopCredentialsUnavailable:
@@ -154,8 +173,9 @@ enum ClaudeAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .loginRenewalRequired, .desktopTokenExpired:
             return true
-        case .notLoggedIn, .codePermissionRequired, .codeCredentialsUnavailable, .desktopPermissionRequired,
-             .desktopCredentialsUnavailable, .invalidOAuthURL:
+        case .notLoggedIn, .codeConnectRequired, .codePermissionDenied, .codeCredentialsUnavailable,
+             .desktopConnectRequired, .desktopPermissionDenied, .desktopCredentialsUnavailable,
+             .invalidOAuthURL:
             return false
         }
     }
@@ -307,9 +327,9 @@ struct ClaudeAuthStore: Sendable {
         case .standard:
             let load = loadCredentialSet(includeProfileTier: false)
             switch load.keychainAccessStatus {
-            case .permissionRequired:
-                // The attributes probe confirmed a protected Claude Code item. It is a real footprint
-                // even though only an explicit manual refresh may ask the user to approve it.
+            case .connectRequired, .permissionDenied:
+                // A protected Claude Code item exists (loaded or not, approved or not). It is a real
+                // footprint even though only an explicit manual refresh may read it.
                 return true
             case .unavailable:
                 // Item existence is unknown, so do not enable from a lower-priority source that refresh
@@ -322,7 +342,7 @@ struct ClaudeAuthStore: Sendable {
                 return true
             }
             switch load.desktopStatus {
-            case .available, .permissionRequired, .stale:
+            case .available, .connectRequired, .permissionRequired, .stale:
                 return true
             case .notChecked, .notFound, .invalid:
                 return false
@@ -586,22 +606,27 @@ struct ClaudeAuthStore: Sendable {
                 }
             }
             if serviceReadUnavailable {
-                // Probe the SAME item the read just failed on (service + current user), so this
-                // joins that read's flight and sees its breaker instead of starting an unrelated
-                // service-wide query behind it.
-                // The read's own status is authoritative and survives the breaker; a probe here
-                // would be answered locally (the failed read just tripped this item) and would
-                // wrongly downgrade a protected item to "keychain unreadable".
-                let exists: Bool?
-                switch keychain.lastReadForCurrentUserWasPermissionDenied(service: service) {
-                case true?:
-                    exists = true       // present, requires a deliberate secret read
-                case false?:
-                    exists = nil        // the keychain itself couldn't be read
+                // The read's own recorded category is authoritative and survives the breaker; a
+                // probe here would be answered locally (the failed read just tripped this item)
+                // and would wrongly downgrade a protected item to "keychain unreadable". The probe
+                // is only the fallback for when no category was recorded (UI-gate contention
+                // leaves none by design), and it targets the SAME item the read failed on so it
+                // joins that read's flight and breaker. An existing-but-unexamined item is a
+                // deferral, never a denial — nothing asked securityd for its secret.
+                let failure: KeychainReadFailure?
+                switch keychain.lastReadFailureForCurrentUser(service: service) {
+                case .some(let recorded):
+                    failure = recorded
                 case nil:
-                    exists = keychain.genericPasswordForCurrentUserExists(service: service)
+                    switch keychain.genericPasswordForCurrentUserExists(service: service) {
+                    case true?: failure = .manualReadDeferred
+                    case nil: failure = .unreadable
+                    case false?: failure = nil    // provably absent — no footprint
+                    }
                 }
-                accessStatus.recordUnreadableItem(exists: exists)
+                if let failure {
+                    accessStatus.record(failure)
+                }
                 if allowInteraction {
                     return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
                 }
@@ -609,8 +634,8 @@ struct ClaudeAuthStore: Sendable {
                 // and Copilot follow: the service-wide read is another Security call behind the
                 // very wedge this is containing, and with several items it could select a different
                 // account's login. The provider already refuses lower-priority credentials once the
-                // status is permissionRequired/unavailable, so nothing is lost by stopping here.
-                if exists != false {
+                // status is unresolved, so nothing is lost by stopping here.
+                if failure != nil {
                     return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
                 }
             }
@@ -644,9 +669,22 @@ struct ClaudeAuthStore: Sendable {
                 }
             }
             if serviceReadUnavailable {
-                accessStatus.recordUnreadableItem(
-                    exists: keychain.genericPasswordExists(service: service)
-                )
+                // Same category-first rule as the current-user item above, for the legacy
+                // service-wide item.
+                let failure: KeychainReadFailure?
+                switch keychain.lastReadFailure(service: service) {
+                case .some(let recorded):
+                    failure = recorded
+                case nil:
+                    switch keychain.genericPasswordExists(service: service) {
+                    case true?: failure = .manualReadDeferred
+                    case nil: failure = .unreadable
+                    case false?: failure = nil
+                    }
+                }
+                if let failure {
+                    accessStatus.record(failure)
+                }
                 if allowInteraction {
                     return KeychainCredentialLoad(state: nil, accessStatus: accessStatus)
                 }

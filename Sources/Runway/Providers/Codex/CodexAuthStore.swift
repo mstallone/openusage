@@ -73,6 +73,10 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
     case loginRenewalRequired
     case usageAPIKey
     case invalidAuthPayload
+    /// The Codex Keychain item exists but hasn't been loaded this process — the neutral connect
+    /// prompt, not a warning.
+    case keychainConnectRequired
+    /// An attempted manual read of the Codex Keychain item was denied.
     case keychainPermissionRequired
     case credentialStoreUnreadable
 
@@ -86,8 +90,10 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
             return "Usage not available for API key."
         case .invalidAuthPayload:
             return "Codex auth data is invalid."
+        case .keychainConnectRequired:
+            return "Codex login found in Keychain. Connect to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .keychainPermissionRequired:
-            return "Codex login found in Keychain. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
+            return "Keychain access to the Codex login was declined. Refresh and choose Always Allow when macOS asks."
         case .credentialStoreUnreadable:
             return "Codex credentials couldn’t be read. Unlock your login keychain and refresh."
         }
@@ -97,18 +103,21 @@ enum CodexAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .loginRenewalRequired:
             return true
-        case .notLoggedIn, .usageAPIKey, .invalidAuthPayload, .keychainPermissionRequired,
-             .credentialStoreUnreadable:
+        case .notLoggedIn, .usageAPIKey, .invalidAuthPayload, .keychainConnectRequired,
+             .keychainPermissionRequired, .credentialStoreUnreadable:
             return false
         }
     }
 }
 
-/// Outcome of the keyring lookup. `permissionRequired` means a Codex Keychain item exists but Runway
-/// isn't authorized to read it prompt-free yet — a real login footprint that only an explicit manual
-/// refresh may convert into access.
+/// Outcome of the keyring lookup. `connectRequired` means a Codex Keychain item exists but its
+/// secret hasn't been loaded into this process yet — a real login footprint that only an explicit
+/// user action may convert into access, and a neutral state (nothing was denied).
 enum CodexKeychainLoad {
     case state(CodexAuthState)
+    case connectRequired
+    /// An attempted (user-attended) read of the item was denied — the ACL rejects Runway, or the
+    /// user declined the dialog. Unlike `connectRequired`, this genuinely needs the user to act.
     case permissionRequired
     /// The item could not be read for a reason approval cannot fix — a locked login keychain, or
     /// securityd failing. Kept apart from `permissionRequired` so the card gives advice that works.
@@ -201,7 +210,8 @@ struct CodexAuthStore: Sendable {
         // standard unresolved card follows the same home order as its file candidates. Later homes
         // are still tried after a protected item — each read targets its own exact account, so
         // there is no cross-credential risk between them.
-        var permissionRequired = false
+        var permissionDenied = false
+        var connectRequired = false
         var unreadable = false
         for home in credentialHomes() {
             let canonicalHome = Self.canonicalHome(home)
@@ -225,26 +235,29 @@ struct CodexAuthStore: Sendable {
                     // Only a recorded denial asks for approval. No verdict means the read never
                     // reached one — UI-gate contention leaves none by design — so an unexamined
                     // item must not be reported as denied.
-                    return keychain.lastReadWasPermissionDenied(
-                        service: Self.keychainService,
-                        account: account
-                    ) == true ? .permissionRequired : .unreadable
+                    switch keychain.lastReadFailure(service: Self.keychainService, account: account) {
+                    case .permissionDenied?: return .permissionRequired
+                    case .manualReadDeferred?: return .connectRequired
+                    case .unreadable?, nil: return .unreadable
+                    }
                 }
                 // Approval only helps when the ACL was the problem. The read's own status is
                 // the evidence; a later probe cannot answer this, because the failed read tripped
                 // the item's breaker and probes are then answered locally.
-                switch keychain.lastReadWasPermissionDenied(service: Self.keychainService, account: account) {
-                case true?:
-                    permissionRequired = true
-                case false?:
+                switch keychain.lastReadFailure(service: Self.keychainService, account: account) {
+                case .permissionDenied?:
+                    permissionDenied = true
+                case .manualReadDeferred?:
+                    connectRequired = true
+                case .unreadable?:
                     unreadable = true
                 case nil:
                     // No category recorded — which is exactly what UI-gate contention leaves — so
-                    // fall back to the prompt-free attributes probe. Only a confirmed-present item
-                    // asks for approval; an indeterminate probe means the item was never examined,
-                    // and a confirmed absence is no footprint at all.
+                    // fall back to the prompt-free attributes probe. A confirmed-present item was
+                    // simply never read (a deferral, not a denial); an indeterminate probe means
+                    // the item was never examined, and a confirmed absence is no footprint at all.
                     switch keychain.genericPasswordExists(service: Self.keychainService, account: account) {
-                    case true?: permissionRequired = true
+                    case true?: connectRequired = true
                     case nil: unreadable = true
                     case false?: break
                     }
@@ -255,9 +268,13 @@ struct CodexAuthStore: Sendable {
         }
         // A protected exact item forbids the broad service-only lookup — with several Codex items
         // it could silently select a different login. Broadening stays allowed only when every
-        // scoped item provably does not exist.
-        if permissionRequired {
+        // scoped item provably does not exist. A denial outranks a pending connect, which outranks
+        // "couldn't check".
+        if permissionDenied {
             return .permissionRequired
+        }
+        if connectRequired {
+            return .connectRequired
         }
         // Same containment rule, different advice: an unreadable exact item must not be replaced
         // by the broad service-only lookup either.
@@ -276,10 +293,12 @@ struct CodexAuthStore: Sendable {
             return .none
         case .unavailable:
             // Same rule as the scoped path: the read's own status says whether approval is the fix.
-            switch keychain.lastReadWasPermissionDenied(service: Self.keychainService) {
-            case true?:
+            switch keychain.lastReadFailure(service: Self.keychainService) {
+            case .permissionDenied?:
                 return .permissionRequired
-            case false?:
+            case .manualReadDeferred?:
+                return .connectRequired
+            case .unreadable?:
                 return .unreadable
             case nil:
                 // `nil` from the probe means "cannot check" (locked keychain, or the same UI gate
@@ -287,7 +306,7 @@ struct CodexAuthStore: Sendable {
                 // swallow an access problem, and treating it as denied would ask the user to
                 // approve an item nothing examined. Only a confirmed-absent item reports none.
                 switch keychain.genericPasswordExists(service: Self.keychainService) {
-                case true?: return .permissionRequired
+                case true?: return .connectRequired
                 case nil: return .unreadable
                 case false?: return .none
                 }

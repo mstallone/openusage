@@ -15,7 +15,7 @@ final class ClaudeProtectedItemContainmentTests: XCTestCase {
 
         let load = store.loadCredentialSet()
 
-        XCTAssertEqual(load.keychainAccessStatus, .permissionRequired)
+        XCTAssertEqual(load.keychainAccessStatus, .connectRequired)
         XCTAssertEqual(keychain.serviceWideReads, 0, "a protected exact item must end the lookup")
     }
 }
@@ -78,18 +78,18 @@ final class KeychainFailureCategoryTests: XCTestCase {
             now: { clock.now }
         )
 
-        XCTAssertNil(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"))
+        XCTAssertNil(coordinator.lastFailureCategory(service: "svc", account: "acct"))
 
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: "acct", fingerprint: { "fp-1" },
             read: { ticket in
-                coordinator.recordFailureCategory(ticket, permissionDenied: true)
+                coordinator.recordFailureCategory(ticket, category: .permissionDenied)
                 return NonInteractiveKeychainRead.unavailable
             }
         )
         // The item is tripped now — a probe answers nil locally — but the category still reads back.
         XCTAssertNil(coordinator.probe(service: "svc", account: "acct") { true })
-        XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), true)
+        XCTAssertEqual(coordinator.lastFailureCategory(service: "svc", account: "acct"), .permissionDenied)
 
         // Once the breaker revalidates and the read succeeds, there is no failure to describe.
         clock.advance(61)
@@ -97,7 +97,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
             service: "svc", account: "acct", fingerprint: { "fp-2" },
             read: { _ in NonInteractiveKeychainRead.value("secret") }
         )
-        XCTAssertNil(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"))
+        XCTAssertNil(coordinator.lastFailureCategory(service: "svc", account: "acct"))
     }
 
     func testAnOlderInteractiveCompletionCannotOverwriteANewerRecovery() {
@@ -263,11 +263,11 @@ final class KeychainFailureCategoryTests: XCTestCase {
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: "acct", fingerprint: { "fp-1" },
             read: { ticket in
-                coordinator.recordFailureCategory(ticket, permissionDenied: false)
+                coordinator.recordFailureCategory(ticket, category: .unreadable)
                 return NonInteractiveKeychainRead.unavailable
             }
         )
-        XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), false)
+        XCTAssertEqual(coordinator.lastFailureCategory(service: "svc", account: "acct"), .unreadable)
     }
 
     func testAStaleCategoryCannotOutliveTheFailureItDescribed() {
@@ -278,11 +278,11 @@ final class KeychainFailureCategoryTests: XCTestCase {
         _ = coordinator.nonInteractiveRead(
             service: "svc", account: "acct", fingerprint: { "fp-1" },
             read: { ticket in
-                coordinator.recordFailureCategory(ticket, permissionDenied: true)
+                coordinator.recordFailureCategory(ticket, category: .permissionDenied)
                 return NonInteractiveKeychainRead.unavailable
             }
         )
-        XCTAssertEqual(coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"), true)
+        XCTAssertEqual(coordinator.lastFailureCategory(service: "svc", account: "acct"), .permissionDenied)
 
         // The user approves; the interactive read clears the breaker (a background read would be
         // answered locally by it and never reach Security at all). The recovery clears the category
@@ -292,7 +292,7 @@ final class KeychainFailureCategoryTests: XCTestCase {
             read: { _ in "approved-secret" }
         )
         XCTAssertNil(
-            coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"),
+            coordinator.lastFailureCategory(service: "svc", account: "acct"),
             "a recovered item has no failure to describe"
         )
     }
@@ -315,7 +315,7 @@ final class KeychainContentionTests: XCTestCase {
         )
         XCTAssertEqual(first, .unavailable)
         XCTAssertNil(
-            coordinator.lastFailureWasPermissionDenied(service: "svc", account: "acct"),
+            coordinator.lastFailureCategory(service: "svc", account: "acct"),
             "contention says nothing about this item's ACL"
         )
 
@@ -458,9 +458,9 @@ final class KeychainContentionTests: XCTestCase {
         XCTAssertThrowsError(
             try coordinator.externalRead(
                 service: "svc", account: nil, interactive: false,
-                unavailable: { $0 ? Failure.denied : Failure.unreadable },
+                unavailable: { $0 == .permissionDenied ? Failure.denied : Failure.unreadable },
                 read: { ticket in
-                    coordinator.recordFailureCategory(ticket, permissionDenied: true)
+                    coordinator.recordFailureCategory(ticket, category: .permissionDenied)
                     throw Failure.denied
                 }
             )
@@ -470,7 +470,7 @@ final class KeychainContentionTests: XCTestCase {
         XCTAssertThrowsError(
             try coordinator.externalRead(
                 service: "svc", account: nil, interactive: false,
-                unavailable: { $0 ? Failure.denied : Failure.unreadable },
+                unavailable: { $0 == .permissionDenied ? Failure.denied : Failure.unreadable },
                 read: { _ in XCTFail("the breaker must answer without calling Security"); return "" }
             )
         ) { XCTAssertEqual($0 as? Failure, .denied) }

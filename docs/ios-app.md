@@ -12,7 +12,9 @@ The dashboard shows:
   account name, its plan beside it, and the percent of the weekly quota still left at the trailing
   edge (blank for providers with no weekly meter). Expanding a row reveals its rendered metrics
   (quota meters with reset countdowns, spend tiles, status badges, charts), warnings, and refresh
-  errors; the record's age sits in the section header.
+  errors; the record's age sits in the section header. A Mac whose Keychain login is simply waiting
+  to be connected there shows the same muted key glyph the Mac uses — neutral, not a warning
+  triangle — since only that Mac can load it.
 
 Data refreshes on launch, on returning to the foreground, and with pull-to-refresh. Liveness is
 bounded by the Macs' five-minute publish cadence.

@@ -14,11 +14,20 @@ struct ProviderErrorCardView: View {
         var description: String
     }
 
+    /// How the prompt reads: `.warning` (amber triangle, "Refresh") for a real failure the user
+    /// must fix, `.connect` (neutral key glyph, "Connect") for a credential that exists but simply
+    /// hasn't been loaded into this process yet — nothing is broken and nothing was denied.
+    enum Style {
+        case warning
+        case connect
+    }
+
     let message: String
     let isRefreshing: Bool
     /// The share-card export sets this false: a Refresh button in a static PNG is dead chrome, and
     /// the exported card already strips interactive elements (grips, spinners, toggles).
     var showsRefreshAction: Bool = true
+    var style: Style = .warning
     let onRefresh: () -> Void
 
     var body: some View {
@@ -28,9 +37,9 @@ struct ProviderErrorCardView: View {
         // button sits centered under the whole body: it acts on the card, not on the text column.
         VStack(spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle")
+                Image(systemName: style == .connect ? "key.fill" : "exclamationmark.triangle")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(style == .connect ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                     .frame(width: 20, height: 20)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -45,7 +54,7 @@ struct ProviderErrorCardView: View {
             }
 
             if showsRefreshAction {
-                Button("Refresh", action: onRefresh)
+                Button(style == .connect ? "Connect" : "Refresh", action: onRefresh)
                     .controlSize(.small)
                     .disabled(isRefreshing)
             }
@@ -55,7 +64,7 @@ struct ProviderErrorCardView: View {
     }
 
     /// Provider error strings follow a "Short statement. Guidance." shape ("Claude Code login
-    /// found. Refresh manually to load it; if macOS asks, choose Always Allow…"), so the first sentence
+    /// found. Connect to load it; if macOS asks, choose Always Allow…"), so the first sentence
     /// becomes the title — title-cased, since it renders as one — and the rest the description. A
     /// message without that shape (an HTTP failure line) keeps a generic title so a long sentence
     /// never renders as bold headline text.

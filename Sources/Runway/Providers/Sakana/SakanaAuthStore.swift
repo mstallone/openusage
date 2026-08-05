@@ -10,6 +10,10 @@ struct SakanaBrowserSession: Hashable, Sendable {
 
 enum SakanaAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
+    /// The browser's Safe Storage key exists but hasn't been read this process — the neutral
+    /// connect prompt, not a warning.
+    case connectRequired
+    /// An attempted (user-attended) Safe Storage read was denied.
     case permissionRequired
     case credentialsUnreadable
     case invalidCookie
@@ -19,8 +23,10 @@ enum SakanaAuthError: Error, LocalizedError, Equatable {
         switch self {
         case .notLoggedIn:
             return "Sign in to Sakana AI Console in Chrome, Arc, Brave, or Edge to see Fugu usage."
+        case .connectRequired:
+            return "Sakana browser session found. Connect to load your browser's Safe Storage key; if macOS asks, choose Always Allow to avoid future dialogs."
         case .permissionRequired:
-            return "Refresh manually to load your browser's Safe Storage key. Choose Always Allow to avoid future approval dialogs."
+            return "Keychain access to your browser's Safe Storage key was declined. Refresh and choose Always Allow when macOS asks."
         case .credentialsUnreadable:
             return "Couldn't read the signed-in Sakana browser session. Open Sakana AI Console in a supported browser and refresh again."
         case .invalidCookie:
@@ -71,9 +77,15 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             service: service,
             account: nil,
             interactive: allowInteraction,
-            // Replays the original category: approving Safe Storage cannot fix an
-            // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
-            unavailable: { denied in denied ? SakanaBrowserCredentialError.permissionRequired : SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable)) }
+            // Replays the original category: a deferred read must stay the neutral connect prompt,
+            // and approving Safe Storage cannot fix an errSecIO/errSecNotAvailable outage.
+            unavailable: { category in
+                switch category {
+                case .manualReadDeferred: SakanaBrowserCredentialError.manualReadDeferred
+                case .permissionDenied: SakanaBrowserCredentialError.permissionRequired
+                case .unreadable: SakanaBrowserCredentialError.keychainFailure(Int(errSecNotAvailable))
+                }
+            }
         ) { ticket -> OSStatus in
             if !allowInteraction {
                 let metadataQuery = NonInteractiveKeychainMetadataQuery.applying(to: [
@@ -84,12 +96,14 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
                 let metadataStatus = copyMatching(metadataQuery as CFDictionary, nil)
                 switch metadataStatus {
                 case errSecSuccess:
-                    coordinator.recordFailureCategory(ticket, permissionDenied: true)
-                    throw SakanaBrowserCredentialError.permissionRequired
+                    // The key exists and was deliberately not read. A deferral, not a denial —
+                    // securityd was never asked for the secret, so no permission can be missing.
+                    coordinator.recordFailureCategory(ticket, category: .manualReadDeferred)
+                    throw SakanaBrowserCredentialError.manualReadDeferred
                 case errSecItemNotFound:
                     return metadataStatus
                 default:
-                    coordinator.recordFailureCategory(ticket, permissionDenied: false)
+                    coordinator.recordFailureCategory(ticket, category: .unreadable)
                     throw SakanaBrowserCredentialError.keychainFailure(Int(metadataStatus))
                 }
             }
@@ -113,14 +127,10 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
             case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
                 // Remember WHY, so the breaker's later replays keep giving the same advice instead
                 // of degrading a real denial into a generic "couldn't be read".
-                coordinator.recordFailureCategory(
-                    ticket, permissionDenied: true
-                )
+                coordinator.recordFailureCategory(ticket, category: .permissionDenied)
                 throw SakanaBrowserCredentialError.permissionRequired
             default:
-                coordinator.recordFailureCategory(
-                    ticket, permissionDenied: false
-                )
+                coordinator.recordFailureCategory(ticket, category: .unreadable)
                 throw SakanaBrowserCredentialError.keychainFailure(Int(status))
             }
         }
@@ -142,6 +152,9 @@ struct SakanaSafeStorageKeyReader: SakanaSafeStorageKeyReading {
 }
 
 enum SakanaBrowserCredentialError: Error, Sendable {
+    /// The Safe Storage key exists; the automatic path deliberately did not read it. Neutral.
+    case manualReadDeferred
+    /// An attempted (user-attended) Safe Storage read was denied.
     case permissionRequired
     case invalidSafeStorageKey
     case keychainFailure(Int)
@@ -193,6 +206,7 @@ struct SakanaAuthStore: Sendable {
 
         var sawUnreadableKey = false
         var sawInvalidCookie = false
+        var sawDeferredKey = false
         for candidate in available {
             do {
                 let plaintext: Data
@@ -214,7 +228,15 @@ struct SakanaAuthStore: Sendable {
                     continue
                 }
                 return SakanaBrowserSession(token: token, browserName: candidate.source.browserName)
+            } catch SakanaBrowserCredentialError.manualReadDeferred {
+                // A deferral only ever happens on the prompt-free automatic path, so scanning on
+                // can't raise a dialog — and a later candidate may serve without ANY user action:
+                // a plaintext cookie, or a browser whose Safe Storage key was already connected
+                // this session. Connect is the answer only when nothing else was usable.
+                sawDeferredKey = true
             } catch SakanaBrowserCredentialError.permissionRequired {
+                // A real denial ends the scan: on a manual refresh, trying the next browser here
+                // would raise another approval dialog right after the user said no to this one.
                 throw SakanaAuthError.permissionRequired
             } catch SakanaBrowserCredentialError.keychainFailure {
                 // The Safe Storage key could not be read — a locked keychain, or another provider's
@@ -227,6 +249,9 @@ struct SakanaAuthStore: Sendable {
                 AppLog.error(LogTag.auth("sakana"), "Sakana browser credential read failed: \(error.localizedDescription)")
             }
         }
+        // A deferred key outranks the other failures: connecting it is the one self-serviceable
+        // action, and the deferred candidate may be exactly the good session.
+        if sawDeferredKey { throw SakanaAuthError.connectRequired }
         if sawUnreadableKey { throw SakanaAuthError.credentialsUnreadable }
         if sawInvalidCookie { throw SakanaAuthError.invalidCookie }
         throw SakanaAuthError.credentialsUnreadable

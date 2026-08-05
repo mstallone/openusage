@@ -16,6 +16,11 @@ struct ProviderSectionHeader: View {
     let provider: Provider
     var plan: String?
     var warning: String?
+    /// Whether `warning` is the neutral connect prompt (a credential exists but hasn't been loaded
+    /// this process) rather than a problem. It swaps the amber triangle for a muted key glyph —
+    /// same slot, same click-to-refresh behavior — so a state that needs no fixing doesn't wear a
+    /// warning color.
+    var noticeIsConnectPrompt: Bool = false
     /// Whether this provider's refresh is currently in flight — drives the small spinner beside the name
     /// so the section shows live feedback while values are being fetched (instead of silently sitting on
     /// the previous, possibly stale, numbers).
@@ -61,6 +66,7 @@ struct ProviderSectionHeader: View {
         provider: Provider,
         plan: String? = nil,
         warning: String? = nil,
+        noticeIsConnectPrompt: Bool = false,
         refreshing: Bool = false,
         staleness: StalenessHint? = nil,
         onWarningRefresh: (() -> Void)? = nil,
@@ -69,6 +75,7 @@ struct ProviderSectionHeader: View {
         self.provider = provider
         self.plan = plan
         self.warning = warning
+        self.noticeIsConnectPrompt = noticeIsConnectPrompt
         self.refreshing = refreshing
         self.staleness = staleness
         self.onWarningRefresh = onWarningRefresh
@@ -185,9 +192,11 @@ struct ProviderSectionHeader: View {
     /// Without an action (the reorder preview) it stays the plain status glyph it was.
     @ViewBuilder
     private func warningTriangle(_ warning: String) -> some View {
-        let glyph = Image(systemName: "exclamationmark.triangle.fill")
+        // The connect prompt shares the slot and the click behavior but not the alarm: a muted key
+        // glyph, because a login waiting to be loaded is a neutral state, not a problem.
+        let glyph = Image(systemName: noticeIsConnectPrompt ? "key.fill" : "exclamationmark.triangle.fill")
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Theme.notice)
+            .foregroundStyle(noticeIsConnectPrompt ? AnyShapeStyle(.secondary) : Theme.notice)
         if let onWarningRefresh {
             Button(action: onWarningRefresh) {
                 glyph
@@ -202,7 +211,7 @@ struct ProviderSectionHeader: View {
             // copy button wins — it is drawn in the overlay above this row, which is the right
             // outcome: that band is where the copy glyph is.
             .padding(-((28 - Self.warningSlotWidth) / 2))
-            .hoverTooltip(Self.warningTooltip(for: warning, refreshable: true))
+            .hoverTooltip(Self.warningTooltip(for: warning, refreshable: true, connectPrompt: noticeIsConnectPrompt))
             .accessibilityLabel(warning)
         } else {
             // Centered in the same slot as the button branch above, so the glyph sits in exactly one
@@ -217,12 +226,13 @@ struct ProviderSectionHeader: View {
     /// The triangle's tooltip: the notice, plus the click affordance when the glyph is actionable —
     /// nothing else on screen says the symbol can be clicked. Provider messages are sentences ("Not
     /// logged in. Run `codex` to authenticate."), so the hint joins as one more sentence; a message
-    /// that arrives without end punctuation gets a period first.
-    static func warningTooltip(for warning: String, refreshable: Bool) -> String {
+    /// that arrives without end punctuation gets a period first. A connect prompt names its own
+    /// verb — the click loads the credential, it doesn't fix anything.
+    static func warningTooltip(for warning: String, refreshable: Bool, connectPrompt: Bool = false) -> String {
         let trimmed = warning.trimmingCharacters(in: .whitespacesAndNewlines)
         guard refreshable, !trimmed.isEmpty else { return trimmed }
         let terminated = trimmed.last.map { ".!?".contains($0) } ?? false
-        return "\(trimmed)\(terminated ? "" : ".") Click to refresh."
+        return "\(trimmed)\(terminated ? "" : ".") Click to \(connectPrompt ? "connect" : "refresh")."
     }
 }
 

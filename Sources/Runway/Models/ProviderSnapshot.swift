@@ -41,6 +41,14 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
     }
     var warningAction: WarningAction?
 
+    /// Whether `warning` is a neutral connect prompt (a credential exists on the machine but hasn't
+    /// been loaded into this process yet) rather than something that needs fixing. The dashboard
+    /// renders it as a Connect affordance instead of the amber warning triangle.
+    ///
+    /// Optional for the same cached/synced-snapshot reason as `warningAction`: older snapshots
+    /// decode as `nil` and read as `false`.
+    var warningIsConnectPrompt: Bool?
+
     /// `warningAction` with its default applied — see the property.
     var resolvedWarningAction: WarningAction { warningAction ?? .refresh }
 
@@ -53,7 +61,8 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         usageHistory: ProviderUsageHistory? = nil,
         applicableMetricIDs: Set<String>? = nil,
         warning: String? = nil,
-        warningAction: WarningAction? = nil
+        warningAction: WarningAction? = nil,
+        warningIsConnectPrompt: Bool? = nil
     ) {
         self.providerID = providerID
         self.displayName = displayName
@@ -64,6 +73,7 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         self.applicableMetricIDs = applicableMetricIDs
         self.warning = warning
         self.warningAction = warningAction
+        self.warningIsConnectPrompt = warningIsConnectPrompt
     }
 
     func line(label: String) -> MetricLine? {
@@ -81,7 +91,8 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
         usageHistory: ProviderUsageHistory? = nil,
         applicableMetricIDs: Set<String>? = nil,
         warning: String? = nil,
-        warningAction: WarningAction? = nil
+        warningAction: WarningAction? = nil,
+        warningIsConnectPrompt: Bool? = nil
     ) -> ProviderSnapshot {
         ProviderSnapshot(
             providerID: provider.id,
@@ -92,7 +103,8 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
             usageHistory: usageHistory,
             applicableMetricIDs: applicableMetricIDs,
             warning: warning,
-            warningAction: warningAction
+            warningAction: warningAction,
+            warningIsConnectPrompt: warningIsConnectPrompt
         )
     }
 
@@ -107,6 +119,19 @@ struct ProviderSnapshot: Hashable, Sendable, Codable {
             providerID: provider.id,
             displayName: provider.displayName,
             lines: [.badge(label: MetricLine.errorBadgeLabel, text: message, colorHex: "#EF4444")]
+        )
+    }
+
+    /// The neutral counterpart to `error(provider:error:)`: a credential exists on the machine but
+    /// hasn't been loaded into this process yet, and only an explicit user action may read it.
+    /// Nothing is broken and nothing was denied — the dashboard renders this as a Connect
+    /// affordance, not a warning. It still travels the failed-refresh path so last-good data stays
+    /// on screen and the prompt is never cached as data.
+    static func connectPrompt(provider: Provider, error: Error) -> ProviderSnapshot {
+        ProviderSnapshot(
+            providerID: provider.id,
+            displayName: provider.displayName,
+            lines: [.badge(label: MetricLine.connectBadgeLabel, text: error.localizedDescription)]
         )
     }
 }

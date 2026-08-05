@@ -6,6 +6,10 @@ import Security
 enum ClaudeDesktopCredentialStatus: Sendable, Equatable {
     case notChecked
     case notFound
+    /// The Safe Storage item exists but hasn't been read this process — the neutral connect
+    /// prompt; an automatic refresh deliberately never reads it.
+    case connectRequired
+    /// An attempted (user-attended) Safe Storage read was denied.
     case permissionRequired
     case stale
     case invalid
@@ -54,9 +58,15 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             service: Self.service,
             account: Self.account,
             interactive: allowInteraction,
-            // Replays the original category: approving Safe Storage cannot fix an
-            // errSecIO/errSecNotAvailable outage, so don't tell the user to try.
-            unavailable: { denied in denied ? ClaudeDesktopCredentialError.permissionRequired : ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable)) }
+            // Replays the original category: a deferred read must stay the neutral connect prompt,
+            // and approving Safe Storage cannot fix an errSecIO/errSecNotAvailable outage.
+            unavailable: { category in
+                switch category {
+                case .manualReadDeferred: ClaudeDesktopCredentialError.manualReadDeferred
+                case .permissionDenied: ClaudeDesktopCredentialError.permissionRequired
+                case .unreadable: ClaudeDesktopCredentialError.keychainFailure(Int(errSecNotAvailable))
+                }
+            }
         ) { ticket -> OSStatus in
             if !allowInteraction {
                 let metadataQuery = NonInteractiveKeychainMetadataQuery.applying(to: [
@@ -68,12 +78,14 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
                 let metadataStatus = copyMatching(metadataQuery as CFDictionary, nil)
                 switch metadataStatus {
                 case errSecSuccess:
-                    coordinator.recordFailureCategory(ticket, permissionDenied: true)
-                    throw ClaudeDesktopCredentialError.permissionRequired
+                    // The item exists and was deliberately not read. A deferral, not a denial —
+                    // securityd was never asked for the secret, so no permission can be missing.
+                    coordinator.recordFailureCategory(ticket, category: .manualReadDeferred)
+                    throw ClaudeDesktopCredentialError.manualReadDeferred
                 case errSecItemNotFound:
                     return metadataStatus
                 default:
-                    coordinator.recordFailureCategory(ticket, permissionDenied: false)
+                    coordinator.recordFailureCategory(ticket, category: .unreadable)
                     throw ClaudeDesktopCredentialError.keychainFailure(Int(metadataStatus))
                 }
             }
@@ -97,14 +109,10 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
             case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
                 // Remember WHY, so the breaker's later replays keep giving the same advice instead
                 // of degrading a real denial into a generic "couldn't be read".
-                coordinator.recordFailureCategory(
-                    ticket, permissionDenied: true
-                )
+                coordinator.recordFailureCategory(ticket, category: .permissionDenied)
                 throw ClaudeDesktopCredentialError.permissionRequired
             default:
-                coordinator.recordFailureCategory(
-                    ticket, permissionDenied: false
-                )
+                coordinator.recordFailureCategory(ticket, category: .unreadable)
                 throw ClaudeDesktopCredentialError.keychainFailure(Int(status))
             }
         }
@@ -126,6 +134,9 @@ struct ClaudeDesktopSafeStorageKeyReader: ClaudeDesktopSafeStorageKeyReading {
 }
 
 enum ClaudeDesktopCredentialError: Error, Sendable {
+    /// The Safe Storage item exists; the automatic path deliberately did not read it. Neutral.
+    case manualReadDeferred
+    /// An attempted (user-attended) Safe Storage read was denied.
     case permissionRequired
     case invalidSafeStorageKey
     case keychainFailure(Int)
@@ -218,6 +229,8 @@ struct ClaudeDesktopAuthStore: Sendable {
             case .invalid:
                 return ClaudeDesktopCredentialResult(oauth: nil, status: .invalid)
             }
+        } catch ClaudeDesktopCredentialError.manualReadDeferred {
+            return ClaudeDesktopCredentialResult(oauth: nil, status: .connectRequired)
         } catch ClaudeDesktopCredentialError.permissionRequired {
             return ClaudeDesktopCredentialResult(oauth: nil, status: .permissionRequired)
         } catch {

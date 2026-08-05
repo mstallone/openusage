@@ -288,13 +288,14 @@ final class AntigravityProviderTests: XCTestCase {
         }
     }
 
-    func testUnavailableKeychainAsksForApprovalWithoutFallingBackToAPrompt() {
-        // An item Runway isn't authorized to read yet surfaces the permission-specific error — not
-        // "unlock Keychain or sign in again", which fixes neither — and must not prompt on its own.
+    func testUnavailableKeychainOffersTheConnectPromptWithoutFallingBackToAPrompt() {
+        // An existing item whose secret simply hasn't been loaded this process surfaces the neutral
+        // connect prompt — not a permission warning (nothing was denied), and not "unlock Keychain
+        // or sign in again" — and must not prompt on its own.
         let store = AntigravityAuthStore(keychain: UnavailableKeychain(), files: FakeFiles())
 
         XCTAssertThrowsError(try store.loadKeychainToken()) { error in
-            XCTAssertEqual(error as? AntigravityError, .keychainPermissionRequired)
+            XCTAssertEqual(error as? AntigravityError, .keychainConnectRequired)
         }
     }
 
@@ -505,8 +506,8 @@ private final class Counter: @unchecked Sendable {
     }
 }
 
-/// A Keychain whose non-interactive reads report `.unavailable` while the attributes-only probe
-/// still confirms the item — "present, but this app isn't approved for it yet".
+/// A Keychain whose non-interactive reads report `.unavailable` because the automatic path
+/// deferred the secret read — "present, just not loaded into this process yet".
 private final class UnavailableKeychain: KeychainReading, @unchecked Sendable {
     func readGenericPassword(service: String) throws -> String? {
         XCTFail("the subprocess-style read path must not be used")
@@ -517,8 +518,8 @@ private final class UnavailableKeychain: KeychainReading, @unchecked Sendable {
         .unavailable
     }
 
-    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
-        true
+    func lastReadFailure(service: String, account: String) -> KeychainReadFailure? {
+        .manualReadDeferred
     }
 }
 
@@ -533,7 +534,7 @@ private final class IndeterminateAntigravityKeychain: KeychainReading, @unchecke
         .unavailable
     }
 
-    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
-        false
+    func lastReadFailure(service: String, account: String) -> KeychainReadFailure? {
+        .unreadable
     }
 }

@@ -9,10 +9,10 @@ final class ProviderSectionHeaderTests: XCTestCase {
         // hint joins as one more sentence.
         XCTAssertEqual(
             ProviderSectionHeader.warningTooltip(
-                for: ClaudeAuthError.codePermissionRequired.localizedDescription,
+                for: ClaudeAuthError.codePermissionDenied.localizedDescription,
                 refreshable: true
             ),
-            "Claude Code login found. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs. Click to refresh."
+            "Keychain access to the Claude Code login was declined. Refresh and choose Always Allow when macOS asks. Click to refresh."
         )
         // A message that arrives without end punctuation (an HTTP failure line) gets a period first,
         // so the hint never runs into it.

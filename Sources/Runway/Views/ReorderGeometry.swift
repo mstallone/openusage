@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ReorderLift {
     enum Payload {
-        case dashboardProvider(provider: Provider, plan: String?, rows: [WidgetData], errorMessage: String? = nil)
+        case dashboardProvider(provider: Provider, plan: String?, rows: [WidgetData], errorMessage: String? = nil, errorIsConnectPrompt: Bool = false)
         case dashboardMetric(data: WidgetData)
         case customizeProviderRow(provider: Provider, isEnabled: Bool, metricCount: Int)
         case customizeMetric(title: String)
@@ -60,8 +60,14 @@ struct ReorderLiftPreview: View {
     @ViewBuilder
     private var preview: some View {
         switch lift.payload {
-        case .dashboardProvider(let provider, let plan, let rows, let errorMessage):
-            dashboardProviderPreview(provider: provider, plan: plan, rows: rows, errorMessage: errorMessage)
+        case .dashboardProvider(let provider, let plan, let rows, let errorMessage, let errorIsConnectPrompt):
+            dashboardProviderPreview(
+                provider: provider,
+                plan: plan,
+                rows: rows,
+                errorMessage: errorMessage,
+                errorIsConnectPrompt: errorIsConnectPrompt
+            )
         case .dashboardMetric(let data):
             dashboardMetricPreview(data)
         case .customizeProviderRow(let provider, let isEnabled, let metricCount):
@@ -75,7 +81,8 @@ struct ReorderLiftPreview: View {
         provider: Provider,
         plan: String?,
         rows: [WidgetData],
-        errorMessage: String?
+        errorMessage: String?,
+        errorIsConnectPrompt: Bool
     ) -> some View {
         // Same anatomy as the live dashboard section (`WidgetGroupedListView.section` + `container`):
         // Header over the shared metric card, at the compact layout's header→card spacing. When the
@@ -87,7 +94,12 @@ struct ReorderLiftPreview: View {
 
             DashboardMetricCard {
                 if let errorMessage {
-                    ProviderErrorCardView(message: errorMessage, isRefreshing: false, onRefresh: {})
+                    ProviderErrorCardView(
+                        message: errorMessage,
+                        isRefreshing: false,
+                        style: errorIsConnectPrompt ? .connect : .warning,
+                        onRefresh: {}
+                    )
                 } else {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                         WidgetRowView(data: row)

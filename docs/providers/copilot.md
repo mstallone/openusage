@@ -50,8 +50,9 @@ Checked in this order (prompt-free files first, Keychain last):
 1. Copilot editor token: `~/.config/github-copilot/apps.json` (older `hosts.json`) — written by the VS Code / JetBrains / Neovim Copilot plugins.
 2. GitHub CLI config: `~/.config/gh/hosts.yml` (`oauth_token`), when `gh` stores its token in a file.
 3. GitHub CLI Keychain item (service `gh:github.com`), when `gh` stores its token in the system keyring.
-   Automatic refreshes never request its secret. Refresh manually after launch or a credential change;
-   Runway reuses that value in memory for the running app session while the item's non-secret metadata remains unchanged. Choose
+   Automatic refreshes never request its secret. After launch or a credential change the card
+   offers a neutral **Connect** action; Runway reuses that value in memory for the running app
+   session while the item's non-secret metadata remains unchanged. Choose
    **Always Allow** to avoid a dialog on future manual reads.
 
 The editor token stays preferred for the Copilot quota endpoint. For organization and enterprise
@@ -76,7 +77,8 @@ Using Copilot in a supported editor is enough on its own — the editor writes t
 ## Troubleshooting
 
 - **"Sign in to GitHub Copilot…"** — no token was found. Sign in to Copilot in your editor, or run `gh auth login`.
-- **"GitHub login found in Keychain"** — `gh` keeps its token in the system keyring. Refresh manually to load it; choose **Always Allow** to avoid a dialog on future manual reads.
+- **"GitHub login found in Keychain"** (a neutral key glyph / **Connect** button, not a warning) — `gh` keeps its token in the system keyring and it hasn't been loaded this app session. Connect; choose **Always Allow** to avoid a dialog on future manual reads.
+- **"Keychain access to the GitHub login was declined"** — a manual read was denied. Refresh and choose **Always Allow** when macOS asks.
 - **"GitHub login couldn't be read"** — the login keychain itself is unavailable (locked, most often). Unlock it and refresh; approving nothing would fix this one.
 - **"GitHub token invalid or expired"** — the token was rejected (401/403). Re-authenticate with `gh auth login`.
 - **"Managed by Your Organization"** — GitHub doesn't expose a live per-seat quota for Business/Enterprise, and none of the locally available credentials could read the relevant organization or enterprise billing. Organization reporting requires organization billing access; consolidated reporting also requires enterprise read and billing access. Some editor-plugin and GitHub CLI tokens do not carry those scopes.

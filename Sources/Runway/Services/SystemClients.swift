@@ -186,14 +186,15 @@ protocol KeychainReading: Sendable {
     /// uses, so a recovery probe joins that read's flight and breaker instead of launching an
     /// unrelated service-wide query that neither waits on it nor sees it fail.
     func genericPasswordForCurrentUserExists(service: String) -> Bool?
-    /// Why this item's last non-interactive read failed: `true` = the item exists and needs a manual
-    /// secret read, `false` = its metadata could not be inspected, `nil` = no failure recorded.
-    func lastReadWasPermissionDenied(service: String, account: String) -> Bool?
+    /// Why this item's last read failed (`.manualReadDeferred` = the item exists and the automatic
+    /// path deliberately did not read its secret, `.permissionDenied` = an attempted read was
+    /// denied, `.unreadable` = its metadata could not be inspected), `nil` = no failure recorded.
+    func lastReadFailure(service: String, account: String) -> KeychainReadFailure?
     /// The same verdict for a SERVICE-WIDE read (no account), which is a distinct coordinator key
     /// from any account-scoped read of the same service.
-    func lastReadWasPermissionDenied(service: String) -> Bool?
+    func lastReadFailure(service: String) -> KeychainReadFailure?
     /// The same verdict for the CURRENT-USER item, whose account name only the accessor knows.
-    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool?
+    func lastReadFailureForCurrentUser(service: String) -> KeychainReadFailure?
     /// Opaque digest of an account-scoped item's non-secret attributes (including its modification
     /// date). Discovery binds a cached account identity to this so replacing a keyring item invalidates
     /// the old identity without reading its secret on the launch path.
@@ -277,15 +278,15 @@ extension KeychainReading {
         genericPasswordExists(service: service)
     }
 
-    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
+    func lastReadFailure(service: String, account: String) -> KeychainReadFailure? {
         nil
     }
 
-    func lastReadWasPermissionDenied(service: String) -> Bool? {
+    func lastReadFailure(service: String) -> KeychainReadFailure? {
         nil
     }
 
-    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {
+    func lastReadFailureForCurrentUser(service: String) -> KeychainReadFailure? {
         nil
     }
 
@@ -481,13 +482,11 @@ struct SecurityKeychainAccessor: KeychainReading {
             // The user just answered the dialog, so a denial here is the strongest evidence about
             // this item's ACL there is. Record it: this read trips the breaker, and every later
             // probe is then answered locally with no status to classify.
-            coordinator.recordFailureCategory(
-                ticket,
-                permissionDenied: status == errSecAuthFailed
-                    || status == errSecInteractionNotAllowed
-                    || status == errSecUserCanceled
-                    || status == errAuthorizationDenied
-            )
+            let denied = status == errSecAuthFailed
+                || status == errSecInteractionNotAllowed
+                || status == errSecUserCanceled
+                || status == errAuthorizationDenied
+            coordinator.recordFailureCategory(ticket, category: denied ? .permissionDenied : .unreadable)
             let message = SecCopyErrorMessageString(status, nil) as String?
                 ?? "Keychain read failed with status \(status)."
             AppLog.warn(.keychain, "in-process read failed for service '\(service)' (status \(status))")
@@ -530,13 +529,15 @@ struct SecurityKeychainAccessor: KeychainReading {
         // unchanged items are served from that cache before this method is reached.
         switch rawGenericPasswordExists(service: service, account: account) {
         case true:
-            coordinator.recordFailureCategory(ticket, permissionDenied: true)
-            AppLog.debug(.keychain, "automatic secret read deferred for service '\(service)'; manual refresh required")
+            // The item exists and was deliberately not read — a neutral deferral, NOT a denial:
+            // nothing asked securityd for the secret, so nothing can have been denied yet.
+            coordinator.recordFailureCategory(ticket, category: .manualReadDeferred)
+            AppLog.debug(.keychain, "automatic secret read deferred for service '\(service)'; manual read required")
             return .unavailable
         case false:
             return .missing
         case nil:
-            coordinator.recordFailureCategory(ticket, permissionDenied: false)
+            coordinator.recordFailureCategory(ticket, category: .unreadable)
             AppLog.debug(.keychain, "automatic secret read unavailable for service '\(service)'; metadata probe failed")
             return .unavailable
         }
@@ -557,16 +558,16 @@ struct SecurityKeychainAccessor: KeychainReading {
         }
     }
 
-    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
-        coordinator.lastFailureWasPermissionDenied(service: service, account: account)
+    func lastReadFailure(service: String, account: String) -> KeychainReadFailure? {
+        coordinator.lastFailureCategory(service: service, account: account)
     }
 
-    func lastReadWasPermissionDenied(service: String) -> Bool? {
-        coordinator.lastFailureWasPermissionDenied(service: service, account: nil)
+    func lastReadFailure(service: String) -> KeychainReadFailure? {
+        coordinator.lastFailureCategory(service: service, account: nil)
     }
 
-    func lastReadForCurrentUserWasPermissionDenied(service: String) -> Bool? {
-        coordinator.lastFailureWasPermissionDenied(service: service, account: currentUserAccount())
+    func lastReadFailureForCurrentUser(service: String) -> KeychainReadFailure? {
+        coordinator.lastFailureCategory(service: service, account: currentUserAccount())
     }
 
     func genericPasswordForCurrentUserExists(service: String) -> Bool? {

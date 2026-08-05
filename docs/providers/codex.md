@@ -20,7 +20,7 @@ When Codex reports your plan name, Runway shows it beside the provider name.
 Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). All Codex credentials are strictly read-only to Runway: it never refreshes a token and never writes `auth.json` or the keyring — the `codex` CLI owns the login and its rotation. When the token lapses, the card shows **"Codex login needs renewal"**: run `codex` (it renews its own login), then refresh Runway. The local spend tiles keep working the whole time.
 
 Automatic refreshes never request the keyring secret. After launch or a credential change, the card
-asks for a manual refresh; that deliberate read is cached in memory for the running app session while the item's
+offers a neutral **Connect** action (not a warning); that deliberate read is cached in memory for the running app session while the item's
 non-secret metadata remains unchanged. Choose **Always Allow** to avoid a dialog on future manual reads. If the
 login keychain itself can't be inspected (it's locked, say), the card asks you to unlock it instead.
 
@@ -57,7 +57,8 @@ For supported GPT-5.4, GPT-5.5, and GPT-5.6 models, requests above 272k input to
 
 - **"Not logged in"** — run `codex` and sign in, then refresh.
 - **"Codex login needs renewal"** — the stored token has expired or was revoked. Runway never renews Codex's tokens itself, so run `codex` (it refreshes its login when it starts), then refresh Runway. The spend tiles keep working in the meantime.
-- **"Codex login found in Keychain"** — refresh manually and choose **Always Allow** when macOS asks for access to `Codex Auth`.
+- **"Codex login found in Keychain"** (a neutral key glyph, not a warning) — the login hasn't been loaded this app session. Connect, and choose **Always Allow** when macOS asks for access to `Codex Auth`.
+- **"Keychain access to the Codex login was declined"** — a manual read was denied. Refresh and choose **Always Allow** when macOS asks.
 - **API-key-only setups** can't read subscription usage — sign in with your ChatGPT account instead.
 - **Spend tiles show "No data"** — Runway found no Codex session logs in the last 30 days. If your Codex home lives somewhere custom, set `CODEX_HOME` so both the Codex CLI and Runway look in the same place.
 - **A custom home doesn't become a separate card** — confirm it has a ChatGPT OAuth login and either an `auth.json`, `config.toml`, or sessions directory that lets discovery recognize the home. API-key-only, tokenless, and nameless file credentials are skipped rather than guessed. For a keyring-only home, choose **Refresh All** and approve its exact `Codex Auth` item if macOS asks, then relaunch Runway so the bound account can become a card.

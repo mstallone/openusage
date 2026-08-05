@@ -44,8 +44,8 @@ final class CursorAuthStoreTests: XCTestCase {
             now: { now }
         )
 
-        // Automatic: silent, and the protected item is surfaced as needing approval.
-        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+        // Automatic: silent, and the protected item is surfaced as the neutral connect state.
+        XCTAssertEqual(store.loadCredentials(), .connectRequired)
         XCTAssertEqual(keychain.interactiveReads, 0)
 
         // Manual: the prompt is allowed, and the same-account token wins over the dead one.
@@ -118,13 +118,13 @@ final class CursorKeychainReadModeTests: XCTestCase {
         XCTAssertEqual(keychain.plainReads, 0)
     }
 
-    func testProtectedKeychainItemsCountAsPermissionRequiredNotLoggedOut() {
-        // A Cursor login stored only in protected Keychain items must be reported as
-        // permission-required — a real footprint the user connects via manual refresh — never
-        // silently collapsed into "not logged in".
+    func testProtectedKeychainItemsCountAsConnectRequiredNotLoggedOut() {
+        // A Cursor login stored only in protected Keychain items must be reported as the neutral
+        // connect state — a real footprint the user connects via an explicit action — never
+        // silently collapsed into "not logged in" or dressed as a denial.
         let store = CursorAuthStore(sqlite: EmptySQLite(), keychain: UnavailableCursorKeychain())
 
-        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+        XCTAssertEqual(store.loadCredentials(), .connectRequired)
     }
 
     func testUnreadableKeychainIsNotReportedAsNeedingApproval() {
@@ -138,14 +138,14 @@ final class CursorKeychainReadModeTests: XCTestCase {
 
     func testFreeSQLiteTokenDoesNotSilentlyBypassAProtectedKeychainLogin() {
         // The keychain (agent CLI) login can be the real paid account; with its items protected the
-        // free-vs-different-subject comparison is impossible, so the load surfaces the approval need
-        // instead of silently showing the free SQLite account. A paid SQLite login keeps winning.
+        // free-vs-different-subject comparison is impossible, so the load surfaces the connect
+        // prompt instead of silently showing the free SQLite account. A paid SQLite login keeps winning.
         let sqlite = FakeCursorSQLite(values: [
             CursorAuthStore.accessTokenKey: "sqlite-free-token",
             CursorAuthStore.membershipTypeKey: "free"
         ])
         let protected = CursorAuthStore(sqlite: sqlite, keychain: UnavailableCursorKeychain())
-        XCTAssertEqual(protected.loadCredentials(), .keychainPermissionRequired)
+        XCTAssertEqual(protected.loadCredentials(), .connectRequired)
 
         let paidSqlite = FakeCursorSQLite(values: [
             CursorAuthStore.accessTokenKey: "sqlite-pro-token",
@@ -188,8 +188,8 @@ private final class UnreadableCursorKeychain: KeychainReading, @unchecked Sendab
         .unavailable
     }
 
-    func lastReadWasPermissionDenied(service: String) -> Bool? {
-        false
+    func lastReadFailure(service: String) -> KeychainReadFailure? {
+        .unreadable
     }
 
     func genericPasswordExists(service: String) -> Bool? {
