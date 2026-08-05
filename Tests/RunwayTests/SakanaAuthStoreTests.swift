@@ -83,6 +83,43 @@ final class SakanaAuthStoreTests: XCTestCase {
         }
     }
 
+    func testDeferredNewestCookieStillFallsThroughToAUsablePlaintextCookie() throws {
+        // The newest cookie's Safe Storage read being deferred must not end the scan: an older
+        // plaintext cookie (or an already-connected browser's key) serves without any user
+        // action, and showing Connect there would ask for a step nothing needs.
+        let keyReader = SakanaKeyReaderDouble(error: .manualReadDeferred)
+        let fixture = makeStore(
+            rows: [
+                "/arc/Cookies": cookieRow(encrypted: Data("v10ciphertext".utf8), updatedAt: 99),
+                "/chrome/Cookies": cookieRow(token: token, updatedAt: 1)
+            ],
+            keyReader: keyReader
+        )
+
+        let session = try fixture.store.loadSession(allowInteraction: false)
+
+        XCTAssertEqual(session.token, token)
+        XCTAssertEqual(session.browserName, "Chrome (Default)")
+    }
+
+    func testConnectPromptSurfacesOnlyAfterEveryCandidateWasTried() {
+        // With no usable fallback, the deferral does surface as the connect prompt — but only
+        // after every candidate was given its chance.
+        let keyReader = SakanaKeyReaderDouble(error: .manualReadDeferred)
+        let fixture = makeStore(
+            rows: [
+                "/arc/Cookies": cookieRow(encrypted: Data("v10ciphertext".utf8), updatedAt: 99),
+                "/chrome/Cookies": cookieRow(encrypted: Data("v10ciphertext".utf8), updatedAt: 1)
+            ],
+            keyReader: keyReader
+        )
+
+        XCTAssertThrowsError(try fixture.store.loadSession(allowInteraction: false)) {
+            XCTAssertEqual($0 as? SakanaAuthError, .connectRequired)
+        }
+        XCTAssertEqual(keyReader.calls.count, 2, "both candidates must be tried before Connect is offered")
+    }
+
     func testBackgroundReadSurfacesPermissionRequired() {
         let keyReader = SakanaKeyReaderDouble(error: .permissionRequired)
         let fixture = makeStore(

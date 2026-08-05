@@ -206,6 +206,7 @@ struct SakanaAuthStore: Sendable {
 
         var sawUnreadableKey = false
         var sawInvalidCookie = false
+        var sawDeferredKey = false
         for candidate in available {
             do {
                 let plaintext: Data
@@ -228,8 +229,14 @@ struct SakanaAuthStore: Sendable {
                 }
                 return SakanaBrowserSession(token: token, browserName: candidate.source.browserName)
             } catch SakanaBrowserCredentialError.manualReadDeferred {
-                throw SakanaAuthError.connectRequired
+                // A deferral only ever happens on the prompt-free automatic path, so scanning on
+                // can't raise a dialog — and a later candidate may serve without ANY user action:
+                // a plaintext cookie, or a browser whose Safe Storage key was already connected
+                // this session. Connect is the answer only when nothing else was usable.
+                sawDeferredKey = true
             } catch SakanaBrowserCredentialError.permissionRequired {
+                // A real denial ends the scan: on a manual refresh, trying the next browser here
+                // would raise another approval dialog right after the user said no to this one.
                 throw SakanaAuthError.permissionRequired
             } catch SakanaBrowserCredentialError.keychainFailure {
                 // The Safe Storage key could not be read — a locked keychain, or another provider's
@@ -242,6 +249,9 @@ struct SakanaAuthStore: Sendable {
                 AppLog.error(LogTag.auth("sakana"), "Sakana browser credential read failed: \(error.localizedDescription)")
             }
         }
+        // A deferred key outranks the other failures: connecting it is the one self-serviceable
+        // action, and the deferred candidate may be exactly the good session.
+        if sawDeferredKey { throw SakanaAuthError.connectRequired }
         if sawUnreadableKey { throw SakanaAuthError.credentialsUnreadable }
         if sawInvalidCookie { throw SakanaAuthError.invalidCookie }
         throw SakanaAuthError.credentialsUnreadable
