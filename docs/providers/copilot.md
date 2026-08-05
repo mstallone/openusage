@@ -51,7 +51,7 @@ Checked in this order (prompt-free files first, Keychain last):
 2. GitHub CLI config: `~/.config/gh/hosts.yml` (`oauth_token`), when `gh` stores its token in a file.
 3. GitHub CLI Keychain item (service `gh:github.com`), when `gh` stores its token in the system keyring.
    Automatic refreshes never request its secret. Refresh manually after launch or a credential change;
-   Runway reuses that value in memory for a bounded time while the item's non-secret metadata remains unchanged. Choose
+   Runway reuses that value in memory for the running app session while the item's non-secret metadata remains unchanged. Choose
    **Always Allow** to avoid a dialog on future manual reads.
 
 The editor token stays preferred for the Copilot quota endpoint. For organization and enterprise

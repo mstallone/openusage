@@ -367,18 +367,29 @@ enum NonInteractiveKeychainMetadataQuery {
 /// path any more: a subprocess's approval names the helper binary rather than Runway, so it could
 /// never turn into a durable Always Allow — which is how one approval became a recurring prompt.
 struct SecurityKeychainAccessor: KeychainReading {
+    private static let metadataTimestampResolution: TimeInterval = 1
+    private static let metadataStabilizationLimit: TimeInterval = 2
+
     /// Gates every in-process secret read: change-gated caching, single-flight per item, and a
     /// circuit breaker after denials. See `KeychainReadCoordinator`.
     let coordinator: KeychainReadCoordinator
+    private let metadataNow: @Sendable () -> Date
+    private let waitForMetadataStability: @Sendable (TimeInterval) -> Void
     private let copyMatching: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
 
     init(
         coordinator: KeychainReadCoordinator = .shared,
+        metadataNow: @escaping @Sendable () -> Date = Date.init,
+        waitForMetadataStability: @escaping @Sendable (TimeInterval) -> Void = {
+            Thread.sleep(forTimeInterval: $0)
+        },
         copyMatching: @escaping @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = {
             SecItemCopyMatching($0, $1)
         }
     ) {
         self.coordinator = coordinator
+        self.metadataNow = metadataNow
+        self.waitForMetadataStability = waitForMetadataStability
         self.copyMatching = copyMatching
     }
 
@@ -423,7 +434,7 @@ struct SecurityKeychainAccessor: KeychainReading {
         try coordinator.interactiveRead(
             service: service,
             account: account,
-            fingerprint: { attributeFingerprint(service: service, account: account) },
+            fingerprint: { stabilizedAttributeFingerprint(service: service, account: account) },
             read: { ticket in try performInteractiveRead(service: service, account: account, ticket: ticket) }
         )
     }
@@ -515,8 +526,8 @@ struct SecurityKeychainAccessor: KeychainReading {
     ) -> NonInteractiveKeychainRead {
         // `LAContext.interactionNotAllowed` does not suppress classic login-keychain ACL dialogs on
         // macOS 26.6. Automatic paths therefore inspect metadata only and never request secret data.
-        // An explicit user action seeds the coordinator's bounded in-memory cache; fresh unchanged
-        // items are served from that cache before this method is reached.
+        // An explicit user action seeds the coordinator's process-lifetime in-memory cache;
+        // unchanged items are served from that cache before this method is reached.
         switch rawGenericPasswordExists(service: service, account: account) {
         case true:
             coordinator.recordFailureCategory(ticket, permissionDenied: true)
@@ -599,6 +610,34 @@ struct SecurityKeychainAccessor: KeychainReading {
     /// `coordinator.probe`): the coordinated read paths invoke it while already holding the item's
     /// flight, which the probe gate would wait on.
     private func attributeFingerprint(service: String, account: String?) -> String? {
+        guard let attributes = genericPasswordAttributes(service: service, account: account) else {
+            return nil
+        }
+        return Self.fingerprint(attributes)
+    }
+
+    /// Keychain modification dates have one-second resolution. If a manual read occurs in the same
+    /// second as a secret-only update, hashing the attributes immediately could bind the old secret
+    /// to the new item's indistinguishable fingerprint for the rest of the process. Wait until the
+    /// observed modification second closes, query the attributes again, and only then perform the
+    /// one user-approved secret read. Continuous updates are bounded to two seconds and return no
+    /// cacheable fingerprint rather than delaying the refresh indefinitely.
+    private func stabilizedAttributeFingerprint(service: String, account: String?) -> String? {
+        let deadline = metadataNow().addingTimeInterval(Self.metadataStabilizationLimit)
+        while let attributes = genericPasswordAttributes(service: service, account: account) {
+            guard let modifiedAt = attributes[kSecAttrModificationDate as String] as? Date else {
+                return nil
+            }
+            let now = metadataNow()
+            let stableAt = modifiedAt.addingTimeInterval(Self.metadataTimestampResolution)
+            guard stableAt > now else { return Self.fingerprint(attributes) }
+            guard stableAt <= deadline else { return nil }
+            waitForMetadataStability(stableAt.timeIntervalSince(now) + 0.01)
+        }
+        return nil
+    }
+
+    private func genericPasswordAttributes(service: String, account: String?) -> [String: Any]? {
         let query = NonInteractiveKeychainMetadataQuery.applying(to: [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -612,7 +651,10 @@ struct SecurityKeychainAccessor: KeychainReading {
         else {
             return nil
         }
+        return attributes
+    }
 
+    private static func fingerprint(_ attributes: [String: Any]) -> String? {
         // The query never requests `kSecReturnData`, so this contains metadata only. Normalize every
         // attribute before hashing; callers receive no raw account, path, dates, labels, or access
         // group, and an in-place `-U` update changes the modification-date component.

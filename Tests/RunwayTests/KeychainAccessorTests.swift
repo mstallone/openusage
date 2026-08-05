@@ -113,6 +113,64 @@ final class KeychainAccessorTests: XCTestCase {
         )
     }
 
+    func testManualReadWaitsOutModificationDateCollisionBeforeCaching() throws {
+        struct ProbeState {
+            var secret = "old-secret"
+            var secretReads = 0
+            var waits = 0
+        }
+
+        let modificationDate = Date(timeIntervalSinceReferenceDate: 1_000)
+        let clock = Locked(Date(timeIntervalSinceReferenceDate: 1_000.25))
+        let state = Locked(ProbeState())
+        let coordinator = KeychainReadCoordinator()
+        let accessor = SecurityKeychainAccessor(
+            coordinator: coordinator,
+            metadataNow: { clock.withLock { $0 } },
+            waitForMetadataStability: { interval in
+                // Simulate another app rotating only the secret later in the same Keychain
+                // modification-date second. Its metadata fingerprint remains unchanged.
+                state.withLock {
+                    $0.secret = "rotated-secret"
+                    $0.waits += 1
+                }
+                clock.withLock { $0 = $0.addingTimeInterval(interval) }
+            },
+            copyMatching: { query, result in
+                let query = query as NSDictionary
+                if query[kSecReturnAttributes] as? Bool == true {
+                    result?.pointee = [
+                        kSecAttrService as String: "service",
+                        kSecAttrAccount as String: "account",
+                        kSecAttrModificationDate as String: modificationDate,
+                    ] as CFDictionary
+                    return errSecSuccess
+                }
+                if query[kSecReturnData] as? Bool == true {
+                    let secret = state.withLock { value -> String in
+                        value.secretReads += 1
+                        return value.secret
+                    }
+                    result?.pointee = Data(secret.utf8) as CFData
+                    return errSecSuccess
+                }
+                return errSecSuccess
+            }
+        )
+
+        XCTAssertEqual(
+            try accessor.readGenericPasswordAllowingUserInteraction(service: "service", account: "account"),
+            "rotated-secret",
+            "the approved read must happen after the timestamp collision window closes"
+        )
+        XCTAssertEqual(
+            accessor.readGenericPasswordWithoutUserInteraction(service: "service", account: "account"),
+            .value("rotated-secret")
+        )
+        XCTAssertEqual(state.withLock { $0.waits }, 1)
+        XCTAssertEqual(state.withLock { $0.secretReads }, 1, "automatic reuse must not request secret data")
+    }
+
     func testAutomaticSafeStorageReadersRequestMetadataOnly() {
         let claudeRequestedSecretData = Locked(false)
         let claudeBlockedAuthenticationUI = Locked(false)

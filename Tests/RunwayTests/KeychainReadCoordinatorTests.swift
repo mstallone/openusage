@@ -206,12 +206,13 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         XCTAssertEqual(reads.value, 1, "one Refresh All must not request the same approved item twice")
     }
 
-    func testInteractiveValueExpiresIntoManualReadRequirementAfterRevalidationInterval() throws {
+    func testInteractiveValueSurvivesRevalidationIntervalWhileFingerprintIsUnchanged() throws {
         let clock = Locked(Date(timeIntervalSince1970: 1_000_000))
         let coordinator = KeychainReadCoordinator(
             revalidateAfter: 60,
             now: { clock.withLock { $0 } }
         )
+        let reads = Counter()
         _ = try coordinator.interactiveRead(
             service: "svc", account: nil, fingerprint: { "fp-1" }, read: { _ in "secret" }
         )
@@ -220,14 +221,15 @@ final class KeychainReadCoordinatorTests: XCTestCase {
         let background = coordinator.nonInteractiveRead(
             service: "svc", account: nil,
             fingerprint: { "fp-1" },
-            read: { _ in .unavailable }
+            read: { _ in reads.increment(); return .unavailable }
         )
 
         XCTAssertEqual(
             background,
-            .unavailable,
-            "even an unchanged fingerprint must require another manual read after the bounded cache lifetime"
+            .value("secret"),
+            "an unchanged user-approved item must keep automatic refresh working for the process lifetime"
         )
+        XCTAssertEqual(reads.value, 0, "the automatic path must not attempt another secret read")
     }
 
     func testInteractiveDenialTripsTheBreakerForBackgroundReads() {

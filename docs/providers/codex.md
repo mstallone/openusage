@@ -20,7 +20,7 @@ When Codex reports your plan name, Runway shows it beside the provider name.
 Sign in with the Codex CLI (`codex`); Runway reads the same `auth.json` file or home-scoped OS keyring item (`$CODEX_HOME` respected). All Codex credentials are strictly read-only to Runway: it never refreshes a token and never writes `auth.json` or the keyring — the `codex` CLI owns the login and its rotation. When the token lapses, the card shows **"Codex login needs renewal"**: run `codex` (it renews its own login), then refresh Runway. The local spend tiles keep working the whole time.
 
 Automatic refreshes never request the keyring secret. After launch or a credential change, the card
-asks for a manual refresh; that deliberate read is cached in memory for a bounded time while the item's
+asks for a manual refresh; that deliberate read is cached in memory for the running app session while the item's
 non-secret metadata remains unchanged. Choose **Always Allow** to avoid a dialog on future manual reads. If the
 login keychain itself can't be inspected (it's locked, say), the card asks you to unlock it instead.
 

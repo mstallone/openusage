@@ -6,8 +6,9 @@
 - Turning a provider on (yourself in Customize, or automatically by first-launch/new-provider detection) fetches it promptly instead of waiting out the interval — even when the change lands in the middle of a refresh that's already running.
 - The dashboard footer shows a compact countdown to the next update (like `5m` or `45s`). **Clicking it (or pressing ⌘R while that footer is present)** refreshes immediately, skipping the cache. If several providers need Keychain approval, their dialogs appear one at a time during that same refresh; Runway never opens two approval dialogs together.
 - Automatic refreshes never request secret data from another app's Keychain item. After launch,
-  periodically, or when a Keychain credential changes, refresh manually once; Runway then reuses
-  that value in memory for a bounded time while the item's non-secret metadata remains unchanged.
+  or when a Keychain credential changes, refresh manually once; Runway then reuses
+  that value in memory for the rest of the running app session while the item's non-secret metadata
+  remains unchanged. Relaunching Runway or changing the Keychain item requires another manual refresh.
   **Always Allow** can prevent a dialog on a
   future manual read, but automatic refreshes still do not initiate Keychain secret reads.
 - The one-shot `runway` command reuses this same persisted cache for five minutes, refreshes missing or stale entries without starting the app, and exits. `runway --force` runs the same forced provider refresh as ⌘R regardless of cache age — with one difference: it never opens a Keychain approval dialog, and it can't reuse the app's approval either (the command is a separately signed binary). Providers whose credentials live only in a protected Keychain item are read by the app and reach the command through the shared snapshot; see [CLI](cli.md).

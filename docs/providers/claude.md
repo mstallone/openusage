@@ -32,8 +32,8 @@ never changes Desktop's config, cookies, or Keychain entry. This prevents Runway
 Claude Desktop's session.
 
 Launch-time and background refreshes never request Claude's Keychain secrets. Runway asks you to
-refresh manually after launch, periodically, or after a credential change, then caches that deliberate
-read in memory for a bounded time while the item's non-secret metadata remains unchanged. Choosing **Always Allow** avoids a dialog on future
+refresh manually after launch or a credential change, then caches that deliberate
+read in memory for the running app session while the item's non-secret metadata remains unchanged. Choosing **Always Allow** avoids a dialog on future
 manual reads. If Desktop's short-lived token expires, open Claude Desktop so it can renew the login,
 then refresh Runway.
 

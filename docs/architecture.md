@@ -65,7 +65,8 @@ refresh their own file-based logins (no Keychain involved); moving them to the s
 is the remaining ownership follow-up.
 
 Automatic refreshes never request secret data from another app's Keychain item. They inspect only
-non-secret metadata and reuse, for a bounded time, a value loaded into the current process by a manual refresh;
+non-secret metadata and reuse, for the rest of that process while the item is unchanged, a value
+loaded by a manual refresh;
 after launch or a credential change, the user must refresh manually again. Manual **Refresh All**
 queues protected providers and prompts for them one at a time, so approval dialogs never overlap.
 If a refresh is cancelled while its read is still queued, that read leaves the queue without touching

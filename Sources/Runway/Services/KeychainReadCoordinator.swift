@@ -9,8 +9,8 @@ import Foundation
 ///
 /// - **Change-gated manual reads.** An explicit user action reads the secret and caches it in memory.
 ///   Automatic refreshes probe the item's non-secret attribute fingerprint and reuse that cached
-///   value for a bounded time while the fingerprint is unchanged; they never request foreign secret
-///   data. A changed fingerprint or expired cache asks the user to refresh manually again.
+///   value for the rest of the process while the fingerprint is unchanged; they never request foreign
+///   secret data. A changed fingerprint or a new process asks the user to refresh manually again.
 /// - **Single-flight.** Concurrent readers of the same service/account (multiple Claude cards, the
 ///   default-account observer) share one underlying read. A caller never waits more than
 ///   `inFlightWait` on someone else's read: a background caller then reports `.unavailable` rather
@@ -48,7 +48,9 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         /// of this very secret, and a background value — which can also carry a nil fingerprint
         /// when its probe failed — gives no reason to believe it is still current.
         var fromUserAction: Bool = false
-        /// Last successful read, served while the fingerprint is unchanged and the entry is fresh.
+        /// Last successful read. A value produced by an explicit user action is served for the
+        /// process lifetime while the fingerprint remains unchanged; other outcome ages stay
+        /// bounded by `revalidateAfter`.
         var value: NonInteractiveKeychainRead?
         /// Tripped by a failed/denied read; answers `.unavailable` without touching the Keychain
         /// until revalidation is due or an interactive read succeeds.
@@ -147,14 +149,21 @@ final class KeychainReadCoordinator: @unchecked Sendable {
         condition.lock()
         if let fingerprint,
            let entry = entries[key],
-           entry.fingerprint == fingerprint,
-           now().timeIntervalSince(entry.updatedAt) < revalidateAfter
+           entry.fingerprint == fingerprint
         {
-            if entry.tripped {
+            let isFresh = now().timeIntervalSince(entry.updatedAt) < revalidateAfter
+            if entry.tripped, isFresh {
                 condition.unlock()
                 return .unavailable
             }
-            if let value = entry.value {
+            // A deliberate read is the user's approval for this process to use that exact item.
+            // Keep serving it as long as the metadata fingerprint proves the item has not changed;
+            // expiring it here would make every Keychain-only provider require another manual
+            // refresh every 15 minutes. Background-produced values remain bounded because they may
+            // predate an update whose metadata timestamp collided at Keychain's coarse resolution.
+            if !entry.tripped,
+               (entry.fromUserAction || isFresh),
+               let value = entry.value {
                 condition.unlock()
                 return value
             }
