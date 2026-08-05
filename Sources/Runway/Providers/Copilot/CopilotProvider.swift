@@ -97,6 +97,10 @@ final class CopilotProvider: ProviderRuntime {
         switch load {
         case .token(let loaded):
             token = loaded
+        case .connectRequired:
+            // The login exists but hasn't been loaded this process — the neutral Connect
+            // affordance, not a warning.
+            return ProviderSnapshot.connectPrompt(provider: provider, error: CopilotAuthError.keychainConnectRequired)
         case .keychainPermissionRequired:
             return ProviderSnapshot.error(provider: provider, error: CopilotAuthError.keychainPermissionRequired)
         case .unreadable:
@@ -159,9 +163,12 @@ final class CopilotProvider: ProviderRuntime {
                 case .managed:
                     // An unusable GitHub CLI credential is the likely reason billing could not
                     // be read; telling the user to obtain billing access would send them down the
-                    // wrong path. Report which Keychain problem it actually was.
+                    // wrong path. Report which Keychain problem it actually was — a deferred read
+                    // stays the neutral connect prompt.
                     if let billingKeychainError {
-                        return ProviderSnapshot.error(provider: provider, error: billingKeychainError)
+                        return billingKeychainError == .keychainConnectRequired
+                            ? ProviderSnapshot.connectPrompt(provider: provider, error: billingKeychainError)
+                            : ProviderSnapshot.error(provider: provider, error: billingKeychainError)
                     }
                     lines = [
                         .badge(

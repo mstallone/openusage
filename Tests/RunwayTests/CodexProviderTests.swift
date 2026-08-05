@@ -819,18 +819,19 @@ final class CodexKeychainReadModeTests: XCTestCase {
         XCTAssertEqual(keychain.plainReads, 0)
     }
 
-    func testProtectedKeyringItemCountsAsPermissionRequiredAndNeverBroadens() {
-        // A protected per-home item is a real login footprint and must be reported as
-        // permission-required — never silently skipped, and never broadened past to the
-        // service-only lookup, which could select a different login.
+    func testProtectedKeyringItemCountsAsConnectRequiredAndNeverBroadens() {
+        // A protected per-home item is a real login footprint and must be reported as the neutral
+        // connect state — never silently skipped, never dressed as a denial (nothing asked for the
+        // secret), and never broadened past to the service-only lookup, which could select a
+        // different login.
         let store = CodexAuthStore(
             environment: FakeEnvironment(),
             files: FakeFiles(),
             keychain: ProtectedKeyringKeychain()
         )
 
-        guard case .permissionRequired = store.loadKeychainCredentials() else {
-            return XCTFail("a protected keyring item must report permission-required")
+        guard case .connectRequired = store.loadKeychainCredentials() else {
+            return XCTFail("a protected keyring item must report connect-required")
         }
     }
 
@@ -867,8 +868,8 @@ private final class UnreadableKeyringKeychain: KeychainReading, @unchecked Senda
         return .unavailable
     }
 
-    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
-        false
+    func lastReadFailure(service: String, account: String) -> KeychainReadFailure? {
+        .unreadable
     }
 
     func genericPasswordExists(service: String) -> Bool? {
@@ -1042,8 +1043,8 @@ private final class DenyingInteractiveKeychain: KeychainReading, @unchecked Send
     /// The user answered the dialog and refused, which the production accessor records from the
     /// resulting `errSecAuthFailed`/`errSecUserCanceled`. Without this the fake would model a read
     /// that never reached a prompt at all — a different outcome with different advice.
-    func lastReadWasPermissionDenied(service: String, account: String) -> Bool? {
-        true
+    func lastReadFailure(service: String, account: String) -> KeychainReadFailure? {
+        .permissionDenied
     }
 
     func genericPasswordExists(service: String) -> Bool? {

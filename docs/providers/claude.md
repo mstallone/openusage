@@ -31,9 +31,10 @@ Claude Desktop support is read-only. Runway decrypts its currently valid access 
 never changes Desktop's config, cookies, or Keychain entry. This prevents Runway from invalidating
 Claude Desktop's session.
 
-Launch-time and background refreshes never request Claude's Keychain secrets. Runway asks you to
-refresh manually after launch or a credential change, then caches that deliberate
-read in memory for the running app session while the item's non-secret metadata remains unchanged. Choosing **Always Allow** avoids a dialog on future
+Launch-time and background refreshes never request Claude's Keychain secrets. After launch or a
+credential change, the card offers a neutral **Connect** action (not a warning — nothing is broken);
+that deliberate read is cached in memory for the running app session while the item's non-secret
+metadata remains unchanged. Choosing **Always Allow** avoids a dialog on future
 manual reads. If Desktop's short-lived token expires, open Claude Desktop so it can renew the login,
 then refresh Runway.
 
@@ -95,9 +96,11 @@ In the [CLI](../cli.md) and [local API](../local-http-api.md), extra cards appea
 ## Troubleshooting
 
 - **"Not logged in"** — run `claude` and sign in, then refresh.
-- **"Claude Code login found"** — refresh manually and choose **Always Allow** when macOS asks for access to `Claude Code-credentials`.
+- **"Claude Code login found"** (a neutral key glyph / **Connect** button, not a warning) — the login exists but hasn't been loaded this app session. Connect, and choose **Always Allow** if macOS asks for access to `Claude Code-credentials`.
+- **"Keychain access to the Claude Code login was declined"** — a manual read was denied. Refresh and choose **Always Allow** when macOS asks.
 - **"Claude Code credentials couldn't be checked"** — unlock your login keychain, then refresh Runway.
-- **"Claude Desktop login found"** — refresh manually and choose **Always Allow** when macOS asks for access to `Claude Safe Storage`.
+- **"Claude Desktop login found"** (neutral, like the Claude Code one) — connect, and choose **Always Allow** if macOS asks for access to `Claude Safe Storage`.
+- **"Keychain access to the Claude Desktop login was declined"** — a manual read was denied. Refresh and choose **Always Allow** when macOS asks.
 - **"Claude Desktop login is stale"** (an amber warning on the Claude header) — open Claude Desktop so it can renew the login, then refresh Runway.
 - **"Claude login needs renewal"** (an amber warning on the Claude header) — every stored login has an expired or revoked token. Runway never renews Claude's tokens itself, so open Claude Code (it refreshes its login on launch), then refresh Runway. The spend tiles keep working in the meantime.
 - **"Re-login for live usage"** (an amber warning on the Claude header) — your saved login can authenticate for inference but can't read your subscription limits, because it lacks the `user:profile` access (this is what an inference-only token from `claude setup-token` carries). Run `claude` and sign in again with your Claude account, then refresh; the spend tiles keep working in the meantime.

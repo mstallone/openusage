@@ -55,6 +55,15 @@ struct SnapshotDocument: Decodable {
     var providerErrors: [String: String]
     /// Display names for error-only providers (no snapshot to take a title from).
     var providerNames: [String: String]?
+    /// The `providerErrors` entries that are the Mac's neutral connect prompt (a credential exists
+    /// there but hasn't been loaded into its app session) rather than a real failure — rendered
+    /// with a muted key glyph instead of the warning triangle. Absent from older Macs' records.
+    var providerConnectPrompts: Set<String>?
+
+    /// Whether this provider's error entry is the neutral connect prompt.
+    func errorIsConnectPrompt(_ providerID: String) -> Bool {
+        providerConnectPrompts?.contains(providerID) == true
+    }
 }
 
 struct ProviderSnapshotWire: Decodable {
@@ -63,6 +72,8 @@ struct ProviderSnapshotWire: Decodable {
     var plan: String?
     var refreshedAt: Date
     var warning: String?
+    /// Whether `warning` is the Mac's neutral connect prompt rather than something needing a fix.
+    var warningIsConnectPrompt: Bool?
     var lines: [MetricLineWire]
 }
 

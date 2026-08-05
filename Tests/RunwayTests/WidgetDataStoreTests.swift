@@ -298,6 +298,79 @@ final class WidgetDataStoreTests: XCTestCase {
         XCTAssertEqual(store.headerNoticeAction(for: provider.id), .refresh)
     }
 
+    func testConnectPromptStaysNeutralInBothErrorAndSoftWarningShapes() async {
+        // A credential that exists but hasn't been loaded this process must never wear the warning
+        // treatment. Both of its shapes report `noticeIsConnectPrompt`: the empty-state connect
+        // snapshot (which travels the failed-refresh plumbing so last-good data stays on screen)
+        // and the connect-flavored soft warning on a successful snapshot.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let connectMessage = ClaudeAuthError.codeConnectRequired.localizedDescription
+        let softConnect = ClaudeAuthError.desktopConnectRequired.localizedDescription
+        let runtime = TogglingProviderRuntime(
+            provider: provider,
+            descriptors: [meter],
+            first: ProviderSnapshot.connectPrompt(provider: provider, error: ClaudeAuthError.codeConnectRequired),
+            second: ProviderSnapshot(
+                providerID: provider.id,
+                displayName: provider.displayName,
+                lines: [.progress(label: "Session", used: 42, limit: 100, format: .percent)],
+                warning: softConnect,
+                warningIsConnectPrompt: true
+            )
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [runtime],
+            defaults: makeUserDefaults("connect-prompt")
+        )
+
+        await store.refreshAll(force: true)  // connect snapshot: error plumbing, neutral flavor
+        XCTAssertEqual(store.errorMessage(for: provider.id), connectMessage)
+        XCTAssertTrue(store.noticeIsConnectPrompt(for: provider.id))
+        XCTAssertEqual(store.headerNoticeAction(for: provider.id), .refresh)
+
+        await store.refreshAll(force: true)  // success carrying the connect-flavored soft warning
+        XCTAssertNil(store.errorMessage(for: provider.id))
+        XCTAssertEqual(store.headerNotice(for: provider.id), softConnect)
+        XCTAssertTrue(store.noticeIsConnectPrompt(for: provider.id))
+    }
+
+    func testHardErrorReclaimsWarningStylingAfterAConnectPrompt() async {
+        // The connect flag is bookkeeping beside `providerErrors`; a later real failure must
+        // fall back to the warning treatment, or a "token expired" would render as a neutral key.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let runtime = TogglingProviderRuntime(
+            provider: provider,
+            descriptors: [meter],
+            first: ProviderSnapshot.connectPrompt(provider: provider, error: ClaudeAuthError.codeConnectRequired),
+            second: ProviderSnapshot.error(provider: provider, message: "Token expired. Run `claude` to log in again.")
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [runtime],
+            defaults: makeUserDefaults("connect-then-error")
+        )
+
+        await store.refreshAll(force: true)
+        XCTAssertTrue(store.noticeIsConnectPrompt(for: provider.id))
+
+        await store.refreshAll(force: true)
+        XCTAssertEqual(store.errorMessage(for: provider.id), "Token expired. Run `claude` to log in again.")
+        XCTAssertFalse(store.noticeIsConnectPrompt(for: provider.id))
+    }
+
     func testEmptyStateErrorShowsOnlyWhileNoLastGoodDataExists() async {
         // A provider that has never refreshed successfully (a Keychain item awaiting approval, a
         // fresh not-signed-in install) surfaces its error as the card body via `emptyStateError`.
@@ -310,7 +383,7 @@ final class WidgetDataStoreTests: XCTestCase {
             metricLabel: "Session",
             sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
         )
-        let permissionMessage = ClaudeAuthError.codePermissionRequired.localizedDescription
+        let permissionMessage = ClaudeAuthError.codePermissionDenied.localizedDescription
         let runtime = TogglingProviderRuntime(
             provider: provider,
             descriptors: [meter],
@@ -389,7 +462,7 @@ final class WidgetDataStoreTests: XCTestCase {
             metricLabel: "Session",
             sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
         )
-        let permissionMessage = ClaudeAuthError.codePermissionRequired.localizedDescription
+        let permissionMessage = ClaudeAuthError.codePermissionDenied.localizedDescription
         let runtime = TogglingProviderRuntime(
             provider: provider,
             descriptors: [meter],
@@ -435,7 +508,7 @@ final class WidgetDataStoreTests: XCTestCase {
             metricLabel: "Weekly",
             sample: WidgetData(title: "Weekly", icon: provider.icon, kind: .percent, used: 0, limit: 100)
         )
-        let permissionMessage = ClaudeAuthError.codePermissionRequired.localizedDescription
+        let permissionMessage = ClaudeAuthError.codePermissionDenied.localizedDescription
         let runtime = TogglingProviderRuntime(
             provider: provider,
             descriptors: [session, weekly],
@@ -1108,6 +1181,34 @@ final class WidgetDataStoreTests: XCTestCase {
 
         XCTAssertNil(document.snapshots[provider.id])
         XCTAssertEqual(document.providerNames?[provider.id], "Ghost Provider")
+    }
+
+    func testLocalSnapshotDocumentMarksConnectPromptErrors() async {
+        // The connect-prompt flavor must survive the publish boundary, or a companion app renders
+        // the Mac's neutral "credential not loaded yet" state as an orange warning.
+        let provider = Provider(id: "test", displayName: "Test", icon: .providerMark("claude"))
+        let meter = WidgetDescriptor(
+            id: "test.session",
+            providerID: provider.id,
+            metricLabel: "Session",
+            sample: WidgetData(title: "Session", icon: provider.icon, kind: .percent, used: 0, limit: 100)
+        )
+        let runtime = TestProviderRuntime(
+            provider: provider,
+            descriptors: [meter],
+            snapshot: ProviderSnapshot.connectPrompt(provider: provider, error: ClaudeAuthError.codeConnectRequired)
+        )
+        let store = WidgetDataStore(
+            registry: WidgetRegistry(providers: [provider], descriptors: [meter]),
+            providers: [runtime],
+            defaults: makeUserDefaults("snapshot-document-connect")
+        )
+        await store.refreshAll(force: true)
+
+        let document = store.localSnapshotDocument(deviceID: "device", deviceName: "Mac")
+
+        XCTAssertEqual(document.providerErrors[provider.id], ClaudeAuthError.codeConnectRequired.localizedDescription)
+        XCTAssertEqual(document.providerConnectPrompts, [provider.id])
     }
 
     private func makeUserDefaults(_ name: String) -> UserDefaults {

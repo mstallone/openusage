@@ -19,4 +19,9 @@ struct DeviceSnapshotDocument: Hashable, Sendable, Codable {
     /// provider whose first refresh ever failed) — otherwise consumers would have only the card id
     /// to label the error with. Additive in schema v1; absent from older records.
     var providerNames: [String: String]? = nil
+    /// The `providerErrors` entries that are the neutral connect prompt (a credential exists on
+    /// that Mac but hasn't been loaded into its app session) rather than a real failure, so
+    /// consumers can render them neutrally instead of as warnings. Additive in schema v1; absent
+    /// from older records, and older consumers ignore it.
+    var providerConnectPrompts: Set<String>? = nil
 }

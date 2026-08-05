@@ -620,8 +620,8 @@ final class ClaudeProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(
-            badge(snapshot.lines, "Error"),
-            ClaudeAuthError.codePermissionRequired.localizedDescription
+            badge(snapshot.lines, "Connect"),
+            ClaudeAuthError.codeConnectRequired.localizedDescription
         )
         XCTAssertEqual(keychain.interactiveReadCount, 0)
         XCTAssertGreaterThan(keychain.nonInteractiveReadCount, 0)
@@ -689,8 +689,8 @@ final class ClaudeProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(
-            badge(snapshot.lines, "Error"),
-            ClaudeAuthError.codePermissionRequired.localizedDescription
+            badge(snapshot.lines, "Connect"),
+            ClaudeAuthError.codeConnectRequired.localizedDescription
         )
         XCTAssertEqual(keychain.interactiveReadCount, 0)
         XCTAssertGreaterThan(keychain.nonInteractiveReadCount, 0)
@@ -764,8 +764,8 @@ final class ClaudeProviderTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertEqual(
-            badge(snapshot.lines, "Error"),
-            ClaudeAuthError.codePermissionRequired.localizedDescription
+            badge(snapshot.lines, "Connect"),
+            ClaudeAuthError.codeConnectRequired.localizedDescription
         )
         XCTAssertEqual(keychain.interactiveReadCount, 0)
         XCTAssertEqual(keychain.runwayInteractiveReadCount, 0)

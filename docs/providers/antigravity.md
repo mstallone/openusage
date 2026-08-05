@@ -31,7 +31,8 @@ If neither is available you'll see *Start Antigravity or run `agy` and try again
 ## Troubleshooting
 
 - **"Start Antigravity or run `agy`…"** — sign in to the Antigravity app (or run `agy`) so a usable token exists, then refresh. A manual refresh (⌘R) looks for the local server immediately; the automatic 5-minute passes check for it again within about 15 minutes of it starting.
-- **"Antigravity login found in Keychain"** — the item is present, but automatic refreshes do not request its secret. Refresh manually to load it; choose **Always Allow** to avoid a dialog on future manual reads.
+- **"Antigravity login found in Keychain"** (a neutral key glyph, not a warning) — the item is present, but automatic refreshes do not request its secret. Connect to load it; choose **Always Allow** to avoid a dialog on future manual reads.
+- **"Keychain access to the Antigravity login was declined"** — a manual read was denied. Refresh and choose **Always Allow** when macOS asks.
 - **"Couldn't read Antigravity credentials from Keychain"** — the keychain itself couldn't be read (usually locked). Unlock it, then refresh; there's nothing to approve in this state.
 - **"Couldn't read Antigravity credentials…"** — unlock Keychain, or sign in to Antigravity again. Runway will not use its cached access token until the current login can be verified.
 - **The weekly meters show "No data"** — your Antigravity build doesn't expose the quota-summary endpoint yet (only newer builds do). The 5-hour meters still work from the older endpoints; updating Antigravity brings the weekly meters back.

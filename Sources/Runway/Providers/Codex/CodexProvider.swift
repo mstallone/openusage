@@ -85,7 +85,7 @@ final class CodexProvider: ProviderRuntime {
         switch await loadOffMainActor({ [authStore] in authStore.loadKeychainCredentials() }) {
         case .state(let state):
             return state.hasUsableAccessToken
-        case .permissionRequired, .unreadable:
+        case .connectRequired, .permissionRequired, .unreadable:
             // Both mean an item may well be there and Runway simply could not read it. Reporting
             // "no credential" would hide the provider on first run over an access problem.
             return true
@@ -128,12 +128,20 @@ final class CodexProvider: ProviderRuntime {
             } catch {
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
-        case .permissionRequired:
+        case .connectRequired:
             // The keyring likely holds the freshest rotated credential (it is Codex CLI's source of
-            // truth in keyring mode), so approving it is the actionable fix — surface it over a
-            // stale file candidate's token error. Like the renewal path, the local spend tiles are
-            // still trustworthy, so this rides as a header warning rather than an error card.
-            AppLog.info(LogTag.auth("codex"), "keyring approval pending; serving local usage with a permission notice")
+            // truth in keyring mode), so loading it is the actionable step — surface it over a
+            // stale file candidate's token error. The local spend tiles are still trustworthy, so
+            // this rides as a header notice; connect-flavored, because nothing was denied.
+            AppLog.info(LogTag.auth("codex"), "keyring secret not loaded this process; serving local usage with a connect prompt")
+            return await localUsageSnapshot(
+                mapped: CodexMappedUsage(plan: nil, lines: []),
+                warning: CodexAuthError.keychainConnectRequired.localizedDescription,
+                warningIsConnectPrompt: true
+            )
+        case .permissionRequired:
+            // A real denial from an attempted manual read: approving it is the actionable fix.
+            AppLog.info(LogTag.auth("codex"), "keyring approval was declined; serving local usage with a permission notice")
             return await localUsageSnapshot(
                 mapped: CodexMappedUsage(plan: nil, lines: []),
                 warning: CodexAuthError.keychainPermissionRequired.localizedDescription
@@ -210,7 +218,11 @@ final class CodexProvider: ProviderRuntime {
 
     /// Assembles the published snapshot from whatever live usage is available plus the always-local
     /// spend tiles and trend (scanned from the Codex CLI's session rollouts and pi's logs).
-    private func localUsageSnapshot(mapped initialMapped: CodexMappedUsage, warning: String?) async -> ProviderSnapshot {
+    private func localUsageSnapshot(
+        mapped initialMapped: CodexMappedUsage,
+        warning: String?,
+        warningIsConnectPrompt: Bool = false
+    ) async -> ProviderSnapshot {
         var mapped = initialMapped
         let pricing = await pricing()
         let nativeScan = await logUsageScanner.scan(now: now(), pricing: pricing)
@@ -252,7 +264,8 @@ final class CodexProvider: ProviderRuntime {
             lines: mapped.lines,
             refreshedAt: now(),
             usageHistory: usageHistory,
-            warning: warning
+            warning: warning,
+            warningIsConnectPrompt: warningIsConnectPrompt
         )
     }
 

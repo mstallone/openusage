@@ -68,6 +68,10 @@ final class AntigravityProvider: ProviderRuntime {
         do {
             let result = try await probe()
             return ProviderSnapshot.make(provider: provider, plan: result.plan, lines: result.lines, refreshedAt: now())
+        } catch AntigravityError.keychainConnectRequired {
+            // The login exists but hasn't been loaded this process — the neutral Connect
+            // affordance, not a warning.
+            return ProviderSnapshot.connectPrompt(provider: provider, error: AntigravityError.keychainConnectRequired)
         } catch {
             return ProviderSnapshot.error(provider: provider, error: error)
         }

@@ -110,7 +110,7 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             requiresInteraction: true
         )
 
-        XCTAssertEqual(fixture.store.load(allowInteraction: false).status, .permissionRequired)
+        XCTAssertEqual(fixture.store.load(allowInteraction: false).status, .connectRequired)
         XCTAssertEqual(fixture.keyReader.calls, [false])
         XCTAssertEqual(fixture.store.load(allowInteraction: true).status, .available)
         XCTAssertEqual(fixture.keyReader.calls, [false, true])
@@ -236,7 +236,7 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
             allowDesktopInteraction: true
         )
 
-        XCTAssertEqual(load.keychainAccessStatus, .permissionRequired)
+        XCTAssertEqual(load.keychainAccessStatus, .permissionDenied)
         XCTAssertEqual(keychain.currentUserInteractiveReads, 1)
         XCTAssertEqual(keychain.legacyInteractiveReads, 0)
         XCTAssertTrue(fixture.keyReader.calls.isEmpty)
@@ -270,7 +270,8 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         let snapshot = await provider.refresh()
 
         XCTAssertNil(badge(snapshot.lines, "Error"))
-        XCTAssertEqual(snapshot.warning, ClaudeAuthError.desktopPermissionRequired.localizedDescription)
+        XCTAssertEqual(snapshot.warning, ClaudeAuthError.desktopConnectRequired.localizedDescription)
+        XCTAssertEqual(snapshot.warningIsConnectPrompt, true)
         XCTAssertTrue(httpClient.requests.isEmpty)
         XCTAssertEqual(fixture.keyReader.calls, [false])
     }
@@ -593,6 +594,10 @@ private final class DenyingClaudeCodeKeychain: KeychainReading, @unchecked Senda
         return nil
     }
 
+    func lastReadFailureForCurrentUser(service: String) -> KeychainReadFailure? {
+        .permissionDenied
+    }
+
     func genericPasswordExists(service: String) -> Bool? {
         true
     }
@@ -613,7 +618,7 @@ private final class FakeClaudeDesktopKeyReader: ClaudeDesktopSafeStorageKeyReadi
     func readPassword(allowInteraction: Bool) throws -> String? {
         calls.append(allowInteraction)
         if requiresInteraction, !allowInteraction {
-            throw ClaudeDesktopCredentialError.permissionRequired
+            throw ClaudeDesktopCredentialError.manualReadDeferred
         }
         return password
     }

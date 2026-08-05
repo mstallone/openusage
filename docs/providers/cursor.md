@@ -20,7 +20,7 @@ When Cursor reports your plan name, Runway shows it beside the provider name.
 Just be signed into the Cursor app. Runway reads Cursor's local state database (and its keychain entries) for the session tokens. All Cursor credentials are strictly read-only to Runway: it never refreshes a token and never writes the state database or keychain — the Cursor app owns the login and its rotation. When the token lapses, the card shows **"Cursor login needs renewal"**: sign in again where that login lives — open the Cursor app, or run `agent login` if you use the Cursor CLI — then refresh Runway. Nothing extra to install or configure.
 
 Automatic refreshes never request the keychain secrets. After launch or a credential change, the card
-asks for a manual refresh; that deliberate read is cached in memory for the running app session while the items'
+offers a neutral **Connect** action (not a warning); that deliberate read is cached in memory for the running app session while the items'
 non-secret metadata remains unchanged. Choose **Always Allow** to avoid a dialog on future manual reads. If the
 login keychain itself can't be inspected (it's locked, say), the card asks you to unlock it instead.
 

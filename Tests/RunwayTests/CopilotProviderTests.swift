@@ -61,19 +61,19 @@ final class CopilotAuthStoreTests: XCTestCase {
         XCTAssertEqual(keychain.plainReads, 0)
     }
 
-    func testUnauthorizedKeychainItemCountsAsAFootprintNeedingPermission() {
-        // A gh token stored only in the Keychain, not yet approved for Runway: detection must still
-        // see the login (so seeding enables the card) and the load must report permission-required —
-        // not "not logged in" — so the user is told to refresh manually and approve.
+    func testUnloadedKeychainItemCountsAsAFootprintNeedingConnect() {
+        // A gh token stored only in the Keychain, not yet loaded into this process: detection must
+        // still see the login (so seeding enables the card) and the load must report the neutral
+        // connect state — not "not logged in", and not a permission warning (nothing was denied).
         let store = CopilotAuthStore(files: FakeFiles(), keychain: UnauthorizedItemKeychain())
 
-        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+        XCTAssertEqual(store.loadCredentials(), .connectRequired)
     }
 
     func testBillingCandidatesReportWhenThePreferredCredentialNeedsApproval() {
-        // Editor config supplies the usage token; the preferred GitHub CLI token sits behind an
-        // unapproved ACL. The candidate list must carry that fact, or an org-managed card blames
-        // billing access when the real fix is approving a credential that already exists.
+        // Editor config supplies the usage token; the preferred GitHub CLI token hasn't been
+        // loaded into this process. The candidate list must carry that fact, or an org-managed
+        // card blames billing access when the real fix is connecting a credential that exists.
         let store = CopilotAuthStore(
             files: FakeFiles([
                 CopilotAuthStore.editorAppsPath: #"{ "github.com": { "oauth_token": "gho_editor" } }"#
@@ -84,7 +84,7 @@ final class CopilotAuthStoreTests: XCTestCase {
         let candidates = store.loadBillingTokenCandidates(usageToken: CopilotToken(value: "gho_editor"))
 
         XCTAssertEqual(candidates.tokens.map(\.value), ["gho_editor"])
-        XCTAssertEqual(candidates.keychainError, .keychainPermissionRequired)
+        XCTAssertEqual(candidates.keychainError, .keychainConnectRequired)
     }
 
     func testUnknownExistenceProbeIsTreatedAsUnreadableNotLoggedOut() {
@@ -114,8 +114,8 @@ final class CopilotAuthStoreTests: XCTestCase {
     func testProtectedScopedItemNeverBroadensToAnotherAccountsToken() {
         // hosts.yml names the intended account, whose Keychain item is protected — but another
         // (authorized) gh:github.com item exists for a different account. The load must report
-        // permission-required for the intended item, never silently pick up the other account's
-        // token through the account-less lookup.
+        // the intended item's connect state, never silently pick up the other account's token
+        // through the account-less lookup.
         let store = CopilotAuthStore(
             files: FakeFiles([
                 CopilotAuthStore.ghHostsPath: """
@@ -126,7 +126,7 @@ final class CopilotAuthStoreTests: XCTestCase {
             keychain: CrossAccountKeychain(otherAccountsValue: "gho_other_account")
         )
 
-        XCTAssertEqual(store.loadCredentials(), .keychainPermissionRequired)
+        XCTAssertEqual(store.loadCredentials(), .connectRequired)
     }
 
     func testManualRefreshBillingLookupDoesNotPromptASecondTime() throws {
@@ -2171,8 +2171,8 @@ private final class UnreadableItemKeychain: KeychainReading, @unchecked Sendable
         .unavailable
     }
 
-    func lastReadWasPermissionDenied(service: String) -> Bool? {
-        false
+    func lastReadFailure(service: String) -> KeychainReadFailure? {
+        .unreadable
     }
 
     func genericPasswordExists(service: String) -> Bool? {

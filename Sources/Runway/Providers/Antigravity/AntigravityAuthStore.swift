@@ -49,10 +49,10 @@ struct AntigravityAuthStore: Sendable {
                 // The user just answered the dialog, so a denial here is the clearest ACL evidence
                 // there is — same verdict the automatic branch below consults. Telling them to
                 // unlock the keychain after they cancelled the prompt would be the wrong fix.
-                if keychain.lastReadWasPermissionDenied(
+                if keychain.lastReadFailure(
                     service: Self.keychainService,
                     account: Self.keychainAccount
-                ) == true {
+                ) == .permissionDenied {
                     AppLog.error(LogTag.auth("antigravity"), "keychain approval was not granted; refresh manually to approve access")
                     throw AntigravityError.keychainPermissionRequired
                 }
@@ -69,19 +69,24 @@ struct AntigravityAuthStore: Sendable {
             case .missing:
                 raw = nil
             case .unavailable:
-                // Two different failures arrive as `.unavailable`, and they need opposite advice.
-                // The read's own status told them apart, and that verdict is remembered per item —
-                // a follow-up probe could not answer this, because the failed read trips the
-                // item's breaker and later probes are then answered locally.
-                if keychain.lastReadWasPermissionDenied(
+                // Three different failures arrive as `.unavailable`, and they need different
+                // advice. The read's own status told them apart, and that verdict is remembered
+                // per item — a follow-up probe could not answer this, because the failed read
+                // trips the item's breaker and later probes are then answered locally.
+                switch keychain.lastReadFailure(
                     service: Self.keychainService,
                     account: Self.keychainAccount
-                ) == true {
-                    AppLog.error(LogTag.auth("antigravity"), "keychain credential needs a manual refresh before Runway can load it")
+                ) {
+                case .manualReadDeferred?:
+                    AppLog.info(LogTag.auth("antigravity"), "keychain secret not loaded this process; a manual read can load it")
+                    throw AntigravityError.keychainConnectRequired
+                case .permissionDenied?:
+                    AppLog.error(LogTag.auth("antigravity"), "keychain approval was not granted; refresh manually to approve access")
                     throw AntigravityError.keychainPermissionRequired
+                case .unreadable?, nil:
+                    AppLog.error(LogTag.auth("antigravity"), "keychain credential could not be read; the keychain may be locked")
+                    throw AntigravityError.credentialStoreUnreadable
                 }
-                AppLog.error(LogTag.auth("antigravity"), "keychain credential could not be read; the keychain may be locked")
-                throw AntigravityError.credentialStoreUnreadable
             }
         }
         guard let raw else { return nil }

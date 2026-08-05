@@ -128,9 +128,25 @@ enum MetricLine: Hashable, Sendable, Codable {
     /// a silent drift would let a failed provider's error render as a normal pill and cache stale data.
     static let errorBadgeLabel = "Error"
 
+    /// The badge label that marks a provider-level connect prompt (produced by
+    /// `ProviderSnapshot.connectPrompt`): a credential exists on the machine but hasn't been loaded
+    /// into this process yet, and only an explicit user action may read it. Neutral — nothing is
+    /// broken and nothing was denied — but it flows through the same failed-refresh plumbing as an
+    /// error so the last-good snapshot stays on screen and the badge itself is never cached as data.
+    static let connectBadgeLabel = "Connect"
+
     var isError: Bool {
         if case .badge(let label, _, _, _) = self {
-            return label == Self.errorBadgeLabel
+            return label == Self.errorBadgeLabel || label == Self.connectBadgeLabel
+        }
+        return false
+    }
+
+    /// Whether this is the connect-prompt flavor of a provider-level failure line — rendered as a
+    /// neutral Connect affordance instead of a warning.
+    var isConnectPrompt: Bool {
+        if case .badge(let label, _, _, _) = self {
+            return label == Self.connectBadgeLabel
         }
         return false
     }

@@ -27,6 +27,9 @@ struct ShareCardView: View {
     /// The dashboard's empty-state error when the live card is showing the error prompt instead of
     /// metric rows. The export mirrors it (without the Refresh button — dead chrome in a PNG).
     var errorMessage: String? = nil
+    /// Whether `errorMessage` is the neutral connect prompt, so the export mirrors the live card's
+    /// neutral styling instead of dressing it as a warning.
+    var errorIsConnectPrompt: Bool = false
 
     /// Authored card width in points. The renderer multiplies this by `ShareCardRenderer.scale` for the
     /// PNG's pixel width; the height is whatever the rows add up to (flexible).
@@ -77,6 +80,7 @@ struct ShareCardView: View {
                     message: errorMessage,
                     isRefreshing: false,
                     showsRefreshAction: false,
+                    style: errorIsConnectPrompt ? .connect : .warning,
                     onRefresh: {}
                 )
             }

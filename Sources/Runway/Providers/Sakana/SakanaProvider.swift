@@ -105,9 +105,14 @@ final class SakanaProvider: ProviderRuntime {
             )
         }
 
+        // A deferred Safe Storage read is the neutral connect prompt, never a "meters unavailable"
+        // warning: nothing is broken, the key just hasn't been loaded this process.
+        let isConnectPrompt = subscriptionError as? SakanaAuthError == .connectRequired
         if let subscriptionError {
             guard !mapped.lines.isEmpty else {
-                return ProviderSnapshot.error(provider: provider, error: subscriptionError)
+                return isConnectPrompt
+                    ? ProviderSnapshot.connectPrompt(provider: provider, error: subscriptionError)
+                    : ProviderSnapshot.error(provider: provider, error: subscriptionError)
             }
             AppLog.warn(
                 LogTag.plugin("sakana"),
@@ -122,8 +127,11 @@ final class SakanaProvider: ProviderRuntime {
             refreshedAt: refreshedAt,
             usageHistory: usageHistory,
             warning: subscriptionError.map {
-                "Subscription meters unavailable: \($0.localizedDescription)"
-            }
+                isConnectPrompt
+                    ? $0.localizedDescription
+                    : "Subscription meters unavailable: \($0.localizedDescription)"
+            },
+            warningIsConnectPrompt: isConnectPrompt
         )
     }
 }

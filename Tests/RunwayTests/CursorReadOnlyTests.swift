@@ -222,8 +222,9 @@ final class CursorExpiredKeychainPreferenceTests: XCTestCase {
 final class CursorProtectedAlternativeTests: XCTestCase {
     func testRejectedTokenWithAProtectedAlternativeAsksForApproval() async {
         // The unexpired SQLite token was rejected server-side and the same-account agent token sits
-        // behind an unapproved ACL. The live credential may be exactly the one Runway can't read,
-        // so the card must ask for approval rather than telling the user to sign in again.
+        // that hasn't been loaded this process. The live credential may be exactly the one Runway
+        // hasn't read yet, so the card offers the connect prompt rather than telling the user to
+        // sign in again.
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let revoked = makeSharedCursorJWT(sub: "auth0|same-user", exp: now.timeIntervalSince1970 + 3_600)
         let http = RoutingHTTPClient { _ in HTTPResponse(statusCode: 401, headers: [:], body: Data()) }
@@ -244,10 +245,10 @@ final class CursorProtectedAlternativeTests: XCTestCase {
 
         XCTAssertEqual(
             snapshot.lines.compactMap { line -> String? in
-                guard case .badge(_, let text, _, _) = line, line.label == "Error" else { return nil }
+                guard case .badge(_, let text, _, _) = line, line.label == "Connect" else { return nil }
                 return text
             }.first,
-            CursorAuthError.keychainPermissionRequired.localizedDescription
+            CursorAuthError.keychainConnectRequired.localizedDescription
         )
     }
 }

@@ -13,6 +13,10 @@ struct CursorAuthState: Hashable, Sendable {
 enum CursorAuthError: Error, LocalizedError, Equatable {
     case notLoggedIn
     case loginRenewalRequired
+    /// The Cursor Keychain item exists but hasn't been loaded this process — the neutral connect
+    /// prompt, not a warning.
+    case keychainConnectRequired
+    /// An attempted manual read of the Cursor Keychain item was denied.
     case keychainPermissionRequired
     case credentialStoreUnreadable
 
@@ -22,19 +26,24 @@ enum CursorAuthError: Error, LocalizedError, Equatable {
             return "Not logged in. Sign in via Cursor app or run `agent login`."
         case .loginRenewalRequired:
             return "Cursor login needs renewal. Open the Cursor app (or run `agent login`), then refresh Runway."
+        case .keychainConnectRequired:
+            return "Cursor login found in Keychain. Connect to load it; if macOS asks, choose Always Allow to avoid future dialogs."
         case .keychainPermissionRequired:
-            return "Cursor login found in Keychain. Refresh manually to load it; if macOS asks, choose Always Allow to avoid future dialogs."
+            return "Keychain access to the Cursor login was declined. Refresh and choose Always Allow when macOS asks."
         case .credentialStoreUnreadable:
             return "Cursor login couldn’t be read. Unlock your login keychain and refresh."
         }
     }
 }
 
-/// Outcome of a credential load. `keychainPermissionRequired` means a Cursor Keychain item exists
-/// but Runway isn't authorized to read it prompt-free yet — a real login footprint that only an
-/// explicit manual refresh may convert into access.
+/// Outcome of a credential load. `connectRequired` means a Cursor Keychain item exists but its
+/// secret hasn't been loaded into this process yet — a real login footprint that only an explicit
+/// user action may convert into access, and a neutral state (nothing was denied).
 enum CursorCredentialLoad: Equatable, Sendable {
     case state(CursorAuthState)
+    case connectRequired
+    /// An attempted (user-attended) read of the item was denied — the ACL rejects Runway, or the
+    /// user declined the dialog. Unlike `connectRequired`, this genuinely needs the user to act.
     case keychainPermissionRequired
     /// The item could not be read for a reason approval cannot fix — a locked login keychain, or
     /// securityd failing. Kept apart from `keychainPermissionRequired` so the card gives advice
@@ -211,7 +220,10 @@ struct CursorAuthStore: Sendable {
     /// treating it as logged-out would silently swallow an access problem. Only a confirmed-absent
     /// item reads as no footprint.
     private func protectedItemExists(_ read: NonInteractiveKeychainRead, service: String) -> Bool {
-        unreadableItemLoad(read, service: service) == .keychainPermissionRequired
+        switch unreadableItemLoad(read, service: service) {
+        case .connectRequired, .keychainPermissionRequired: return true
+        default: return false
+        }
     }
 
     /// Which failure an `.unavailable` read was, or nil when the item is provably absent. The
@@ -222,17 +234,20 @@ struct CursorAuthStore: Sendable {
         service: String
     ) -> CursorCredentialLoad? {
         guard read == .unavailable else { return nil }
-        switch keychain.lastReadWasPermissionDenied(service: service) {
-        case true?:
+        switch keychain.lastReadFailure(service: service) {
+        case .manualReadDeferred?:
+            return .connectRequired
+        case .permissionDenied?:
             return .keychainPermissionRequired
-        case false?:
+        case .unreadable?:
             return .unreadable
         case nil:
             // No verdict recorded: UI-gate contention leaves none by design, and the probe behind
-            // that same gate answers nil too. A confirmed-present item still asks for approval, an
-            // unexamined one reports unreadable, and only a confirmed absence is no footprint.
+            // that same gate answers nil too. A confirmed-present item was simply never read (a
+            // deferral, not a denial), an unexamined one reports unreadable, and only a confirmed
+            // absence is no footprint.
             switch keychain.genericPasswordExists(service: service) {
-            case true?: return .keychainPermissionRequired
+            case true?: return .connectRequired
             case nil: return .unreadable
             case false?: return nil
             }
